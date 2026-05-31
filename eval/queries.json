@@ -1,0 +1,38 @@
+[
+  {
+    "id": "pos-1-mvp-from-spec-to-prod",
+    "query": "帮我把这个对象地位分层功能从 spec 一路做到生产，要多轮审计、部署、实测",
+    "should_trigger": true,
+    "reason": "完整长程编排环（spec→审计收敛→部署→实测→落盘），正中本 skill 核心"
+  },
+  {
+    "id": "pos-2-premature-judgment",
+    "query": "这个 salience 代价轴功能现在要不要做，是不是太早了？会不会过度设计",
+    "should_trigger": true,
+    "reason": "premature 立项裁决 = 闸一，是本 skill 的灵魂动作之一"
+  },
+  {
+    "id": "pos-3-stage-advance",
+    "query": "框架算稳了吗，各种场景实测做了吗，稳了的话开始推下一层数据治理",
+    "should_trigger": true,
+    "reason": "阶段性推进 + 端到端实测判停 + 后台审计，本 skill §1/§6 范式"
+  },
+  {
+    "id": "neg-1-single-bugfix",
+    "query": "这个函数返回了 nil，帮我看下哪里空指针了",
+    "should_trigger": false,
+    "reason": "单一 bugfix → 走 debug skill，不需要整套编排"
+  },
+  {
+    "id": "neg-2-delegate-one-round",
+    "query": "让 codex 帮我评审一下这段代码",
+    "should_trigger": false,
+    "reason": "纯一轮委派 → 走 agent-delegate，本 skill 是它的调用方不是替代"
+  },
+  {
+    "id": "neg-3-write-skill",
+    "query": "帮我写一个新的 skill 处理 PDF 转 markdown",
+    "should_trigger": false,
+    "reason": "写 skill 本身 → 走 skill-creator"
+  }
+]
