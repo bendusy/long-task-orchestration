@@ -45,7 +45,7 @@
     "id": "neg-1-single-bugfix",
     "query": "这个函数返回了 nil，帮我看下哪里空指针了",
     "should_trigger": false,
-    "reason": "单一 bugfix → 走 debug skill，不需要整套编排"
+    "reason": "单一 bugfix → 走 diagnose/investigate，不需要整套编排"
   },
   {
     "id": "neg-2-delegate-one-round",

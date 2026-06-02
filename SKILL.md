@@ -141,7 +141,7 @@ spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审
 | 能力 | Claude Code | codex | pi (DeepSeek) | agy (Gemini) |
 |---|---|---|---|---|
 | 问用户拍板 | `AskUserQuestion` | 交互式提问 | 终端原生交互 | 交互式提问 |
-| 起独立 agent | `Task`/`Workflow` | 子进程 `codex exec`/tmux | **`Agent` 工具**（subagent_type，非子进程，据 pi 自述） | 子进程/tmux |
+| 起独立 agent | `Task`/`Workflow` | 子进程 `codex exec`/tmux | 内部 `Agent` 工具（subagent_type）或 `pi -p` 子进程 | 子进程/tmux |
 | 后台并行 | `Workflow`+心跳 | tmux 多 window | `Agent(run_in_background)` | tmux 多 window |
 | 派工沙箱前提 | — | **需放开沙箱** `--dangerously-bypass-...` | 默认可派工 | 默认可派工（细粒度授权） |
 | 启动方式 | — | `codex` 直接进 | 默认交互 | `agy -i "初始prompt"`（须带 prompt） |
@@ -153,11 +153,11 @@ spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审
 
 ## 不适用场景（边界）
 
-- 单一 bugfix → 走 debug skill
+- 单一 bugfix → 走 diagnose/investigate skill
 - 纯一次性代码审查 → 走 review skill
 - 纯委派一轮给别的 runtime → 走 `[[agent-delegate]]`（本 skill 是它的调用方，不是替代）
 - 写 skill 本身 → 走 `[[skill-creator]]`
-- 纯跑一条部署命令 → 直接 deploy.sh，不需要整套编排
+- 纯跑一条部署命令 → 走 ship/land-and-deploy，不需要整套编排
 
 ## Workload Profile
 

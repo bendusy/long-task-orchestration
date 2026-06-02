@@ -1,6 +1,6 @@
 # 决策落盘 — 两层条目 + slug 外键模板
 
-> 主文件 §7 的执行细节。memory-flow 专用；无 memory-flow 则降级 ADR/MEMORY.md，纪律不变。
+> 主文件 §4 的执行细节。memory-flow 专用；无 memory-flow 则降级 ADR/MEMORY.md，纪律不变。
 
 ## 一、为什么「即时落盘」而非事后补
 

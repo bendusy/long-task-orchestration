@@ -102,11 +102,11 @@ LTO 是 runtime-agnostic 的：主文件只写"为什么委派、收敛怎么判
 
 | 场景 | 走哪里 |
 |---|---|
-| 单一 bugfix | debug skill |
+| 单一 bugfix | diagnose/investigate skill |
 | 纯一次性代码审查 | review skill |
 | 只委派一轮给另一个 runtime | `agent-delegate`（LTO 是它的调用方，不是替代） |
 | 写 skill 本身 | `skill-creator` |
-| 纯跑一条部署命令 | 直接走各自部署脚本，不需要整套编排 |
+| 纯跑一条部署命令 | 走 ship/land-and-deploy，不需要整套编排 |
 
 ## License
 

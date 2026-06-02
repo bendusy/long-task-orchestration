@@ -119,11 +119,11 @@ LTO 不是万能的，以下场景走其他路径更高效：
 
 | 场景 | 走哪里 |
 |---|---|
-| 单一 bugfix | debug skill |
+| 单一 bugfix | diagnose/investigate skill |
 | 纯一次性代码审查 | review skill |
 | 只需要委派一轮给另一个 runtime | `agent-delegate`（LTO 是它的调用方，不是替代） |
 | 写 skill 本身 | `skill-creator` |
-| 纯跑一条部署命令 | 直接走各自部署脚本，不需要整套编排 |
+| 纯跑一条部署命令 | 走 ship/land-and-deploy，不需要整套编排 |
 
 **触发 LTO 的典型场景**：「开个 MVP / 起 spec / 是不是过度设计了 / 从设计走到上线做多轮迭代 / 长任务编排 / 反复审计-修复-部署-实测-落盘的推进循环」。
 

@@ -1,6 +1,6 @@
 # 长程状态纪律 — stale 免疫三层证据清单 + 后台编排
 
-> 主文件 §6 的执行细节。跨 /compact、多 MVP、后台并行下不迷失的具体动作。
+> 主文件 §1 横切纪律的执行细节。跨 /compact、多 MVP、后台并行下不迷失的具体动作。
 
 ## 一、stale 唤醒免疫：三层一手证据交叉确认
 
@@ -18,7 +18,7 @@
 
 ### run-state 文件是恢复锚点
 
-新开长任务时，优先跑 `../scripts/lto_run.py start --goal <goal>`，它会创建 `.lto/<run-id>/run-state.md`、`preflight.md`、`audit-ledger.md` 并写 `.lto/current`。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `../scripts/lto_run.py check [--strict]`，再按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
+新开长任务时，跑 `../scripts/lto_run.py start --goal <goal>`（默认 `--profile minimal` 只创建 `run-state.md`；加 `--profile audit|deploy` 才创建 preflight/audit-ledger）。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `../scripts/lto_run.py check [--strict]`，再按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
 
 ## 二、后台派工不阻塞 + 等待期挖地基
 
