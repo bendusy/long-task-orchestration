@@ -134,9 +134,7 @@ spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审
 
 ## 7. 谁当宿主都能跑（cross-runtime）
 
-本 skill 的纪律不绑 runtime。落地时把「能力动作」映射到当前宿主：
-
-本 skill 的纪律不绑 runtime，但**各家落地机制不同，不能合并成一栏**（三家自评纠正：早期把它们当统一的「子进程/tmux」是错的）：
+纪律不绑 runtime。各国落地机制不同：
 
 | 能力 | Claude Code | codex | pi (DeepSeek) | agy (Gemini) |
 |---|---|---|---|---|
@@ -158,6 +156,16 @@ spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审
 - 纯委派一轮给别的 runtime → 走 `[[agent-delegate]]`（本 skill 是它的调用方，不是替代）
 - 写 skill 本身 → 走 `[[skill-creator]]`
 - 纯跑一条部署命令 → 走 ship/land-and-deploy，不需要整套编排
+
+## 反模式（看起来对，其实坑）
+
+| 反模式 | 为什么是坑 |
+|---|---|
+| 「先跑三方审计再说」不先过闸一 | 没挂具体缺失信号 X 就派工 = 审计帮你找理由继续做。闸一不过，审计只是昂贵的自我说服 |
+| 「health 200，上线成功」 | 进程活着 ≠ 新功能通电。机制真通电（端到端黑盒实测）才算 |
+| 「三方一致 = 可以合」不 AskUserQuestion | 判停权在用户不在 AI。三方一致只降低拍板成本，不替代用户拍板 |
+| 「跑个数看看」不当闸门用 | 不预设阈值的探针 = 事后给任何数字找理由。必须**先承诺阈值再看数** |
+| 把 run-state/preflight/audit-ledger 全量必填 | preflight 只在 delegation/deploy 前需要，audit-ledger 只在审计 loop 启动后需要。默认 `--profile minimal` 只建 run-state |
 
 ## Workload Profile
 
