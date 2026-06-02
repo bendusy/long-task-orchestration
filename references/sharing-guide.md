@@ -47,24 +47,75 @@
 
 **一句话**：谁当宿主，就把「另外几家」当审计方——这正是异构对抗性的来源，跟宿主是不是 Claude 无关。
 
-#### pi 当宿主 quickstart
+#### pi 当宿主 quickstart：LTO 编排 → ad 派 codex/agy/claude 异构审计
+
+**完整流程**：pi (DeepSeek) 加载 LTO → LTO 判定需审计 → 调用 agent-delegate 派 codex (OpenAI) + agy (Gemini) + claude (Anthropic) → pi 综合三方结论。
 
 ```bash
-# 1. 进 pi 交互式会话（自动加载 skills 目录下的 LTO）
+# ===== 第 1 步：pi 启动，加载 LTO skill =====
 pi
+# 会话内：「审一下这个 spec，用异构三方审计」
+# LTO 判定触发条件满足 → 进入审计阶段
 
-# 2. 会话内触发 LTO——说「开个 MVP」或「起 spec」即命中
-# pi 的 Agent 工具映射 LTO §7 的「起独立 agent」：
-#   Agent(subagent_type, model, run_in_background, isolation="worktree")
+# ===== 第 2 步：pi 写审计简报（LTO §3 B1 触发） =====
+cat > /tmp/lto-audit-brief.md << 'EOF'
+## 审计对象
+[spec 内容]
 
-# 3. 异构审计：pi 当宿主 → 派 codex + agy 审（不派自己）
-# pi 用 Agent 工具起后台审计方：
-#   Agent(subagent_type="general-purpose", model="codex", ...)
-#   Agent(subagent_type="general-purpose", model="gemini", ...)
+## 审计重点
+1. premature 假设是否存在？缺的具体信号 X 是什么？
+2. 数据探针阈值是否预设？是否可证伪？
+3. 部署安全网是否完整（schema 先于代码 / dry-run / 回滚）？
 
-# 4. 落盘：pi 有 memory-flow MCP → experience_write 落盘
-# 无 memory-flow → 降级 docs/decisions/ ADR
+## 输出要求
+逐 blocker 举证，附置信度 HIGH/MODERATE/LOW。先给最强反驳，禁止迎合。
+EOF
+
+# ===== 第 3 步：pi 通过 agent-delegate runner 派工 =====
+# agent-delegate 的 runner 是独立 shell 脚本，任何宿主可调
+AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
+
+# 派 codex (OpenAI)，后台跑
+$AD/codex.sh /tmp/lto-audit-brief.md /tmp/lto-reply-codex.md 300 &
+CODEX_PID=$!
+
+# 派 agy (Gemini)，后台跑
+$AD/agy.sh /tmp/lto-audit-brief.md /tmp/lto-reply-agy.md 300 &
+AGY_PID=$!
+
+# 派 claude (Anthropic)，后台跑
+$AD/claude.sh /tmp/lto-audit-brief.md /tmp/lto-reply-claude.md 300 &
+CLAUDE_PID=$!
+
+# ===== 第 4 步：pi 不阻塞，做别的事 =====
+# 等待期挖下一步地基：读真代码、真配置、真分布
+# 三方跑完会各自退出，pi 检查 exit code + reply 文件
+
+wait $CODEX_PID $AGY_PID $CLAUDE_PID
+
+# ===== 第 5 步：pi 按 LTO §3 B2-B4 综合 =====
+# 亲核每份 reply（不投票、核源码）
+# 分档 blocker → 单调递减判停 → 修 → 再审
+# 用户拍板后进实现或部署
 ```
+
+**如果用 triad.sh 一键派工**（需 tmux 环境）：
+```bash
+# agent-delegate 的 triad.sh 自动开 tmux window 并行跑三家
+cd ~/Projects/agent-skills
+bash skills/agent-delegate/scripts/triad.sh \
+  -p /tmp/lto-audit-brief.md \
+  -r codex pi agy claude \
+  -t 300
+# 回收：读 replies/ 下各 runner 输出
+```
+
+**pi 用 ad 派工的关键点**：
+- pi **不派自己**（同家族无交叉诊断价值）→ 派 codex + agy + claude
+- ad 的 runner 脚本是**语言无关**的——任何能跑 bash 的宿主都能调
+- runner 统一接口：`runner.sh <prompt_file> <reply_file> <timeout_sec>`
+- 不需要 pi 有内置 Agent 工具——bash + 子进程就够了
+- pi/deepseek 自己作为综合裁决者（LTO §3 B4 亲核），不做被审方
 
 ### 真机实测暴露的两个坑（2026-05-31 codex 当宿主实测，见 validation-log.md）
 

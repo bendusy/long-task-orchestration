@@ -85,6 +85,31 @@ pi --export session.jsonl report.html  # 导出会话
 ```
 
 1. **pi 派工：CLI 子进程 vs 内部 Agent 工具**（核验后修正）：pi CLI 层面无内置 subagent——派工方式分两层：① CLI headless `pi -p` 子进程（agent-delegate runner 实测可用）；② pi 运行时内部 Agent 工具（含 `subagent_type`/`isolation:worktree`/`run_in_background`），仅在 pi 作为 coding agent 运行时可用，非 CLI flag。原先文档将二者混淆为 pi "原生能力"，现已分列标注。
+
+**pi 当宿主通过 agent-delegate 派 codex/agy/claude（推荐方式）**：
+```bash
+# ad 的 runner 脚本是语言无关的——任何能跑 bash 的宿主都能调
+# 统一接口：runner.sh <prompt_file> <reply_file> <timeout_sec>
+AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
+
+# pi 当宿主时：不派自己（同家族无交叉诊断）→ 派 codex + agy + claude
+$AD/codex.sh  /tmp/audit-brief.md /tmp/reply-codex.md  300 &
+$AD/agy.sh    /tmp/audit-brief.md /tmp/reply-agy.md    300 &
+$AD/claude.sh /tmp/audit-brief.md /tmp/reply-claude.md 300 &
+wait
+# pi 读三方 reply → 按 LTO §3 B2-B4 综合（不投票、亲核源码）
+
+# 或用 triad.sh 一键派工（需 tmux）
+bash ~/Projects/agent-skills/skills/agent-delegate/scripts/triad.sh \
+  -p /tmp/audit-brief.md -r codex agy claude -t 300
+```
+
+**pi 当被审方（被其他宿主派工时）**：
+```bash
+# agent-delegate runners/pi.sh 实测命令
+pi -p --provider deepseek --model deepseek-v4-pro "$(cat prompt.txt)" > reply.txt
+# timeout≥240s：deepseek-v4-pro thinking 审 16KB ~170-200s
+```
 2. **allowed-tools 对 pi 的行为**（修正）：不再声称 pi 会映射 `Task`→`Agent`。`allowed-tools` 是 Claude Code hint；pi 和其他 runtime 如何处理属于各自实现细节，LTO 不做断言。body 一律写能力描述不写工具名。
 3. **thinking 模型耗时预算**（采纳，实测坐实）：pi/deepseek 审 16KB spec 170-200s。单轮审计 timeout ≥ 240s（留 20% 余量）。**exit=124 是 timeout 不是空返回**（validation-log 踩过 3 次的归因错）。pi 当宿主且自己也审时，spec 起草/亲核同样慢，整圈预算按非 thinking 模型 3-5× 估。
 4. **`--continue` 的 stale 陷阱**（采纳，通用化）：pi `--continue`（及 codex `--resume`）拼接历史上下文，不刷新文件系统状态。每轮启动先 `git diff HEAD` 确认磁盘 vs 上下文记忆、重读上一轮 blocker 清单、不信上下文里「上一轮已修」——磁盘才是真源。
