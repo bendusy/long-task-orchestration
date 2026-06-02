@@ -43,17 +43,16 @@ def main() -> int:
     errors += check("allowed-tools:" in content, "allowed-tools field present")
     errors += check("model:" not in content[:200], "no model: pin in frontmatter")
 
-    # 2. Required sections
-    errors += check("## 0. 防归因偏差" in content, "§0 present")
-    errors += check("## 1. 主循环骨架" in content, "§1 present")
-    errors += check("## 2. 反过度设计" in content, "§2 present")
-    errors += check("## 3. 异构审计" in content, "§3 present")
-    errors += check("## 4. 部署严格" in content, "§4 present")
-    errors += check("## 5. 可选集成" in content, "§5 present")
-    errors += check("## 6. 与 agent-delegate" in content, "§6 present")
-    errors += check("## 7. 谁当宿主" in content, "§7 present")
-    errors += check("## 反模式" in content, "anti-pattern section present")
-    errors += check("## Workload Profile" in content, "Workload Profile present")
+    # 2. Required sections (check by content not header numbers)
+    errors += check("三个核心原则" in content, "core principles present")
+    errors += check("六个阶段" in content, "six phases present")
+    errors += check("什么时候停" in content, "three gates present")
+    errors += check("让多个 AI 帮你审" in content, "audit section present")
+    errors += check("部署上线" in content, "deploy section present")
+    errors += check("怎么记" in content, "logging section present")
+    errors += check("多轮任务怎么不迷路" in content, "run-state section present")
+    errors += check("常见错觉" in content, "anti-pattern section present")
+    errors += check("Workload Profile" in content, "Workload Profile present")
 
     # 3. No stale terms
     stale_terms = ["进阶版", "精神续作", "一律归 ad", "depends_on: [memory-flow]", "debug skill"]
