@@ -19,7 +19,7 @@ allowed-tools: [Bash, Read, Write, Edit, Task, AskUserQuestion]
 
 # Long Task Orchestration
 
-把一个功能**从 spec 编排到生产**的上层纪律。它**调用** `agent-delegate`（委派怎么跑）和 `memory-flow`（经验落盘），但只管「为什么委派、收敛怎么判停、什么时候该拦、停了之后干嘛」——派工实现不重述。
+`agent-delegate` 的长程进阶版：ad 解决「单轮委派怎么跑通」，LTO 解决「多轮推到上线怎么判停」。它**调用** `agent-delegate`（委派）和 `memory-flow`（落盘），但只管「为什么委派、收敛怎么判停、什么时候该拦、停了之后干嘛」——派工实现不重述。
 
 > `depends_on` 只声明 registry 校验允许的 atom / 外部基础依赖；`agent-delegate` 是运行时调用的 sibling agent-driven skill，调用关系写在正文和 §6，不放进 `depends_on`。
 
@@ -110,11 +110,19 @@ spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审
 
 **净结论**：拿掉全部私有基建，**§4 B4 核验、闸一、闸三、收缩、stale 免疫**这几条零依赖直接可用，是本 skill 真正可移植的硬核。前置安装清单 → `references/sharing-guide.md`。
 
-## 6. 与 agent-delegate 的边界（不重复）
+## 6. 与 agent-delegate 的关系：ad 是引擎，LTO 是整车
 
-`agent-delegate` = 「一轮委派怎么跑通」的**工具**；本 skill = 「为什么委派、收敛怎么判停、何时停、停了干嘛」的**上层纪律**。前者是后者调用的工具之一。本 skill **绝不写**：runner 封装、tmux window、wait-for 回收、CLI quirk、5 条反迎合 prompt 的实现——一律指向 `[[agent-delegate]]`，派工那步只写一行「调 triad.sh，约束见 agent-delegate」。
+`agent-delegate`（ad）→ 解决「单次委派怎么跑通」：runner 封装、tmux window、wait-for 回收、5 条反迎合 prompt。
 
-模板产物边界：`run-state` / `preflight` / `audit-ledger` 只记录 LTO 层的状态、证据和判停，不复制 agent-delegate 的 runner 实现细节；具体命令和回收结果以 agent-delegate 输出为准。
+本 skill（LTO）→ ad 的长程进阶版，解决「多轮推到上线怎么判停」：
+- **什么时候该委派**（B1 触发条件：新立项 / ≥3 维度变更 / 跨组件）
+- **收敛怎么判停**（B2 分档不投票、B3 blocker 单调递减）
+- **什么时候该拦**（三道闸：premature 挂 X / 真数据探针 / 用户拍板）
+- **停了之后干嘛**（部署定序 / 落盘 / 下一个方向）
+
+本 skill **绝不写** ad 的实现细节——一律指向 `[[agent-delegate]]`，派工那步只写一行「调 triad.sh，约束见 agent-delegate」。
+
+模板产物边界：`run-state` / `preflight` / `audit-ledger` 只记录 LTO 层的状态、证据和判停，不复制 ad 的 runner 实现细节；具体命令和回收结果以 ad 输出为准。
 
 ## Resources
 
