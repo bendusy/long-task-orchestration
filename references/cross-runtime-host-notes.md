@@ -22,130 +22,70 @@
 
 ## 三、pi 当宿主专项（pi 自评，已核验，部分存疑标注）
 
-### pi 调用速查 sample（来自 pi-docs-playbook 源码 + agent-delegate 实测）
+### pi 调用速查 sample
 
-**pi 当宿主跑 LTO 主循环**：
+> **标注约定**：每条 sample 标明来源——`[CLI]` pi 官方命令行参数（v0.78+），`[ad]` agent-delegate runner 实测，`[内部工具]` pi coding agent 运行时内部工具（非 CLI flag）。
+
+**pi 当宿主跑 LTO 主循环 `[CLI]`**：
 ```bash
-# pi 交互式启动，自动加载 ~/.pi/agent/skills/ 下所有 skill
+# 交互式启动，自动加载 skills（多来源：~/.pi/agent/skills/、.pi/skills/、packages 等）
 pi
-pi "帮我审核这份 chengpi spec"     # 带初始 prompt 启动
+pi "帮我审核这份 spec"           # 带初始 prompt 启动
 
-# 指定模型（DeepSeek V4 Pro thinking，LTO 默认用这个）
+# 指定模型和 provider
 pi --provider deepseek --model deepseek-v4-pro
 
-# 只加 LTO 相关 skill（减少干扰）
-pi --skill ~/.pi/agent/skills/long-task-orchestration
-
 # 会话管理
-pi -c                              # 续最近会话（/compact 后恢复）
-pi --name "lto-chengpi-audit"      # 命名会话，便于回溯
-pi --fork <session-id>             # fork 会话到新文件
+pi -c                            # 续最近会话
+pi --name "lto-chengpi-audit"    # 命名会话
+pi --fork <session-id>           # fork 会话到新文件
 ```
 
-**pi 当审计方（被 agent-delegate 派工，headless 模式）**：
+**pi 当审计方（被 agent-delegate 派工，headless）`[ad]`**：
 ```bash
-# agent-delegate runners/pi.sh 实际命令（最简化）：
+# agent-delegate runners/pi.sh 实测命令：
 pi -p --provider deepseek --model deepseek-v4-pro "$(cat prompt.txt)" > reply.txt
 
-# 关键参数：
-#   -p          : 非交互式，一次性输出到 stdout
-#   --provider  : deepseek（本机 DEEPSEEK_API_KEY 已配）
-#   --model     : deepseek-v4-pro（thinking 模式，审 16KB ~170-200s）
-# timeout≥240s : exit=124 是超时不是空返回
+# -p                : 非交互式，stdout 输出
+# --provider/model  : 本机配置（非 pi 官方默认，需自行配 DEEPSEEK_API_KEY）
+# timeout≥240s      : deepseek-v4-pro thinking 审 16KB ~170-200s
 
-# pi 是最干净的 headless runner：无 banner、无审批弹窗、无 MCP 加载噪声
-# 脚本走 PATH 命中 ~/.local/bin/pi（shell function 包裹真二进制）
+# pi headless 特点：无 banner、无审批弹窗、无 MCP 加载噪声（本机实测，非官方契约）
 ```
 
-**pi Agent 工具派工（LTO 内异构审计）**：
+**pi 内部 Agent 工具（异构审计/并行开发）`[内部工具]`**：
 ```
-# pi 宿主起异构审计方（不派自己，派 codex + agy）：
+# pi 作为 coding agent 运行时的内部工具，非 CLI flag。
+# 可用参数：subagent_type, model, run_in_background, isolation, thinking, max_turns
 
-# 审计方 1：codex (OpenAI)
+# 异构审计：pi 宿主起 codex + agy 审计方
 Agent(
   subagent_type="general-purpose",
-  model="gpt-5.5",
-  prompt="你是审计方。逐条审 LTO spec 的 premature 假设/数据探针阈值/部署安全网。先给最强反驳，禁止迎合。输出 blocker register（逐条附置信度 HIGH/MODERATE/LOW）。",
+  model="nciex/gpt-5.5",
+  prompt="你是审计方。逐条审 spec 的 premature 假设/数据探针阈值/部署安全网。先给最强反驳，禁止迎合。输出 blocker register。",
   run_in_background=true,
   isolation="worktree"
 )
 
-# 审计方 2：agy (Gemini) 同理
-Agent(
-  subagent_type="general-purpose",
-  model="gemini-2.5-pro",
-  prompt="同上审计任务。独立审，不参考其他审计方结论。",
-  run_in_background=true,
-  isolation="worktree"
-)
-
-# pi 的三个内置 agent type：
-#   general-purpose : 全工具（含 WebSearch/WebFetch）
-#   Explore         : 只读（read/grep/find/ls，无 Edit/Write）
-#   Plan            : 只读，架构设计
-
-# Agent 工具关键参数：
-#   subagent_type    : "general-purpose" | "Explore" | "Plan" | 自定义 agent 名
-#   model            : 指定模型家族（异构审计核心）
-#   run_in_background: true → 后台并行不阻塞，完成主动通知
-#   isolation        : "worktree" → git worktree 隔离，不改宿主工作树
-#   thinking         : off/minimal/low/medium/high/xhigh
-```
-
-**pi worktree 并行开发（借鉴 harness orchestrator 模式）**：
-```
-# 三 agent 并行开发不同模块（类似 harness 的 fan-out 模式）：
+# worktree 并行开发：三 agent 不同模块
 Agent(subagent_type="general-purpose", isolation="worktree",
-  prompt="实现前端 auth 模块。只改 src/components/。完成后 commit。",
-  run_in_background=true)
-
+  prompt="实现前端 auth 模块。只改 src/components/。", run_in_background=true)
 Agent(subagent_type="general-purpose", isolation="worktree",
-  prompt="实现后端 auth API。只改 src/api/。完成后 commit。",
-  run_in_background=true)
-
+  prompt="实现后端 auth API。只改 src/api/。", run_in_background=true)
 Agent(subagent_type="general-purpose", isolation="worktree",
-  prompt="写 auth 模块测试。只改 tests/。完成后 commit。",
-  run_in_background=true)
-
-# 合并：主 agent 读各 worktree 产物 → git merge → 跑测试闸门
+  prompt="写 auth 模块测试。只改 tests/。", run_in_background=true)
 ```
 
-**pi 链式委派（scout → planner → worker）**：
-```
-# pi 的 subagent 扩展支持链式模式，用 {previous} 传上下文：
-# 1. scout: 找到所有相关代码
-# 2. planner: 基于 {previous} 创建实现计划
-# 3. worker: 基于 {previous} 实现
-# 每步输出自动传给下一步，中间失败即停
-```
-
-**pi 长任务恢复（stale 免疫）**：
+**pi 配置速查 `[CLI]`**：
 ```bash
-pi -c                    # 续最近会话（上下文拼接，不刷新磁盘）
-# 进会话第一句必须：「读 .lto/<run-id>/run-state.md 确认当前状态」
-# 然后跑 git diff HEAD 交叉确认磁盘 vs 上下文记忆
-# 不信任上下文里「上一轮已修」
-
-pi --fork <session-id>   # fork 会话到新文件（保留原会话，新开分支）
+pi --list-models                  # 查看可用模型
+pi --tools read,grep,find,ls -p "审计"  # 只读模式
+pi --no-extensions --no-skills    # 禁用自动发现
+pi --export session.jsonl report.html  # 导出会话
 ```
 
-**pi 配置速查**：
-```bash
-# 查看已装 models
-pi --list-models
-
-# 只读模式（安全审计）
-pi --tools read,grep,find,ls -p "审计这个 spec"
-
-# 禁用所有扩展（干净环境）
-pi --no-extensions --no-skills -e ./my-ext.ts
-
-# 导出会话为 HTML
-pi --export session.jsonl audit-report.html
-```
-
-1. **pi 有 `Agent` 工具，不是「子进程/tmux」**（采纳）：pi 自述 `Agent`（subagent_type / run_in_background / isolation:worktree / steer_subagent）是第一公民抽象，与 tmux window 语义不同。把 Agent 当子进程用会丢弃 worktree 隔离/模型选择/后台回收。实测旁证：pi 当宿主直接派工成功，没用 tmux。
-2. **allowed-tools 对 pi 不静默忽略**（存疑，据 pi 自述）：pi 称读到 `Task` 会找不到对应工具→能力缺口，需映射 `Task`→`Agent`。主 agent 未独立验证 pi 的解析行为，但 pi 是当事方，可信度较高。**结论**：body 一律写能力描述不写工具名（这条无论 pi 自述是否精确都对）。
+1. **pi 派工：CLI 子进程 vs 内部 Agent 工具**（核验后修正）：pi CLI 层面无内置 subagent——派工方式分两层：① CLI headless `pi -p` 子进程（agent-delegate runner 实测可用）；② pi 运行时内部 Agent 工具（含 `subagent_type`/`isolation:worktree`/`run_in_background`），仅在 pi 作为 coding agent 运行时可用，非 CLI flag。原先文档将二者混淆为 pi "原生能力"，现已分列标注。
+2. **allowed-tools 对 pi 的行为**（修正）：不再声称 pi 会映射 `Task`→`Agent`。`allowed-tools` 是 Claude Code hint；pi 和其他 runtime 如何处理属于各自实现细节，LTO 不做断言。body 一律写能力描述不写工具名。
 3. **thinking 模型耗时预算**（采纳，实测坐实）：pi/deepseek 审 16KB spec 170-200s。单轮审计 timeout ≥ 240s（留 20% 余量）。**exit=124 是 timeout 不是空返回**（validation-log 踩过 3 次的归因错）。pi 当宿主且自己也审时，spec 起草/亲核同样慢，整圈预算按非 thinking 模型 3-5× 估。
 4. **`--continue` 的 stale 陷阱**（采纳，通用化）：pi `--continue`（及 codex `--resume`）拼接历史上下文，不刷新文件系统状态。每轮启动先 `git diff HEAD` 确认磁盘 vs 上下文记忆、重读上一轮 blocker 清单、不信上下文里「上一轮已修」——磁盘才是真源。
 5. **DeepSeek 双模降级异构**（采纳进降级矩阵）：只有 pi 一家可用时，用 v4-pro(thinking) + v3(non-thinking) 双模自审——非同家族但 thinking vs non-thinking 出错模式有差异（thinking 过度推理 / v3 漏边界），残余交叉诊断价值，强于纯同模型多实例。仍须声明对抗性大幅缩水。

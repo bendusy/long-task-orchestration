@@ -10,6 +10,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 TEMPLATE_DIR = SKILL_DIR / "templates"
 CORE_FILES = ("run-state.md", "preflight.md", "audit-ledger.md")
+MANDATORY_FILES = ("run-state.md",)  # always required; preflight/audit-ledger conditional
 VALID_PHASES = {"intake", "spec", "audit", "implementation", "deploy", "observe", "closed"}
 ARTIFACT_FIELDS = {"preflight.md": ("preflight_verdict",), "audit-ledger.md": ("latest HIGH+CRITICAL count", "close / continue verdict")}
 CORE_RUN_STATE_KEYS = (
@@ -154,8 +155,10 @@ def cmd_start(args: argparse.Namespace) -> int:
         "planned_timeout": args.timeout,
     }
     copy_template("run-state.md", target_dir / "run-state.md", replacements)
-    copy_template("preflight.md", target_dir / "preflight.md", replacements)
-    copy_template("audit-ledger.md", target_dir / "audit-ledger.md", replacements)
+    if args.profile in ("audit", "deploy"):
+        copy_template("preflight.md", target_dir / "preflight.md", replacements)
+    if args.profile in ("audit", "deploy"):
+        copy_template("audit-ledger.md", target_dir / "audit-ledger.md", replacements)
     lto_root(repo).mkdir(parents=True, exist_ok=True)
     current_file(repo).write_text(run_id + "\n", encoding="utf-8")
     print(target_dir)
@@ -177,13 +180,17 @@ def cmd_check(args: argparse.Namespace) -> int:
     errors: list[str] = []
     warnings: list[str] = []
 
-    for name in CORE_FILES:
+    for name in MANDATORY_FILES:
         path = target_dir / name
         if not path.exists():
-            if name == "run-state.md" or args.strict:
+            errors.append(f"missing {path}")
+    for name in ("preflight.md", "audit-ledger.md"):
+        path = target_dir / name
+        if not path.exists():
+            if args.strict:
                 errors.append(f"missing {path}")
             else:
-                warnings.append(f"missing {path}")
+                warnings.append(f"missing {path} (enable with --profile audit|deploy)")
 
     state_path = target_dir / "run-state.md"
     if state_path.exists():
@@ -237,13 +244,16 @@ def cmd_closeout(args: argparse.Namespace) -> int:
     state_path = target_dir / "run-state.md"
     if not state_path.exists():
         raise SystemExit(f"missing run-state.md: {state_path}")
-    for name in CORE_FILES:
+    for name in MANDATORY_FILES:
         path = target_dir / name
         if not path.exists() or not path.read_text(encoding="utf-8").strip():
             raise SystemExit(f"missing required artifact before closeout: {path}")
-        missing_fields = artifact_missing_fields(name, path.read_text(encoding="utf-8"))
-        if missing_fields:
-            raise SystemExit(f"{name} missing fields before closeout: {', '.join(missing_fields)}")
+    for name in ("preflight.md", "audit-ledger.md"):
+        path = target_dir / name
+        if path.exists():
+            missing_fields = artifact_missing_fields(name, path.read_text(encoding="utf-8"))
+            if missing_fields:
+                raise SystemExit(f"{name} missing fields before closeout: {', '.join(missing_fields)}")
     if not is_git_repo(repo):
         raise SystemExit("closeout requires a git worktree")
     if git_dirty(repo) and not args.allow_dirty:
@@ -296,7 +306,7 @@ def cmd_self_test(_: argparse.Namespace) -> int:
         (repo / "README.md").write_text("test\n", encoding="utf-8")
         run(["git", "add", "README.md"], repo)
         run(["git", "-c", "user.name=lto", "-c", "user.email=lto@example.invalid", "commit", "-m", "init"], repo)
-        start_args = argparse.Namespace(repo=repo, run_id="self-test", goal="self test", host="codex", request="self test", phase="intake", auditors="codex pi agy", timeout="900", force=False)
+        start_args = argparse.Namespace(repo=repo, run_id="self-test", goal="self test", host="codex", request="self test", phase="intake", auditors="codex pi agy", timeout="900", profile="deploy", force=False)
         if cmd_start(start_args) != 0:
             return 1
         rd = run_dir(repo, "self-test")
@@ -333,6 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--phase", default="intake")
     start.add_argument("--auditors", default="codex pi agy")
     start.add_argument("--timeout", default="900")
+    start.add_argument("--profile", default="minimal", choices=["minimal", "audit", "deploy"],
+                        help="minimal=run-state only | audit=+preflight+audit-ledger | deploy=all three")
     start.add_argument("--force", action="store_true")
     start.set_defaults(func=cmd_start)
 

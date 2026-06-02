@@ -8,10 +8,23 @@ of chat-memory coordination.
 Inside `agent-skills`, run from the repo root:
 
 ```bash
+# minimal: run-state.md only (default)
 python3 skills/long-task-orchestration/scripts/lto_run.py start \
   --goal "short task goal" \
   --host codex \
   --request "original user request"
+
+# audit: run-state + preflight + audit-ledger
+python3 skills/long-task-orchestration/scripts/lto_run.py start \
+  --goal "spec audit task" \
+  --host codex \
+  --profile audit
+
+# deploy: full all three (deployment-safe)
+python3 skills/long-task-orchestration/scripts/lto_run.py start \
+  --goal "deploy workflow" \
+  --host codex \
+  --profile deploy
 ```
 
 When the target repo is not `agent-skills`, call this script by absolute path:
@@ -22,11 +35,10 @@ python3 /Users/ben/Projects/agent-skills/skills/long-task-orchestration/scripts/
   start --goal "short task goal" --host codex
 ```
 
-This creates `.lto/<run-id>/` with:
-
-- `run-state.md`
-- `preflight.md`
-- `audit-ledger.md`
+This creates `.lto/<run-id>/` with artifacts per profile:
+- `minimal`: `run-state.md` only
+- `audit`: `run-state.md` + `preflight.md` + `audit-ledger.md`
+- `deploy`: all three (same as audit)
 
 It also writes `.lto/current`, so later commands can omit `--run-id`.
 

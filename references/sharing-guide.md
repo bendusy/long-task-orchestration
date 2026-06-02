@@ -18,8 +18,8 @@
 | # | 依赖 | 是什么 | 没有则降级 |
 |---|---|---|---|
 | 1 | `agent-delegate` skill | 异构三方审计（triad.sh + codex/pi/agy runner），依赖 `tmux-autopilot` | 同模型多 subagent 自审；**对抗性大幅缩水，须显式声明「未做异构交叉」** |
-| 2 | 3 个异构 runtime | codex(OpenAI) / pi(DeepSeek) / agy(Gemini) 本机装好各持 token | 同上降级 |
-| 3 | `memory-flow` skill + 服务 | 经验库（6 库 + 溯源 + 衰减 + ranking），落盘与真数据闸门都用 | 落盘换 ADR/`MEMORY.md`；真数据闸门换朋友自己的生产库/日志源 |
+| 2 | 3 个异构 runtime | codex(OpenAI) / pi(DeepSeek) / agy(Gemini) 本机装好各持 token | 同模型 subagent 自审；对抗性缩水 |
+| 3 | `memory-flow` skill（可选） | 经验库落盘/检索/衰减/复利 | 落盘换 ADR/`MEMORY.md`，纪律不变 |
 | 4 | 生产数据访问 | 真数据探针要能跑聚合查询（mf 的库仅内网可达） | 换朋友自己的生产库/指标源；无则造样本（盖不住真实分布） |
 | 5 | 可回滚部署脚本 | mf 的 deploy.sh：dry-run + health-check + 自动 .bak 回滚 + master guard | 自己复刻 **dry-run + auto-rollback** 两个安全网，否则别上生产 |
 | — | AskUserQuestion / Task / Workflow | Claude Code 原生 | 无需安装 |
