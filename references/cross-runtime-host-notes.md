@@ -22,50 +22,126 @@
 
 ## 三、pi 当宿主专项（pi 自评，已核验，部分存疑标注）
 
-### pi 调用速查 sample
+### pi 调用速查 sample（来自 pi-docs-playbook 源码 + agent-delegate 实测）
 
 **pi 当宿主跑 LTO 主循环**：
 ```bash
-# pi 交互式，加载 LTO skill 后自然命中触发
+# pi 交互式启动，自动加载 ~/.pi/agent/skills/ 下所有 skill
 pi
-# 会话内说「开个 MVP / 起 spec」即激活 LTO
+pi "帮我审核这份 chengpi spec"     # 带初始 prompt 启动
+
+# 指定模型（DeepSeek V4 Pro thinking，LTO 默认用这个）
+pi --provider deepseek --model deepseek-v4-pro
+
+# 只加 LTO 相关 skill（减少干扰）
+pi --skill ~/.pi/agent/skills/long-task-orchestration
+
+# 会话管理
+pi -c                              # 续最近会话（/compact 后恢复）
+pi --name "lto-chengpi-audit"      # 命名会话，便于回溯
+pi --fork <session-id>             # fork 会话到新文件
 ```
 
-**pi 当审计方（被 agent-delegate 派工）**：
+**pi 当审计方（被 agent-delegate 派工，headless 模式）**：
 ```bash
-# agent-delegate 的 runners/pi.sh 本质是：
-pi -p "审计以下 spec，逐 blocker 举证，输出 audit-report.md"
-# pi 2>/dev/null 可过滤 TUI 噪声；timeout≥240s（thinking 慢）
+# agent-delegate runners/pi.sh 实际命令（最简化）：
+pi -p --provider deepseek --model deepseek-v4-pro "$(cat prompt.txt)" > reply.txt
+
+# 关键参数：
+#   -p          : 非交互式，一次性输出到 stdout
+#   --provider  : deepseek（本机 DEEPSEEK_API_KEY 已配）
+#   --model     : deepseek-v4-pro（thinking 模式，审 16KB ~170-200s）
+# timeout≥240s : exit=124 是超时不是空返回
+
+# pi 是最干净的 headless runner：无 banner、无审批弹窗、无 MCP 加载噪声
+# 脚本走 PATH 命中 ~/.local/bin/pi（shell function 包裹真二进制）
 ```
 
-**pi `Agent` 工具派工（LTO 内异构审计起子 agent）**：
+**pi Agent 工具派工（LTO 内异构审计）**：
 ```
-# pi 宿主对 LTO spec 起异构审计：
+# pi 宿主起异构审计方（不派自己，派 codex + agy）：
+
+# 审计方 1：codex (OpenAI)
 Agent(
   subagent_type="general-purpose",
-  prompt="你是审计方。逐条审 spec 的 premature 假设/数据探针阈值/部署安全网。输出 blocker register。",
-  model="codex",          # 异构：派 OpenAI
-  run_in_background=true,  # 后台不阻塞
-  isolation="worktree"     # 隔离写，不改宿主工作树
+  model="gpt-5.5",
+  prompt="你是审计方。逐条审 LTO spec 的 premature 假设/数据探针阈值/部署安全网。先给最强反驳，禁止迎合。输出 blocker register（逐条附置信度 HIGH/MODERATE/LOW）。",
+  run_in_background=true,
+  isolation="worktree"
 )
-# 然后起 agy 审计方同理，换 model="gemini"
-```
 
-**pi `Agent` 工具做 worktree 并行开发**：
-```
+# 审计方 2：agy (Gemini) 同理
 Agent(
   subagent_type="general-purpose",
-  prompt="在独立 worktree 实现 X 模块，不改主仓库。完成后汇报。",
-  isolation="worktree",
-  run_in_background=true
+  model="gemini-2.5-pro",
+  prompt="同上审计任务。独立审，不参考其他审计方结论。",
+  run_in_background=true,
+  isolation="worktree"
 )
+
+# pi 的三个内置 agent type：
+#   general-purpose : 全工具（含 WebSearch/WebFetch）
+#   Explore         : 只读（read/grep/find/ls，无 Edit/Write）
+#   Plan            : 只读，架构设计
+
+# Agent 工具关键参数：
+#   subagent_type    : "general-purpose" | "Explore" | "Plan" | 自定义 agent 名
+#   model            : 指定模型家族（异构审计核心）
+#   run_in_background: true → 后台并行不阻塞，完成主动通知
+#   isolation        : "worktree" → git worktree 隔离，不改宿主工作树
+#   thinking         : off/minimal/low/medium/high/xhigh
 ```
 
-**pi 长任务恢复**：
+**pi worktree 并行开发（借鉴 harness orchestrator 模式）**：
+```
+# 三 agent 并行开发不同模块（类似 harness 的 fan-out 模式）：
+Agent(subagent_type="general-purpose", isolation="worktree",
+  prompt="实现前端 auth 模块。只改 src/components/。完成后 commit。",
+  run_in_background=true)
+
+Agent(subagent_type="general-purpose", isolation="worktree",
+  prompt="实现后端 auth API。只改 src/api/。完成后 commit。",
+  run_in_background=true)
+
+Agent(subagent_type="general-purpose", isolation="worktree",
+  prompt="写 auth 模块测试。只改 tests/。完成后 commit。",
+  run_in_background=true)
+
+# 合并：主 agent 读各 worktree 产物 → git merge → 跑测试闸门
+```
+
+**pi 链式委派（scout → planner → worker）**：
+```
+# pi 的 subagent 扩展支持链式模式，用 {previous} 传上下文：
+# 1. scout: 找到所有相关代码
+# 2. planner: 基于 {previous} 创建实现计划
+# 3. worker: 基于 {previous} 实现
+# 每步输出自动传给下一步，中间失败即停
+```
+
+**pi 长任务恢复（stale 免疫）**：
 ```bash
-# pi --continue 拼接上下文不刷新磁盘，先重读 run-state.md
-pi --continue
-# 进会话第一句：「读 .lto/<run-id>/run-state.md 确认当前状态」
+pi -c                    # 续最近会话（上下文拼接，不刷新磁盘）
+# 进会话第一句必须：「读 .lto/<run-id>/run-state.md 确认当前状态」
+# 然后跑 git diff HEAD 交叉确认磁盘 vs 上下文记忆
+# 不信任上下文里「上一轮已修」
+
+pi --fork <session-id>   # fork 会话到新文件（保留原会话，新开分支）
+```
+
+**pi 配置速查**：
+```bash
+# 查看已装 models
+pi --list-models
+
+# 只读模式（安全审计）
+pi --tools read,grep,find,ls -p "审计这个 spec"
+
+# 禁用所有扩展（干净环境）
+pi --no-extensions --no-skills -e ./my-ext.ts
+
+# 导出会话为 HTML
+pi --export session.jsonl audit-report.html
 ```
 
 1. **pi 有 `Agent` 工具，不是「子进程/tmux」**（采纳）：pi 自述 `Agent`（subagent_type / run_in_background / isolation:worktree / steer_subagent）是第一公民抽象，与 tmux window 语义不同。把 Agent 当子进程用会丢弃 worktree 隔离/模型选择/后台回收。实测旁证：pi 当宿主直接派工成功，没用 tmux。
