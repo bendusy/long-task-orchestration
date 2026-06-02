@@ -18,6 +18,30 @@
     "reason": "阶段性推进 + 端到端实测判停 + 后台审计，本 skill §1/§6 范式"
   },
   {
+    "id": "pos-4-resume-run-state",
+    "query": "这个长任务 compact 后状态不确定，先根据 run-state、git HEAD、服务版本和落盘 slug 恢复真实进度再继续",
+    "should_trigger": true,
+    "reason": "长任务恢复 + stale 免疫 + run-state 核验，属于本 skill 的状态纪律"
+  },
+  {
+    "id": "pos-5-preflight-before-triad",
+    "query": "准备跑三方异构审计前，先做 runner healthcheck、宿主沙箱和 MCP 可见性 preflight，再决定实际派几家",
+    "should_trigger": true,
+    "reason": "异构审计前的 LTO preflight 和降级声明，不是单纯一轮 delegate"
+  },
+  {
+    "id": "pos-6-audit-ledger-convergence",
+    "query": "上一轮审计修完后，帮我用 audit ledger 看 HIGH/CRITICAL blocker 有没有单调下降，没下降就暂停重审",
+    "should_trigger": true,
+    "reason": "审计收敛判停 + blocker ledger，是本 skill 的推进引擎"
+  },
+  {
+    "id": "pos-7-run-state-cli",
+    "query": "给这个长任务先开一个 .lto run-state，后面每轮用 check 校验，结束时写 closeout handoff",
+    "should_trigger": true,
+    "reason": "长任务状态三件套的创建、校验和收尾，属于本 skill 的状态执行面"
+  },
+  {
     "id": "neg-1-single-bugfix",
     "query": "这个函数返回了 nil，帮我看下哪里空指针了",
     "should_trigger": false,

@@ -1,6 +1,6 @@
 # 决策落盘 — 两层条目 + slug 外键模板
 
-> 主文件 §5 插槽2（记忆后端）的执行细节。装 memory-flow 用本节全套；未装则降级 ADR/MEMORY.md（见§六），纪律不变；预留未来接其他兼容后端。
+> 主文件 §7 的执行细节。memory-flow 专用；无 memory-flow 则降级 ADR/MEMORY.md，纪律不变。
 
 ## 一、为什么「即时落盘」而非事后补
 
@@ -30,22 +30,22 @@
 
 ```
 里程碑层 (tech 库, type=里程碑)
-  YYYY-MM-DD-领域-<项目名>-<里程碑>-<功能简述>
-  ├─ links: [[前置里程碑 slug]] [[相关决策 slug]]   ← slug 外键互链
-  └─ 记: <本轮关键修复>、<存量数据问题>、<操作踩坑>
+  2026-05-31-技术-animem-W3-X-lite-上生产实测-取代降级保留证据闭环
+  ├─ links: [[W1 里程碑]] [[W4a D0 决策]]   ← slug 外键互链
+  └─ 记: W6 三断言、"取代即软删"修复、存量需 backfill、ssh 引号坑
 
-backlog 层 (backlog 库)
+backlog 层 (research-absorbed-backlog 等)
   └─ 记: 还没做的缺口、待验证假设、下一个 MVP 的入口
 ```
 
 **commit ↔ 决策追踪桥**：commit message 引经验 slug，形成「代码改动 ↔ 为什么这么改」的可追溯链。
 
-## 五、写经验的铁律（装 memory-flow 时适用；ADR 降级时精神等价）
+## 五、写经验的铁律（来自 memory-flow skill）
 
-- **取代而非覆盖**：旧结论被推翻 → 写新条目并外键指向旧 slug（memory-flow 用 supersedes 字段）或新建 ADR 标 status=Superseded，不原地覆盖（保留知识版本）。
-- **reinforce 而非复制**：同事实再次确认 → `experience_reinforce`（memory-flow）或在已有 ADR 里追加 note，不新写重复条目。
-- **type 决定衰减**：决策/范式 τ=365d（衰减慢）；坑 τ=30d（过期重验）。ADR 降级时手动标 review-after 日期。
-- **X-Agent-ID 溯源**：写时带 `X-Agent-ID: claude-code`（memory-flow）或在 ADR context 里注明来源，多客户端共用记忆库时谁写的一目了然。
+- **supersede 而非覆盖**：旧结论被推翻 → 写新条目带 `supersedes=[旧slug]`，不 PATCH 覆盖（保留知识版本）。
+- **reinforce 而非复制**：同事实再次确认 → `experience_reinforce`，不新写一条。
+- **type 决定衰减**：决策/范式 τ=365d（衰减慢）；坑 τ=30d（过期重验）。选对 type。
+- **X-Agent-ID 溯源**：写时带 `X-Agent-ID: claude-code`，多客户端共用记忆库时谁写的一目了然。
 
 ## 六、降级（无 memory-flow）
 

@@ -22,6 +22,52 @@
 
 ## 三、pi 当宿主专项（pi 自评，已核验，部分存疑标注）
 
+### pi 调用速查 sample
+
+**pi 当宿主跑 LTO 主循环**：
+```bash
+# pi 交互式，加载 LTO skill 后自然命中触发
+pi
+# 会话内说「开个 MVP / 起 spec」即激活 LTO
+```
+
+**pi 当审计方（被 agent-delegate 派工）**：
+```bash
+# agent-delegate 的 runners/pi.sh 本质是：
+pi -p "审计以下 spec，逐 blocker 举证，输出 audit-report.md"
+# pi 2>/dev/null 可过滤 TUI 噪声；timeout≥240s（thinking 慢）
+```
+
+**pi `Agent` 工具派工（LTO 内异构审计起子 agent）**：
+```
+# pi 宿主对 LTO spec 起异构审计：
+Agent(
+  subagent_type="general-purpose",
+  prompt="你是审计方。逐条审 spec 的 premature 假设/数据探针阈值/部署安全网。输出 blocker register。",
+  model="codex",          # 异构：派 OpenAI
+  run_in_background=true,  # 后台不阻塞
+  isolation="worktree"     # 隔离写，不改宿主工作树
+)
+# 然后起 agy 审计方同理，换 model="gemini"
+```
+
+**pi `Agent` 工具做 worktree 并行开发**：
+```
+Agent(
+  subagent_type="general-purpose",
+  prompt="在独立 worktree 实现 X 模块，不改主仓库。完成后汇报。",
+  isolation="worktree",
+  run_in_background=true
+)
+```
+
+**pi 长任务恢复**：
+```bash
+# pi --continue 拼接上下文不刷新磁盘，先重读 run-state.md
+pi --continue
+# 进会话第一句：「读 .lto/<run-id>/run-state.md 确认当前状态」
+```
+
 1. **pi 有 `Agent` 工具，不是「子进程/tmux」**（采纳）：pi 自述 `Agent`（subagent_type / run_in_background / isolation:worktree / steer_subagent）是第一公民抽象，与 tmux window 语义不同。把 Agent 当子进程用会丢弃 worktree 隔离/模型选择/后台回收。实测旁证：pi 当宿主直接派工成功，没用 tmux。
 2. **allowed-tools 对 pi 不静默忽略**（存疑，据 pi 自述）：pi 称读到 `Task` 会找不到对应工具→能力缺口，需映射 `Task`→`Agent`。主 agent 未独立验证 pi 的解析行为，但 pi 是当事方，可信度较高。**结论**：body 一律写能力描述不写工具名（这条无论 pi 自述是否精确都对）。
 3. **thinking 模型耗时预算**（采纳，实测坐实）：pi/deepseek 审 16KB spec 170-200s。单轮审计 timeout ≥ 240s（留 20% 余量）。**exit=124 是 timeout 不是空返回**（validation-log 踩过 3 次的归因错）。pi 当宿主且自己也审时，spec 起草/亲核同样慢，整圈预算按非 thinking 模型 3-5× 估。
@@ -42,6 +88,8 @@
 ## 六、派工前 preflight（以详细指标为依据，不靠"我觉得三家都行"）
 
 异构审计派工前**必须先 preflight**——这次实测靠人工一个个试各 runner 健康度，浪费大量时间且误判（claude 的 35 字节在 codex 沙箱里被误读过）。preflight 是清单，不是框架：
+
+落地产物：用 `../templates/preflight.md` 写 `.lto/<run-id>/preflight.md`。preflight 不是额外文档工作，它是「实际用了几家、为什么降级、timeout 怎么给」的证据。
 
 **第 1 步：runner 健康巡检（实物工具）**
 跑 `agent-delegate/scripts/runners/healthcheck.sh`，得一张**详细指标表**，按 verdict 挑能用的家：

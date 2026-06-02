@@ -8,18 +8,20 @@ description: >-
   「检查 X workflow 完成则继续」「框架稳了再进下一层」这类反复审计-修复-部署-实测-落盘 +
   后台派工不阻塞的推进上。Do not trigger on 单一 bugfix（走 debug）、纯一次性代码审查（走 review）、
   纯委派一轮给别的 runtime（走 agent-delegate，本 skill 只是它的调用方）、写 skill 本身（走 skill-creator）、
-  纯跑一条部署命令（走各自的部署脚本/CI）。
+  纯跑一条部署命令（直接 deploy.sh）。
 metadata:
   tier: agent-driven
   domain: infra
-  optional_backends: [agent-delegate, memory-flow]  # 可选增强，非硬依赖；不装仍可用核心纪律，见 §5 降级矩阵
+  depends_on: [memory-flow]
   status: active
 allowed-tools: [Bash, Read, Write, Edit, Task, AskUserQuestion]
 ---
 
 # Long Task Orchestration
 
-把一个功能**从 spec 编排到生产**的上层纪律。它**可选调用**异构审计后端（装了 `agent-delegate` 用它；否则用 agent 原生 subagent 多视角，须声明对抗性弱）和记忆后端（装了 `memory-flow` 用它；否则降级 ADR/MEMORY.md），但只管「为什么委派、收敛怎么判停、什么时候该拦、停了之后干嘛」——派工实现不重述。三个插槽的检测与降级逻辑见 §5。
+把一个功能**从 spec 编排到生产**的上层纪律。它**调用** `agent-delegate`（委派怎么跑）和 `memory-flow`（经验落盘），但只管「为什么委派、收敛怎么判停、什么时候该拦、停了之后干嘛」——派工实现不重述。
+
+> `depends_on` 只声明 registry 校验允许的 atom / 外部基础依赖；`agent-delegate` 是运行时调用的 sibling agent-driven skill，调用关系写在正文和 §6，不放进 `depends_on`。
 
 > **Runtime-agnostic**：本 skill 描述**能力动作**（「问用户拍板」「起一个独立 agent 审计」「后台并行不阻塞」），不绑某个 runtime 的工具名。宿主是 Claude Code 时这些落到 `AskUserQuestion`/`Task`/`Workflow`；宿主是 codex/pi/gemini 时落到各自的等价机制（交互式提问 / 子进程 agent / tmux 并行）。`allowed-tools` 只是 Anthropic hint，其他 runtime 静默忽略。谁当宿主都能跑整套环；**异构审计**那步是「宿主把任务委派给**别的** runtime」——宿主是谁，就把另外两家当审计方（见 §3、§6）。
 
@@ -47,20 +49,26 @@ allowed-tools: [Bash, Read, Write, Edit, Task, AskUserQuestion]
 立项调研 → ① premature 三道闸预检(§2)；判太早→收缩切最小硬核子集，余拆后续 spec
          → ② (信号存疑) 真数据探针：先承诺阈值，一条聚合查询
 spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审点」让三方严判
-异构审计 → ④ 通过【异构审计后端】派工（装 agent-delegate 用 triad.sh 派 codex+pi+agy；否则用 agent 原生 subagent 多视角，须声明「未做异构交叉，对抗性弱」）→ ⑤ 亲核每 blocker(采纳附行号/否决附证伪)
+异构审计 → ④ triad.sh 派 codex+pi+agy(调 agent-delegate) → ⑤ 亲核每 blocker(采纳附行号/否决附证伪)
          → ⑥ 按收敛度分档不投票 → 修 → 再审，blocker 单调递减判停(→0 / 仅 minor)
 闸门     → ⑦ 进开发/进部署前 AskUserQuestion 用户拍板
 实现     → ⑧ 复用 ④-⑥ 整套循环审「代码」(不只 spec)
 部署     → ⑨ schema 先于代码 → dry-run → 只读探针 → 部署+自动回滚 → ⑩ 端到端真路径实测(非 health 200) → 留观察窗
-落盘     → ⑪ 通过【记忆后端】落盘：装 memory-flow 用 experience_write；否则写 ADR/MEMORY.md。两层条目，slug/文件名外键互链，记反例与天花板
+落盘     → ⑪ 里程碑 + backlog 两层条目，slug 外键，记反例与天花板
 下一个   → 回 ①（方向由用户定）
 ```
 
 **横切纪律**（贯穿整圈）：
-- **后台派工不阻塞**：审计/调研后台跑（Claude Code 用 `Workflow`；装 agent-delegate 用 triad；codex/pi/agy 用子进程或 tmux window；各家机制见 §7），主对话去做别的；完成主动通知，设长心跳兜底；**别轮询**。等待期挖下一步的事实地基（真代码/真分布），不靠记忆。
+- **后台派工不阻塞**：审计/调研后台跑（Claude Code 用 `Workflow`/triad；codex/pi 用子进程或 tmux window），主对话去做别的；完成主动通知，设长心跳兜底；**别轮询**。等待期挖下一步的事实地基（真代码/真分布），不靠记忆。
 - **错峰不减深度**：多批并行分批起（防几十上百并发过载），每批都完整深做。
 - **commit 即记**：中文 commit、README 写更新日志、引经验 slug；**无 AI 署名 / 无 Co-Authored-By**。
 - **stale 免疫**：/compact 或心跳唤醒后，先用一手证据交叉确认真实状态再动手（→ `references/long-loop-state.md`）。
+
+**状态产物（多轮任务必填）**：
+- 新开长任务先用 `templates/run-state.md` 建 `.lto/<run-id>/run-state.md`，记录宿主、git SHA、权限画像、后台派工、阶段闸、决策 slug 和下一步。它是 resume/compact 后的真源。
+- 启动异构审计或后台派工前，用 `templates/preflight.md` 记录 runner healthcheck、宿主沙箱/MCP/写路径画像和降级声明；宣称范围必须等于实测范围。
+- 每轮审计回来，用 `templates/audit-ledger.md` 维护 blocker register。没有 ledger，就不能声称 blocker 单调递减或审计已收敛。
+- 创建、检查、收尾这三步优先用 `scripts/lto_run.py`，不要手工复制模板后忘记 `.lto/current`、git HEAD 或 closeout handoff。用法见 `references/run-state-workflow.md`。
 
 ## 2. 反过度设计「三道闸」（灵魂，最高 ROI）
 
@@ -74,11 +82,9 @@ spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审
 
 ## 3. 异构审计收敛 + 核验否决（推进引擎）
 
-派工通过【插槽1：异构审计后端】实现（本节只管收敛判停，不管派工机制）：
-- **装了 agent-delegate**：用 `triad.sh`（runner/tmux/wait-for/5 条反迎合 prompt 的所有权在它）。
-- **未装**：用 agent 原生 subagent 多视角（起 2-3 个独立子 agent 分头审，不共享上下文），**须在结论里声明「未做异构交叉，对抗性弱」**，不要高估结论可信度。
+派工实现一律归 `[[agent-delegate]]`（runner/tmux/wait-for/5 条反迎合 prompt 的所有权在它）。本节只管收敛判停：
 
-- **B1 触发**：新立项 spec / ≥3 维度变更 / 跨组件行为变更才启（单维小改自评即可）。派**异构三方**——**关键是「跟宿主不同模型家族」**：宿主 Claude 就派 codex(OpenAI)+pi(DeepSeek)+agy(Gemini)；宿主 codex 就派 claude+pi+agy；宿主 pi/agy 同理换掉自己。**必须异构**——同模型多实例≈自我重复，无交叉诊断价值。装 agent-delegate 的 Claude Code 环境用 `triad.sh`；其他 runtime 用各自的子进程/CLI 委派机制（agent-delegate 的 runner 表本身就覆盖 claude/codex/pi/agy 四家，互为委派方）。
+- **B1 触发**：新立项 spec / ≥3 维度变更 / 跨组件行为变更才启（单维小改自评即可）。派**异构三方**——**关键是「跟宿主不同模型家族」**：宿主 Claude 就派 codex(OpenAI)+pi(DeepSeek)+agy(Gemini)；宿主 codex 就派 claude+pi+agy；宿主 pi/agy 同理换掉自己。**必须异构**——同模型多实例≈自我重复，无交叉诊断价值。Claude Code 环境用 agent-delegate 的 `triad.sh`；其他 runtime 用各自的子进程/CLI 委派机制（agent-delegate 的 runner 表本身就覆盖 claude/codex/pi/agy 四家，互为委派方）。
 - **B2 分档不投票**：逐 blocker 看收敛度——三方一致高置信=必修；两方+一方漏=二层核验；三方矛盾=亲核源码/数据自己裁；单方独占核不住=否决。**明写「不投票」**（多数决会淹没单方抓到的真 bug）。
 - **B3 blocker 单调递减判停**：记每轮 HIGH+CRITICAL，要求单调非增。反弹（修 A 出 B）→ 暂停回退 debug、重审上一轮；连续 2 轮不降→质疑标准或需求本身。停于 blocker→0 或仅 minor。
 - **B4 核验而非信仰**（纯方法论，零基建，最值钱）：任何 blocker/性能反驳/**你自己上一轮结论**，默认怀疑逐条核——亲自 Read 真源码(`文件:行号`)、必要时上生产复算(EXPLAIN/真延迟/真分布)、区分「看了真源码 vs 二手报告」。每条 claim 必有结论：采纳(附证据)或否决(附证伪)。**敢否决审计方、敢推翻自己、敢改自己写错的 SQL、敢抓自己脚本的误读。**
@@ -89,32 +95,34 @@ spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审
 ## 4. 部署严格 + 决策落盘（交付闸门）
 
 - **严格定序**（缺一不发）：schema/DDL 先于代码且可反向 → dry-run 看真实变更 → 碰生产先只读探针(不打印密码、数据不外流) → health+自动 .bak 回滚 → **端到端黑盒真路径实测(非 health 200)，测完即删** → 部署后留观察窗。细节 → `references/deploy-sequencing.md`。
-- **决策即时落盘**（【插槽2：记忆后端】）：每个拍板点拍完就写(非事后补)，重点记**反例与天花板**——为什么判 premature(缺的 X)、blocker 递减序列、真数据闸门结果、对标项目天花板。两层条目(里程碑+backlog) slug/文件名外键互链，commit 引 slug。
-  - **装了 memory-flow**：`experience_write` 落盘，获检索命中率/衰减/复利。预留未来接其他兼容后端（`experience_write` 接口不变）。
-  - **未装**：降级 `docs/decisions/` ADR + 项目根 `MEMORY.md` 索引；纪律不变，丢的只是检索复利。
-  细节 → `references/decision-logging.md`。
+- **决策即时落盘**：每个拍板点拍完就写(非事后补)，重点记**反例与天花板**——为什么判 premature(缺的 X)、blocker 递减序列、真数据闸门结果、对标项目天花板。两层条目(里程碑+backlog) slug 外键互链，commit 引 slug。无 memory-flow 则降级 ADR/MEMORY.md，纪律不变。细节 → `references/decision-logging.md`。
 
-## 5. 三插槽设计 × 降级矩阵（新用户第一眼看这张）
+## 5. 私有依赖 × 降级矩阵（朋友第一眼看这张）
 
-本 skill 依赖「接口」不依赖「具体实现」。同一 skill，用户插私有后端用私有后端，发布版插降级实现，不分叉。三个插槽：
+| 环节 | 私有基建 | 剥离后降级 | 剩的纯方法论 | portability |
+|---|---|---|---|---|
+| 异构审计 | agent-delegate + codex/pi/agy | 同模型 subagent 自审(**对抗性缩水，须声明**) | 反迎合 prompt + 单调递减判停 + 不投票分档 | 需私有基建 |
+| 真数据闸门 | memory-flow 生产库 + ssh | 换任意数据源跑统计；无则造样本(**证伪力减**) | 「先承诺阈值再看数」 | 混合 |
+| 亲核代码 / 机制通电 | 无 | 无 | **完整保留**（最强单点杠杆，零基建） | 通用 |
+| 用户拍板 / stale 免疫 | 无 | 无 | **完整保留** | 通用 |
+| 部署 | deploy.sh + 部署目标主机 | CI/CD staging + dry-run + down-migration | schema 先于代码 + 端到端实测 | 需私有基建 |
+| 经验落盘 | memory-flow | ADR / MEMORY.md | 拍板即记、记反例与天花板 | 需私有基建 |
 
-| 插槽 | 能力 | 装了（私有/高配） | 未装（降级） | 须声明 | portability |
-|---|---|---|---|---|---|
-| **插槽1** 异构审计 | 跨模型家族交叉诊断 | `agent-delegate` + triad.sh + codex/pi/agy | agent 原生 subagent 多视角（不共享上下文） | **对抗性弱，须显式声明「未做异构交叉」** | 可降级 |
-| **插槽2** 记忆落盘 | 决策检索/衰减/复利 | `memory-flow` experience_write（预留未来接其他兼容后端） | `docs/decisions/` ADR + 项目根 `MEMORY.md` | 丢检索复利，纪律不变 | 可降级 |
-| **插槽3** 派工调度 | 后台并行不阻塞 | `triad.sh` / agent-delegate runner | agent 原生起 subagent（`Task`/`Workflow` 或各家等价机制） | — | 通用 |
-| — | 真数据闸门 | 任意生产库/日志源 | 造样本（证伪力减，须声明） | 「先承诺阈值再看数」不可省 | 混合 |
-| — | 亲核代码 / 机制通电 | 无 | 无 | **完整保留**（零基建，最强单点杠杆） | 通用 |
-| — | 用户拍板 / stale 免疫 | 无 | 无 | **完整保留** | 通用 |
-| — | 部署安全网 | 可回滚部署脚本 + 目标主机 | CI/CD staging + dry-run + down-migration | schema 先于代码 + 端到端实测 | 需复刻 |
+**净结论**：拿掉全部私有基建，**§4 B4 核验、闸一、闸三、收缩、stale 免疫**这几条零依赖直接可用，是本 skill 真正可移植的硬核。前置安装清单 → `references/sharing-guide.md`。
 
-**运行时插槽检测原则**：每个插槽在执行时检测后端是否可用，可用则用，不可用则自动降级并在结论里声明降级情况。不需要配置，不需要分叉 skill。
+## 6. 与 agent-delegate 的边界（不重复）
 
-**净结论**：拿掉全部可选后端，**§3 B4 核验、闸一、闸三、收缩、stale 免疫**这几条零依赖直接可用，是本 skill 真正可移植的硬核。安装建议 → `references/sharing-guide.md`。
+`agent-delegate` = 「一轮委派怎么跑通」的**工具**；本 skill = 「为什么委派、收敛怎么判停、何时停、停了干嘛」的**上层纪律**。前者是后者调用的工具之一。本 skill **绝不写**：runner 封装、tmux window、wait-for 回收、CLI quirk、5 条反迎合 prompt 的实现——一律指向 `[[agent-delegate]]`，派工那步只写一行「调 triad.sh，约束见 agent-delegate」。
 
-## 6. 与可选后端的边界（不重述实现）
+模板产物边界：`run-state` / `preflight` / `audit-ledger` 只记录 LTO 层的状态、证据和判停，不复制 agent-delegate 的 runner 实现细节；具体命令和回收结果以 agent-delegate 输出为准。
 
-`agent-delegate`（插槽1）= 「一轮委派怎么跑通」的**可选工具**；`memory-flow`（插槽2）= 「经验落盘检索」的**可选工具**；本 skill = 「为什么委派、收敛怎么判停、何时停、停了干嘛」的**上层纪律**。后两者是本 skill 可插拔的工具，本 skill 不依赖它们存在。本 skill **绝不写**：runner 封装、tmux window、wait-for 回收、CLI quirk、5 条反迎合 prompt 的实现——装了 agent-delegate 则指向 `[[agent-delegate]]`，未装则走插槽1降级路径（§5）。
+## Resources
+
+- `scripts/lto_run.py` — 创建 `.lto/<run-id>/` 状态三件套、校验 run-state/git drift、closeout 写 handoff。
+- `templates/run-state.md` — 长任务恢复锚点，记录宿主、阶段、派工、证据、下一步。
+- `templates/preflight.md` — 异构审计/后台派工/部署前的 runner 和宿主权限画像。
+- `templates/audit-ledger.md` — 审计 blocker register 和单调下降判停记录。
+- `references/run-state-workflow.md` — `start` / `check` / `closeout` 命令流程。
 
 ## 7. 谁当宿主都能跑（cross-runtime）
 
@@ -141,7 +149,7 @@ spec 起草 → ③ 自己嗅到可能空转处，显式写进 spec 当「待审
 - 纯一次性代码审查 → 走 review skill
 - 纯委派一轮给别的 runtime → 走 `[[agent-delegate]]`（本 skill 是它的调用方，不是替代）
 - 写 skill 本身 → 走 `[[skill-creator]]`
-- 纯跑一条部署命令 → 直接走部署脚本，不需要整套编排
+- 纯跑一条部署命令 → 直接 deploy.sh，不需要整套编排
 
 ## Workload Profile
 
