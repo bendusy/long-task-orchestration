@@ -110,6 +110,7 @@ def main() -> int:
         ("phase_gate",    [sys.executable, "-m", "lto.test_phase_gate"],  True),
         ("next",          [sys.executable, str(SCRIPTS_DIR / "test_next.py")],              False),
         ("codex_runner",  [sys.executable, str(SCRIPTS_DIR / "test_codex_runner.py")],      False),
+        ("plugins",       [sys.executable, str(SCRIPTS_DIR / "test_plugins.py")],           False),
         ("worktree",      [sys.executable, str(SCRIPTS_DIR / "test_worktree_sandbox.py")],  False),
     ]
     for name, argv, needs_pp in module_tests:
@@ -161,7 +162,7 @@ def main() -> int:
     # 7. References exist
     for ref in [
         "audit-convergence.md", "codex-cli-control.md", "cross-runtime-host-notes.md",
-        "decision-logging.md", "deploy-sequencing.md",
+        "decision-logging.md", "deploy-sequencing.md", "plugin-boundary.md",
         "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
         "validation-log.md", "workflow-playbook.md",
@@ -174,7 +175,7 @@ def main() -> int:
     min_lines = 20
     for ref in [
         "audit-convergence.md", "codex-cli-control.md", "cross-runtime-host-notes.md",
-        "decision-logging.md", "deploy-sequencing.md",
+        "decision-logging.md", "deploy-sequencing.md", "plugin-boundary.md",
         "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
         "validation-log.md", "workflow-playbook.md",

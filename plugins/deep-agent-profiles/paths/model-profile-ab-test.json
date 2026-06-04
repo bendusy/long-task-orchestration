@@ -1,0 +1,16 @@
+{
+  "id": "model-profile-ab-test-v1",
+  "intent": "research",
+  "description": "Compare baseline audit prompt against runtime-profiled prompt on the same brief.",
+  "steps": [
+    {"primitive": "runner", "variant": "baseline", "expected_artifact": "reply-baseline.md"},
+    {"primitive": "runner", "variant": "profiled", "profile": "codex-audit-readonly-v1", "expected_artifact": "reply-profiled.md"},
+    {"primitive": "judge", "expected_artifact": "profile-eval-report.json"}
+  ],
+  "stop_conditions": [
+    "no permission escalation",
+    "parse_rate >= baseline",
+    "false_positive_rate <= baseline",
+    "blocker_quality not worse than baseline"
+  ]
+}

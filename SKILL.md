@@ -26,6 +26,7 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 - **主 agent 是 planner**：路径选择属于宿主模型。LTO 只提供状态、证据、工具、沙箱、审计和停止闸门。
 - **Preset 是 playbook，不是硬路由**：`review` / `debug` / `migration` / `claim-verify` / `research` 是调度先验，详见 `references/workflow-playbook.md`。不要先做替模型决策的固定执行入口。
 - **Primitive 优先于产品命令**：先组合 `runner`、`audit`、`judge`、`next`、`autopilot`、`recap`；只有真实重复路径自然沉淀，才抽最薄 CLI。
+- **外部观点先进插件，不进 core**：有趣文章先做 `source_note → experimental path plugin → eval → promote/reject`，详见 `references/plugin-boundary.md`。插件只编译到现有 primitive，不替 host 规划、不自带升权。
 - **自动化是梯度**：brief → supervised → sandboxed auto-exec → human gate。每一级都必须保留证据、可恢复状态和人工刹车。
 
 ## 三个核心原则

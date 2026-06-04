@@ -48,6 +48,11 @@ $L next                        # 出事实简报 + 无歧义命令建议（零 L
 $L autopilot --supervised      # 读状态出 brief，回吐 host agent 判断
 $L autopilot --supervised --auto-exec   # 安全子步骤在 worktree 沙箱自动跑
 
+# 实验路径插件（data-only；挂载只记录 provenance，不自动改 core）
+$L plugin list
+$L plugin validate plugins/deep-agent-profiles
+$L plugin mount plugins/deep-agent-profiles
+
 # 边界闸门 + 收尾
 $L hook pre-commit
 $L closeout --summary "做了什么，验证了什么"   # 自动生成 CHANGELOG.md
@@ -76,6 +81,7 @@ $L audit --collect replies/
 - **hook 默认不装**：`lto start --install-hooks` 才装（opt-in，撞 husky/pre-commit 会跳过）；auto-commit 也默认关。
 - **autopilot 当前只到 supervised**：`--supervised`（出 brief）和 `--auto-exec`（worktree 沙箱跑 safe 子步骤）已实现；`--autonomous`（spawn 决策 agent 全自动）是下一期，未实现。
 - **自动执行有沙箱**：`--auto-exec` 的命令全在独立 git worktree 副本里跑，`rm -rf` 再狠也只炸可弃的 worktree，主工作树/系统/凭据毫发无损。
+- **外部观点先进插件**：文章/方法论先收录为 source note，再做 experimental path plugin + eval；验证前不进 core。
 
 ## 什么情况不要用
 

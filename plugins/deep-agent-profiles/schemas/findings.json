@@ -1,0 +1,14 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["severity", "claim", "evidence", "recommendation"],
+    "properties": {
+      "severity": {"enum": ["critical", "high", "medium", "low"]},
+      "claim": {"type": "string"},
+      "evidence": {"type": "string"},
+      "recommendation": {"type": "string"},
+      "confidence": {"enum": ["high", "medium", "low"]}
+    }
+  }
+}

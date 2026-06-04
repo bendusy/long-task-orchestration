@@ -1,0 +1,36 @@
+{
+  "id": "note.langchain.deepagents-profiles.2026-06-04",
+  "title": "Tuning Deep Agents for Different Models",
+  "url": "https://www.langchain.com/blog/tuning-deep-agents-different-models",
+  "captured_at": "2026-06-04",
+  "claims": [
+    {
+      "id": "c1",
+      "text": "Harness profiles vary prompts, tools, middleware, subagents, and skills per model/provider.",
+      "status": "supported"
+    },
+    {
+      "id": "c2",
+      "text": "Model-specific profiles improved a tau2-bench subset by roughly 10-20 points in reported examples.",
+      "status": "reported_by_source"
+    },
+    {
+      "id": "c3",
+      "text": "Codex benefits from prompt/tool conventions such as apply_patch, shell_command, and batching independent reads/searches.",
+      "status": "reported_by_source"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h1",
+      "text": "Codex audit jobs produce more parseable and useful findings when given a Codex-specific read-only audit prompt.",
+      "metrics": ["parse_rate", "blocker_quality", "false_positive_rate", "timeout_rate"]
+    },
+    {
+      "id": "h2",
+      "text": "Claude audit jobs improve when prompt requires tool result reflection and direct file/test verification.",
+      "metrics": ["unsupported_claim_rate", "blocker_quality"]
+    }
+  ],
+  "lto_status": "experimental; not a core guarantee"
+}

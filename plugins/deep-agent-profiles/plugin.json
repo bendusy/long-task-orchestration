@@ -1,0 +1,40 @@
+{
+  "id": "deep-agent-profiles",
+  "version": "0.1.0",
+  "stage": "experimental",
+  "kind": "path-plugin",
+  "description": "Data-only experiment for model/runtime harness profiles inspired by LangChain deep-agent tuning results.",
+  "source_notes": [
+    "sources/langchain-tuning-deep-agents.json",
+    "sources/langchain-tuning-deep-agents.md"
+  ],
+  "provides": {
+    "paths": [
+      "paths/model-profile-ab-test.json"
+    ],
+    "profiles": [
+      "profiles/codex-audit-readonly.json",
+      "profiles/claude-audit-reflection.json",
+      "profiles/pi-audit-thinking.json",
+      "profiles/agy-audit-contract.json"
+    ],
+    "evals": [
+      "eval/profile-ab-cases.json"
+    ]
+  },
+  "security": {
+    "executable_code": false,
+    "max_sandbox": "read-only",
+    "env_allowlist": [
+      "CODEX_MODEL",
+      "CODEX_PROFILE",
+      "CODEX_JSON"
+    ],
+    "requires_human_approval_for": [
+      "workspace-write",
+      "danger-full-access",
+      "network"
+    ]
+  },
+  "default_enabled": false
+}

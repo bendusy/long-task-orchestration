@@ -1,0 +1,10 @@
+{
+  "id": "pi-audit-thinking-v1",
+  "runner": "pi",
+  "family": "deepseek",
+  "intent": "audit",
+  "prompt_suffix": "Take time for adversarial reasoning. Distinguish timeout from empty output. Do not trust stale transcript context; verify files and current git state.",
+  "permission": {"sandbox": "read-only"},
+  "budget": {"timeout_sec": 420},
+  "failure": {"timeout_exit_codes": [124], "empty_reply_is_failure": true}
+}

@@ -1,0 +1,10 @@
+{
+  "id": "agy-audit-contract-v1",
+  "runner": "agy",
+  "family": "google",
+  "intent": "audit",
+  "prompt_suffix": "Return the full audit in the reply body. Do not return only a file:// pointer. Do not edit files. Mark uncertainty explicitly.",
+  "permission": {"sandbox": "read-only"},
+  "budget": {"timeout_sec": 360},
+  "failure": {"empty_reply_is_failure": true, "pointer_only_reply_is_failure": true}
+}
