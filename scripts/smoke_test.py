@@ -109,6 +109,7 @@ def main() -> int:
         ("artifacts",     [sys.executable, "-m", "lto.test_artifacts"],   True),
         ("phase_gate",    [sys.executable, "-m", "lto.test_phase_gate"],  True),
         ("next",          [sys.executable, str(SCRIPTS_DIR / "test_next.py")],              False),
+        ("codex_runner",  [sys.executable, str(SCRIPTS_DIR / "test_codex_runner.py")],      False),
         ("worktree",      [sys.executable, str(SCRIPTS_DIR / "test_worktree_sandbox.py")],  False),
     ]
     for name, argv, needs_pp in module_tests:
@@ -159,7 +160,7 @@ def main() -> int:
 
     # 7. References exist
     for ref in [
-        "audit-convergence.md", "cross-runtime-host-notes.md",
+        "audit-convergence.md", "codex-cli-control.md", "cross-runtime-host-notes.md",
         "decision-logging.md", "deploy-sequencing.md",
         "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
@@ -172,7 +173,7 @@ def main() -> int:
     #    not via a filename checklist; deep-detail refs need not be named verbatim)
     min_lines = 20
     for ref in [
-        "audit-convergence.md", "cross-runtime-host-notes.md",
+        "audit-convergence.md", "codex-cli-control.md", "cross-runtime-host-notes.md",
         "decision-logging.md", "deploy-sequencing.md",
         "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",

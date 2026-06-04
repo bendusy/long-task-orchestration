@@ -196,6 +196,7 @@ hook 是 commit/deploy/closeout 前的边界闸门，提醒你"测过了吗 / �
 | 完整命令手册 + add-task | `run-state-workflow.md` |
 | workflow 调度先验 | `workflow-playbook.md` |
 | 执行循环器（runner/judge/parallel/pipeline）细节 | `execution-loop.md` |
+| Codex CLI runner 控制面（`exec -C/-s/-o/stdin`） | `codex-cli-control.md` |
 | 在 codex/pi/agy 当宿主的专项坑 | `cross-runtime-host-notes.md` |
 | 审计收敛逻辑 | `audit-convergence.md` |
 | 边界 hook 配置 | `hooks.md` |

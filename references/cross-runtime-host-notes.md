@@ -16,7 +16,7 @@
 
 1. **权限边界是「启动时冻结」的，不是运行中能力**。子进程/tmux 在 codex 不是默认能力——要 sandbox+approval+network+MCP 启动时全允许才成立。派工命令能启动但子 runner 写 `~/.pi`/`~/.gemini`/锁/token cache/联网全被截断，且 `approval_policy=never`/headless `codex exec` 下基本不能中途补救。
 2. **Codex Host Preflight**（采纳为建议，非强制闸门）：codex 当宿主前记录 宿主模式(interactive/exec) / sandbox / approval policy / child 写路径 / network / MCP env 可见性。任一失败 → 降级为「本机自审/活着的 runner 子集」，不硬宣称 triad 可用。
-3. **`codex exec` 子任务契约**：子 runner 必须禁止反问用户、一次性输出到 stdout/约定文件、不依赖中途审批、失败返回非零退出码（空输出和 timeout 分开记）、prompt 写明「默认只审计写 report，不改仓库除非明确授权」。
+3. **`codex exec` 子任务契约**：子 runner 必须禁止反问用户、一次性输出到 stdout/约定文件、不依赖中途审批、失败返回非零退出码（空输出和 timeout 分开记）、prompt 写明「默认只审计写 report，不改仓库除非明确授权」。LTO 的具体 CLI 控制面见 `codex-cli-control.md`：`codex exec -C "$PWD" -s read-only -o reply.md - < prompt.md`，长 prompt 走 stdin，最终答复写 `-o` 文件，默认 read-only。
 4. **MCP 不从宿主会话继承**：codex child runner 用 MCP 前要在同启动方式下跑 `codex mcp list` 或等价 smoke——别因为宿主会话有 MCP tool 就假设 child `codex exec` 也有。实测旁证：codex TUI 启动时 memory-flow MCP 就 `failed`。
 5. **resume/fork 恢复协议**：codex 长任务恢复不信 transcript 旧状态。建议每轮写 `run-state.md`，并让产物登记进 `.lto/<run-id>/artifacts.json`（run id / git SHA / sandbox profile / tmux id / 每 runner 的 reply/stdout 路径 / MCP smoke / 已采纳否决 blocker）。resume 后从 state + manifest + tmux + 进程重建状态，不信「1 background terminal running」之类旧叙述。
 6. **ANIMEM/memory-flow 是可选索引，不是本地真源**：codex 当宿主时可以先跑

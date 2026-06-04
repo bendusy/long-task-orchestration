@@ -147,7 +147,7 @@ bash skills/agent-delegate/scripts/triad.sh \
    | **agy** | TUI 派工**无需放开沙箱**（agy 自述用细粒度权限弹窗授权，强行套 codex 的 bypass 反而是安全降级） | 默认即可派工 |
 
    **codex 的更优解（codex 自评建议，未实测）**：不一定要全盘 bypass，可给子 runner 专用可写 roots / 专用 HOME / XDG 目录，最小放权。本 skill 不鼓励「长任务编排 = 全盘放权」的绑定。
-   **codex host preflight（codex 自评建议）**：codex 当宿主前先记录 sandbox/approval/network/MCP 画像，任一不放行就降级为「本机自审/活着的 runner 子集」，不要硬宣称 triad 可用。
+   **codex host preflight（codex 自评建议）**：codex 当宿主前先记录 sandbox/approval/network/MCP 画像，任一不放行就降级为「本机自审/活着的 runner 子集」，不要硬宣称 triad 可用。Codex runner 具体控制面见 `references/codex-cli-control.md`：默认 `read-only`，用 `-C` 固定工作区、`-o` 固定回复文件、stdin 承载长 prompt。
 2. **审计方 runner 各家健康度不一，派工前先 smoke**。实测三家最终结果：agy 正常（审 16KB spec 真评审）；pi **慢但可用**（审 16KB 耗时 ~170-200s，给足 timeout 即出 5914 字节真评审）；claude headless 未登录需先 `/login`。**结论**：异构审计别假设三家都活，派工前对每个 runner 跑一次 `echo "1+1" | runner` smoke；某家挂了就用活着的、并在结论里声明「实际用了 N 家异构」。
 3. **审计方 timeout 要按模型速度给足，并分清 exit=124(timeout) 和 exit=0(空返回)**。pi/deepseek 审 16KB spec 耗时近 200s，timeout 给 190s 就 exit=124 失败、给 200s+ 就出真评审——纯粹是慢，不是坏。**诊断教训**（见 validation-log）：我把 timeout(124) 和空返回(0) 混为一谈，连续归因错 3 次（沙箱→model→非TTY）才发现真因最朴素就是慢。**退出码是最硬的一手信号，归因前先把每次失败的退出码列清。**
 
