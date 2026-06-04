@@ -51,6 +51,9 @@ $L autopilot --supervised --auto-exec   # 安全子步骤在 worktree 沙箱自�
 # 实验路径插件（data-only；挂载只记录 provenance，不自动改 core）
 $L plugin list
 $L plugin validate plugins/deep-agent-profiles
+$L plugin render-profile plugins/deep-agent-profiles codex-audit-readonly-v1 \
+  --input brief.md --output rendered-brief.md
+$L plugin eval plugins/deep-agent-profiles --json
 $L plugin mount plugins/deep-agent-profiles
 
 # 边界闸门 + 收尾

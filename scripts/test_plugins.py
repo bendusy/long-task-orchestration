@@ -42,6 +42,39 @@ def main() -> int:
     rows = json.loads(r.stdout)
     errors += ok(any(row.get("id") == "deep-agent-profiles" and row.get("ok") for row in rows), "plugin list includes sample")
 
+    with tempfile.TemporaryDirectory(prefix="lto_plugin_render_") as td:
+        tmp = Path(td)
+        brief = tmp / "brief.md"
+        out = tmp / "rendered.md"
+        meta = tmp / "rendered.meta.json"
+        brief.write_text("Goal:\nAudit this design.\n", encoding="utf-8")
+        r = run("plugin", "render-profile", str(SAMPLE), "codex-audit-readonly-v1",
+                "--input", str(brief), "--output", str(out), "--meta-output", str(meta), "--json")
+        errors += ok(r.returncode == 0, f"render-profile rc=0 (got {r.returncode}; {r.stderr.strip()[:120]})")
+        rendered = out.read_text(encoding="utf-8")
+        errors += ok("Goal:" in rendered and "batch" in rendered.lower(), "rendered prompt includes base + profile instructions")
+        meta_data = json.loads(meta.read_text(encoding="utf-8"))
+        errors += ok(meta_data.get("profile_id") == "codex-audit-readonly-v1", "render meta profile id")
+
+    r = run("plugin", "eval", str(SAMPLE), "--json")
+    errors += ok(r.returncode == 0, f"plugin static eval rc=0 (got {r.returncode})")
+    eval_data = json.loads(r.stdout)
+    errors += ok(eval_data.get("ok") is True and eval_data.get("evals"), "plugin static eval ok")
+
+    with tempfile.TemporaryDirectory(prefix="lto_source_note_") as td:
+        copy = Path(td) / "plugin"
+        subprocess.run(["cp", "-R", str(SAMPLE), str(copy)], check=True)
+        r = run("plugin", "source-note", str(copy), "--id", "note.test.article", "--title", "Test Article",
+                "--url", "https://example.com/test", "--claim", "claim one", "--hypothesis", "hypothesis one",
+                "--append-manifest", "--json")
+        errors += ok(r.returncode == 0, f"source-note rc=0 (got {r.returncode})")
+        note = copy / "sources" / "note.test.article.json"
+        errors += ok(note.exists(), "source-note file written")
+        manifest = json.loads((copy / "plugin.json").read_text(encoding="utf-8"))
+        errors += ok("sources/note.test.article.json" in manifest.get("source_notes", []), "source-note appended to manifest")
+        r = run("plugin", "validate", str(copy), "--json")
+        errors += ok(r.returncode == 0, "plugin validates after source-note append")
+
     with tempfile.TemporaryDirectory(prefix="lto_plugin_test_") as td:
         repo = Path(td) / "repo"
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -61,6 +94,41 @@ def main() -> int:
         errors += ok(lock_data.get("mounts", [{}])[0].get("manifest_hash", "").startswith("sha256:"), "lock has manifest hash")
         artifacts = repo / ".lto" / run_id / "artifacts.json"
         errors += ok("plugin-mounts.json" in artifacts.read_text(encoding="utf-8"), "mount lock registered as artifact")
+
+
+    with tempfile.TemporaryDirectory(prefix="lto_bad_edges_") as td:
+        base = Path(td) / "edge"
+        subprocess.run(["cp", "-R", str(SAMPLE), str(base)], check=True)
+
+        (base / "evil.sh").write_text("echo bad\n", encoding="utf-8")
+        r = run("plugin", "validate", str(base), "--json")
+        errors += ok(r.returncode != 0, "undeclared executable file rejected")
+        (base / "evil.sh").unlink()
+
+        (base / "prompts" / "bad.md").symlink_to("/etc/passwd")
+        prof = json.loads((base / "profiles" / "codex-audit-readonly.json").read_text(encoding="utf-8"))
+        prof["prompt_suffix_ref"] = "prompts/bad.md"
+        (base / "profiles" / "codex-audit-readonly.json").write_text(json.dumps(prof), encoding="utf-8")
+        r = run("plugin", "validate", str(base), "--json")
+        errors += ok(r.returncode != 0 and "symlink" in r.stdout.lower(), "symlink escape rejected")
+        (base / "prompts" / "bad.md").unlink()
+        prof["prompt_suffix_ref"] = "prompts/codex-audit.md"
+        (base / "profiles" / "codex-audit-readonly.json").write_text(json.dumps(prof), encoding="utf-8")
+
+        manifest = json.loads((base / "plugin.json").read_text(encoding="utf-8"))
+        manifest["security"]["env_allowlist"].append("PATH")
+        (base / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+        r = run("plugin", "validate", str(base), "--json")
+        errors += ok(r.returncode != 0 and "host-approved" in r.stdout, "host-owned env allowlist enforced")
+
+    with tempfile.TemporaryDirectory(prefix="lto_bad_eval_") as td:
+        base = Path(td) / "evalbad"
+        subprocess.run(["cp", "-R", str(SAMPLE), str(base)], check=True)
+        (base / "eval" / "profile-ab-cases.json").write_text("[]", encoding="utf-8")
+        r = run("plugin", "eval", str(base), "--json")
+        errors += ok(r.returncode != 0, "non-object eval rejected cleanly")
+        eval_report = json.loads(r.stdout)
+        errors += ok(any("JSON must be an object" in e or "eval must be an object" in e for e in eval_report.get("errors", [])), "non-object eval error reported")
 
     with tempfile.TemporaryDirectory(prefix="lto_bad_plugin_") as td:
         bad = Path(td) / "bad"

@@ -234,3 +234,34 @@ Do not implement yet:
 - one-click "best path" routing.
 
 v0 is validate + mount + provenance. Host agent still decides.
+
+## 11. Implemented v0 commands
+
+```bash
+# Discover and validate data-only plugins
+lto plugin list
+lto plugin validate plugins/deep-agent-profiles --json
+
+# Create an inert source note and optionally append it to plugin.json
+lto plugin source-note plugins/deep-agent-profiles \
+  --id note.example.article \
+  --title "Interesting Article" \
+  --url "https://example.com/article" \
+  --claim "Article claims X improves Y" \
+  --hypothesis "Test whether X improves parse_rate"
+# source-note appends to plugin.json by default; use --no-append-manifest for scratch notes.
+
+# Render a profile into a normal prompt file; execution still goes through runner/AgentJob
+lto plugin render-profile plugins/deep-agent-profiles codex-audit-readonly-v1 \
+  --input brief.md \
+  --output rendered-brief.md \
+  --meta-output rendered-brief.meta.json
+
+# Static eval-pack validation (not a benchmark run yet)
+lto plugin eval plugins/deep-agent-profiles --json
+
+# Mount plugin provenance into the active run; does not auto-apply profiles
+lto plugin mount plugins/deep-agent-profiles --approved-by host
+```
+
+Current `eval` is deliberately static: it checks declared eval packs, profile references, metrics, and safety metadata. Real model A/B execution is a future layer and must run through normal LTO runner/audit primitives with evidence artifacts.

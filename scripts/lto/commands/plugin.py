@@ -20,6 +20,12 @@ def run(args: argparse.Namespace) -> int:
         return _list(args)
     if action == "mount":
         return _mount(args)
+    if action == "render-profile":
+        return _render_profile(args)
+    if action == "eval":
+        return _eval(args)
+    if action == "source-note":
+        return _source_note(args)
     raise SystemExit(f"unknown plugin action: {action}")
 
 
@@ -97,6 +103,58 @@ def _mount(args: argparse.Namespace) -> int:
     return 0
 
 
+def _render_profile(args: argparse.Namespace) -> int:
+    try:
+        meta = plugins.render_profile(args.plugin_dir, args.profile_id, args.input, args.output)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"plugin render-profile failed: {exc}", file=sys.stderr)
+        return 2
+    if args.meta_output:
+        args.meta_output.parent.mkdir(parents=True, exist_ok=True)
+        args.meta_output.write_text(json.dumps(meta, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.json:
+        print(json.dumps(meta, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"rendered {args.profile_id} -> {args.output}")
+        if args.meta_output:
+            print(f"meta: {args.meta_output}")
+    return 0
+
+
+def _eval(args: argparse.Namespace) -> int:
+    report = plugins.static_eval(args.plugin_dir, eval_id=args.eval_id)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.json or not args.output:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"plugin eval {'OK' if report.get('ok') else 'FAIL'} -> {args.output}")
+    return 0 if report.get("ok") else 2
+
+
+def _source_note(args: argparse.Namespace) -> int:
+    try:
+        path = plugins.create_source_note(
+            args.plugin_dir,
+            note_id=args.id,
+            title=args.title,
+            url=args.url,
+            claims=args.claim or [],
+            hypotheses=args.hypothesis or [],
+            append_manifest=args.append_manifest,
+        )
+    except ValueError as exc:
+        print(f"plugin source-note failed: {exc}", file=sys.stderr)
+        return 2
+    result = {"path": str(path), "id": args.id, "appended_manifest": args.append_manifest}
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"source note: {path}")
+    return 0
+
+
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -124,3 +182,31 @@ def add_parser(subparsers) -> None:
     mount.add_argument("--approved-by", default="host")
     mount.add_argument("--json", action="store_true")
     mount.set_defaults(func=run)
+
+    render = plug.add_parser("render-profile", help="render a profile prompt from an input brief")
+    render.add_argument("plugin_dir", type=Path)
+    render.add_argument("profile_id")
+    render.add_argument("--input", type=Path, required=True)
+    render.add_argument("--output", type=Path, required=True)
+    render.add_argument("--meta-output", type=Path)
+    render.add_argument("--json", action="store_true")
+    render.set_defaults(func=run)
+
+    eval_cmd = plug.add_parser("eval", help="run static plugin eval-pack checks")
+    eval_cmd.add_argument("plugin_dir", type=Path)
+    eval_cmd.add_argument("--eval-id")
+    eval_cmd.add_argument("--output", type=Path)
+    eval_cmd.add_argument("--json", action="store_true")
+    eval_cmd.set_defaults(func=run)
+
+    source = plug.add_parser("source-note", help="create a data-only source note JSON")
+    source.add_argument("plugin_dir", type=Path)
+    source.add_argument("--id", required=True)
+    source.add_argument("--title", required=True)
+    source.add_argument("--url", required=True)
+    source.add_argument("--claim", action="append")
+    source.add_argument("--hypothesis", action="append")
+    source.add_argument("--append-manifest", dest="append_manifest", action="store_true", default=True)
+    source.add_argument("--no-append-manifest", dest="append_manifest", action="store_false")
+    source.add_argument("--json", action="store_true")
+    source.set_defaults(func=run)

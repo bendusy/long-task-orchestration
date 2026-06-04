@@ -21,6 +21,8 @@ ALLOWED_STAGE = {"experimental", "blessed", "rejected"}
 ALLOWED_KIND = {"path-plugin"}
 ALLOWED_SANDBOX = {"read-only", "workspace-write", "danger-full-access"}
 ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+HOST_ENV_ALLOWLIST = {"CODEX_MODEL", "CODEX_PROFILE", "CODEX_JSON", "CODEX_IMAGES"}
+ALLOWED_PLUGIN_SUFFIXES = {".json", ".md"}
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,80}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?$")
 
@@ -109,6 +111,8 @@ def validate_plugin(plugin_dir: Path) -> PluginValidation:
     for key in security.get("env_allowlist", []) or []:
         if not isinstance(key, str) or not ENV_KEY_RE.match(key):
             errors.append(f"invalid env_allowlist key: {key!r}")
+        elif key not in HOST_ENV_ALLOWLIST:
+            errors.append(f"env_allowlist key is not host-approved: {key!r}")
 
     source_notes = manifest.get("source_notes")
     if not isinstance(source_notes, list) or not source_notes:
@@ -128,6 +132,10 @@ def validate_plugin(plugin_dir: Path) -> PluginValidation:
             continue
         for rel in values:
             _validate_rel_file(plugin_dir, rel, errors, must_parse_json=rel.endswith(".json") if isinstance(rel, str) else False)
+
+    _validate_plugin_tree(plugin_dir, errors)
+    from .plugin_extra import validate_profile_refs
+    validate_profile_refs(plugin_dir, manifest, errors)
 
     for rel in _all_declared_refs(manifest):
         if isinstance(rel, str) and rel.endswith((".py", ".sh", ".js", ".ts")):
@@ -193,6 +201,38 @@ def _load_mount_lock(path: Path, run_id: str) -> dict[str, Any]:
     return {"schema_version": PLUGIN_SCHEMA_VERSION, "run_id": st.validate_run_id(run_id), "mounts": []}
 
 
+
+def render_profile(plugin_dir: Path, profile_id: str, input_path: Path, output_path: Path) -> dict[str, Any]:
+    from .plugin_extra import render_profile as _render_profile
+    return _render_profile(plugin_dir, profile_id, input_path, output_path)
+
+
+def static_eval(plugin_dir: Path, eval_id: str | None = None) -> dict[str, Any]:
+    from .plugin_extra import static_eval as _static_eval
+    return _static_eval(plugin_dir, eval_id)
+
+
+def create_source_note(
+    plugin_dir: Path,
+    *,
+    note_id: str,
+    title: str,
+    url: str,
+    claims: list[str],
+    hypotheses: list[str],
+    append_manifest: bool = False,
+) -> Path:
+    from .plugin_extra import create_source_note as _create_source_note
+    return _create_source_note(
+        plugin_dir,
+        note_id=note_id,
+        title=title,
+        url=url,
+        claims=claims,
+        hypotheses=hypotheses,
+        append_manifest=append_manifest,
+    )
+
 def _validate_rel_file(plugin_dir: Path, rel: Any, errors: list[str], *, must_parse_json: bool) -> None:
     if not isinstance(rel, str) or not rel:
         errors.append(f"declared path must be non-empty string: {rel!r}")
@@ -201,14 +241,37 @@ def _validate_rel_file(plugin_dir: Path, rel: Any, errors: list[str], *, must_pa
         errors.append(f"declared path must stay inside plugin dir: {rel!r}")
         return
     path = plugin_dir / rel
-    if not path.exists() or not path.is_file():
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(plugin_dir.resolve())
+    except (FileNotFoundError, RuntimeError, ValueError):
+        errors.append(f"declared file escapes plugin dir or is missing: {rel}")
+        return
+    if path.is_symlink() or any(part.is_symlink() for part in path.parents if part != plugin_dir.parent):
+        errors.append(f"declared file must not be a symlink: {rel}")
+        return
+    if not path.is_file():
         errors.append(f"declared file missing: {rel}")
         return
     if must_parse_json:
         try:
-            json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                errors.append(f"declared JSON must be an object: {rel}")
         except json.JSONDecodeError as exc:
             errors.append(f"declared JSON invalid: {rel}: {exc}")
+
+
+def _validate_plugin_tree(plugin_dir: Path, errors: list[str]) -> None:
+    for path in plugin_dir.rglob("*"):
+        rel = path.relative_to(plugin_dir)
+        if ".git" in rel.parts:
+            continue
+        if path.is_symlink():
+            errors.append(f"plugin v0 forbids symlink: {rel}")
+            continue
+        if path.is_file() and path.suffix not in ALLOWED_PLUGIN_SUFFIXES:
+            errors.append(f"plugin v0 only allows .json/.md files: {rel}")
 
 
 def _all_declared_refs(manifest: dict[str, Any]) -> list[Any]:
