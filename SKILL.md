@@ -1,8 +1,8 @@
 ---
 name: long-task-orchestration
 description: >-
-  长任务的「导航仪」——帮你在 spec→审计→开发→部署→实测→记录 六个阶段不迷路。
-  告诉你什么时候该做什么、做到什么程度算做完、什么时候该停下来问人。
+  长任务 harness——帮 host agent 在 spec→审计→开发→部署→实测→记录 六个阶段保留状态、
+  证据、审计、恢复点和人工刹车。
   Use when 一个任务要好多轮才能完成（设计+开发+上线），你担心做过头或者做着做着跑偏了。
   Do not trigger on 修个小 bug（走 diagnose）、让别人审一下代码（走 review）、
   只部署一下（走 ship）。普通「起个 spec / 做个功能」走对应专职 skill，
@@ -10,16 +10,23 @@ description: >-
 metadata:
   tier: agent-driven
   domain: infra
-  optional_integrations: [memory-flow]
+  optional_integrations: [agent-delegate, memory-flow]
   status: active
 allowed-tools: [Bash, Read, Write, Edit, Task, AskUserQuestion]
 ---
 
-# LTO：长任务的导航仪
+# LTO：长任务 harness
 
 做一个小功能只要 5 分钟。做一个大功能可能要 50 轮对话——中间你会迷路：不知道做到哪了、不知道是不是做过头了、不知道什么时候该停。
 
-LTO 就是帮你解决这三个问题的。它**不替你写代码**，它告诉你**现在该干嘛、怎么判断做完了、什么时候该踩刹车**。
+LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替你选完整 workflow**。host agent 是 planner；LTO 是 harness：提供 state、artifact、audit、runner、sandbox、resume/recap 和 human gate，让你有证据、有刹车、有恢复点地推进。
+
+## 架构哲学
+
+- **主 agent 是 planner**：路径选择属于宿主模型。LTO 只提供状态、证据、工具、沙箱、审计和停止闸门。
+- **Preset 是 playbook，不是硬路由**：`review` / `debug` / `migration` / `claim-verify` / `research` 是调度先验，详见 `references/workflow-playbook.md`。不要先做替模型决策的固定执行入口。
+- **Primitive 优先于产品命令**：先组合 `runner`、`audit`、`judge`、`next`、`autopilot`、`recap`；只有真实重复路径自然沉淀，才抽最薄 CLI。
+- **自动化是梯度**：brief → supervised → sandboxed auto-exec → human gate。每一级都必须保留证据、可恢复状态和人工刹车。
 
 ## 三个核心原则
 
@@ -33,24 +40,6 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码**，它告诉
 三个 AI 都说「没问题」≠ 真的没问题。最终拍板的是你，不是 AI。
 
 > 记住这三个问题：(1) 缺的东西现在真的存在吗？(2) 数据按你说的标准过了吗？(3) 人说了算吗？
-
-## 依赖边界（先读）
-
-核心 LTO 必需：Python 3.10+、bash、git，以及一个能读本 `SKILL.md`
-并执行 shell 的宿主 runtime（Codex / Claude Code / pi / agy / 其他 agent）。
-
-可选增强：
-- `tmux`：让内置 delegate 的 `audit --auto-dispatch` 以可观测并行窗口运行；
-  没有 `tmux` 时降级到 headless 子进程。
-- codex / claude / pi / agy CLI：提供不同模型家族的审计方；至少两家非宿主 runtime 可用时，异构价值才足。
-- ANIMEM / memory-flow compatible sink：跨 runtime / 跨项目 artifact memory。没装不影响本地 `.lto`、ADR、check、runner、audit 收口。
-
-LTO 发行包已预装最小 delegate runtime，脚本在 `scripts/delegate/`；
-需要替换成外部实现时，用
-  `AGENT_DELEGATE_TRIAD` / `AGENT_DELEGATE_RUNNERS` 指向外部安装。
-
-没有可选项时不要报错退出：降级到手动派工、本地 `.lto` 和 repo-local ADR，
-并在结论里说明实际用了哪些能力。
 
 ## 六个阶段（一张图说清楚）
 
@@ -97,32 +86,34 @@ LTO 发行包已预装最小 delegate runtime，脚本在 `scripts/delegate/`；
 
 找个跟你不一样的 AI 来审——你用 DeepSeek 就让 GPT 和 Gemini 来审，反之亦然。同个模型审自己等于没审。
 
-**一键编排（推荐）**：`lto audit` 替你扫高风险 task、写审计简报、用内置 delegate 派工、收口判收敛。LTO 只编排不自审（导航仪不是码农），强制「审者 ≠ 你这个 host」：
+**一键编排（推荐）**：LTO 扫高风险 task、写审计简报、给派工指令、收口判收敛。下面命令默认从 `agent-skills` 仓库根目录运行；装过 `scripts/install.sh` 且 `lto` 在 `PATH` 后，可把 `$LTO` 换成 `lto`。LTO 只编排不自审（harness 不是被审/写码方），派工交给 agent-delegate，强制「审者 ≠ 你这个 host」：
 
 ```bash
-# 全自动（推荐）：扫高风险 task → 自动派异构三方 → 收口判收敛
-python3 scripts/lto_run.py audit --auto-dispatch
+LTO="python3 skills/long-task-orchestration/scripts/lto_run.py"
+
+# 全自动（推荐，装了 agent-delegate）：扫高风险 task → 自动派异构三方 → 收口判收敛
+$LTO audit --auto-dispatch
 
 # 派 agent 主动找漏掉的风险点（对抗"自报完整性"，未审 risk 会被 closeout 闸门拦）
-python3 scripts/lto_run.py audit --discover-risks
+$LTO audit --discover-risks
 
-# 半自动（runtime 不可用或想手动控制）：
-python3 scripts/lto_run.py audit                       # 写简报 + 打印派工指令
+# 半自动（没装 agent-delegate 或想手动控制）：
+$LTO audit                                           # 写简报 + 打印派工指令
 #    （想强制审某些 task：--task-id T1 T2）
-python3 scripts/lto_run.py audit --collect .lto/<run-id>/audit/replies   # 派完收口
+$LTO audit --collect .lto/<run-id>/audit/replies     # 派完收口
 ```
 
 > 审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词）；`--collect`
 > 校验异构（审者家族 ≠ host）+ 抽 blocker 计数 + 判 ledger 收敛趋势。
 
-**手动派工（不用自动派工时）**：
+**手动派工（没装 agent-delegate 时）**：
 ```bash
-AD=${AGENT_DELEGATE_RUNNERS:-scripts/delegate/runners}
+AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
 $AD/codex.sh  方案.md 回复-codex.md  300 &
 $AD/agy.sh    方案.md 回复-agy.md    300 &
 $AD/claude.sh 方案.md 回复-claude.md 300 &
 wait  # 等它们都跑完
-# 回复存一个目录、文件名带 runtime，再 lto audit --collect <dir>
+# 回复存一个目录、文件名带 runtime，再 $LTO audit --collect <dir>
 ```
 
 **拿到结果后做什么**：
@@ -134,7 +125,7 @@ wait  # 等它们都跑完
 每轮审完，把这一轮的大问题数量填进 ledger（`.lto/<run-id>/audit-ledger.md` 的 Round Summary 表，仅 `--with-audit` 或 `--profile audit|deploy` 时生成），然后让脚本替你判收敛：
 
 ```bash
-python3 scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
+python3 skills/long-task-orchestration/scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
 ```
 
 它会打出一行 `verdict:`——数量降到 0 是 CONVERGED（收敛了，可以收尾），还在降但没到 0 是 CONVERGING（继续修），数量反弹是 REBOUND、卡在原地不动（`--strict`）是 STALLED，这俩它会喊停，让你别自我感觉良好地往下冲。
@@ -159,22 +150,22 @@ python3 scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
 - 查数据时定的标准是什么、实际是什么
 - 别人做到什么程度了（天花板在哪）
 
-用什么记：先用 `write_decision.py` 写 `docs/decisions/` ADR 并登记 artifact；有 artifact-memory sink 时再把值得复利的经验写入库。
+用什么记：先用 `write_decision.py` 写 `docs/decisions/` ADR 并登记 artifact；有 memory-flow 时再把值得复利的经验写入库。
 
 每次 closeout 会自动生成人类友好的 CHANGELOG.md，从 state.json 的 task/evidence 中提取。
 
-### Artifact memory（可选：ANIMEM / memory-flow compatible sink）
+### ANIMEM artifact memory（可选）
 
 LTO 的真源仍是本地 `.lto/<run-id>/state.json` + `artifacts.json`。
-ANIMEM / memory-flow compatible sink 只是可选的 artifact-memory sink，用来让不同 runtime
+ANIMEM / memory-flow 只是可选的 artifact-memory sink，用来让不同 runtime
 跨项目发现“哪个 run 活着、产物在哪里、谁审过、下一步是什么”。
 
-没装 artifact-memory sink 也能完整使用 LTO：
+没装 ANIMEM 也能完整使用 LTO：
 
 ```bash
-python3 scripts/lto_run.py memory export --run-id <run-id> --dry-run  # 纯本地 redacted JSON
-python3 scripts/lto_run.py memory resume --project <key>              # 无 sink 时降级到本地 .lto
-python3 scripts/lto_run.py memory publish --run-id <run-id>           # 只有显式 publish 才要求 sink 配置
+$LTO memory export --run-id <run-id> --dry-run  # 纯本地 redacted JSON
+$LTO memory resume --project <key>              # 无 sink 时降级到本地 .lto
+$LTO memory publish --run-id <run-id>           # 只有显式 publish 才要求 sink 配置
 ```
 
 `memory export/publish` 不投影 `original_user_request` 原文、raw transcript、
@@ -186,27 +177,29 @@ python3 scripts/lto_run.py memory publish --run-id <run-id>           # 只有�
 用一个文件记住当前状态：
 ```bash
 # 开始（--why/--done-when 记下为什么做、做完的标准，recap 会用到）
-python3 scripts/lto_run.py start --goal "做用户登录" \
+LTO="python3 skills/long-task-orchestration/scripts/lto_run.py"
+
+$LTO start --goal "做用户登录" \
   --why "降低登录失败率" --done-when "失败率<5%，三端覆盖"
 
 # 续接（上次 compact 之后，或新 session 恢复）
-python3 scripts/lto_run.py resume        # 给接手的 AI 拉上下文
-python3 scripts/lto_run.py memory resume # 可选：先查 artifact memory，失败则降级本地
-python3 scripts/lto_run.py recap         # 给人看的回顾（隔了几天回来，人会忘）
+$LTO resume        # 给接手的 AI 拉上下文
+$LTO memory resume # 可选：先查 ANIMEM/memory-flow，失败则降级本地
+$LTO recap         # 给人看的回顾（隔了几天回来，人会忘）
 
 # 检查状态 / 问下一步
-python3 scripts/lto_run.py check
-python3 scripts/lto_run.py check --to implementation   # 只读检查进入写码前的证据
-python3 scripts/lto_run.py check --to closed --strict   # 预查收尾前硬证据
-python3 scripts/lto_run.py next          # 出决策简报+路由建议（零 LLM，判断由你做）
+$LTO check
+$LTO check --to implementation   # 只读检查进入写码前的证据
+$LTO check --to closed --strict  # 预查收尾前硬证据
+$LTO next                        # 出事实简报+无歧义命令建议（零 LLM，判断由你做）
 
-# 自驱推进（关键步骤自动编排）
-python3 scripts/lto_run.py autopilot --supervised   # 出 brief 回吐你判断
+# 自驱推进（受约束 harness，不接管 planner）
+$LTO autopilot --supervised   # 出 brief 回吐你判断
 #   --auto-exec：safe/reversible 子步骤在 worktree 沙箱自动跑（dangerous 停下等确认）
 #   --decide：escalate 时派三方异构 agent 讨论收敛（opt-in 烧 token，决策权仍归你）
 
 # 完成
-python3 scripts/lto_run.py closeout --summary "做了什么，验证了什么"
+$LTO closeout --summary "做了什么，验证了什么"
 ```
 
 > **resume vs recap**：resume 喂 AI（git head / task 状态，防 compact 后丢上下文）；
@@ -224,7 +217,7 @@ python3 scripts/lto_run.py closeout --summary "做了什么，验证了什么"
 |---|---|
 | 修个报错 | diagnose |
 | 让人审代码 | review |
-| 让别人跑个任务 | bundled delegate (`scripts/delegate/delegate.sh`) |
+| 让别人跑个任务 | agent-delegate |
 | 写新 skill | skill-creator |
 | 部署上线 | ship |
 
@@ -243,8 +236,9 @@ python3 scripts/lto_run.py closeout --summary "做了什么，验证了什么"
 **入口与文档**
 - `scripts/lto_run.py` — 16 命令薄入口（分发到 `lto/commands/`）
 - `scripts/write_decision.py` — ADR-first 决策落盘 helper（写 `docs/decisions/` + state + artifact manifest）
-- `scripts/install.sh` — 生成/检查 sentinel-managed 全局 `lto` wrapper
+- `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper
 - `references/onboarding.md` — **给 agent 读一份就懂怎么装载 LTO**（跨 runtime）
+- `references/workflow-playbook.md` — `review/debug/migration/claim-verify/research` 调度先验
 - `references/run-state-workflow.md` — 16 命令详细用法手册
 - `references/execution-loop.md` — runner/judge/parallel/pipeline + agent 执行层
 - `references/hooks.md` — pre-commit/pre-deploy/pre-closeout 边界 hook（opt-in）
@@ -257,7 +251,7 @@ python3 scripts/lto_run.py closeout --summary "做了什么，验证了什么"
 - `templates/run-state.md` — 人类可读状态模板
 - `templates/audit-ledger.md` — 审计台账（仅 `--with-audit` 时生成）
 
-**dynamic workflow 底层模块**（不直接走 CLI，是 next/autopilot/audit 的地基）
+**harness primitive 底层模块**（不直接走 CLI，是 next/autopilot/audit 的地基）
 - `scripts/lto/agent_job.py` — AgentJob/AgentResult 数据合同（agent 世界，非 shell）
 - `scripts/lto/scheduler.py` — 并发调度 + 退出码三元判定(OK/FAILED/TIMEOUT/RATE_LIMITED) + 指数退避
 - `scripts/lto/agent_exec.py` — spawn 原语（拉隔离 agent，落 state.agent_runs）

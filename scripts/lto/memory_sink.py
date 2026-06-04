@@ -39,7 +39,7 @@ class MemorySink:
 
 
 class LegacyMemoryFlowSink(MemorySink):
-    """Optional REST adapter for memory-flow compatible write/resume APIs."""
+    """Temporary private REST adapter for legacy memory-flow write/resume APIs."""
 
     def __init__(self, url: str | None = None, token: str | None = None, timeout: float = 5.0):
         self.url = (url or os.getenv("MEMORY_FLOW_URL") or "").rstrip("/")
@@ -61,7 +61,7 @@ class LegacyMemoryFlowSink(MemorySink):
         self._require_config(require_token=False)
         query = urllib.parse.urlencode({
             "q": f"lto {project_key} project_snapshot lto_run_snapshot",
-            "library": os.getenv("LTO_MEMORY_LIBRARY", "tech"),
+            "library": "技术",
             "top_k": "5",
         })
         req = urllib.request.Request(f"{self.url}/v1/search?{query}", headers=self._headers())
@@ -74,13 +74,13 @@ class LegacyMemoryFlowSink(MemorySink):
             parsed = json.loads(body)
         except json.JSONDecodeError:
             parsed = {"raw": body}
-        return ResumeResult(True, "memory sink search ok", parsed)
+        return ResumeResult(True, "legacy memory-flow search ok", parsed)
 
     def _require_config(self, *, require_token: bool) -> None:
         if not self.url:
             raise MemorySinkError(
                 "optional memory sink is not configured "
-                "(set MEMORY_FLOW_URL or pass --url; LTO core commands do not require a memory sink)"
+                "(set MEMORY_FLOW_URL or pass --url; LTO core commands do not require ANIMEM)"
             )
         if require_token and not self.token:
             raise MemorySinkError(
@@ -104,10 +104,10 @@ class LegacyMemoryFlowSink(MemorySink):
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 if resp.status not in (200, 201):
-                    raise MemorySinkError(f"memory sink write returned {resp.status}")
+                    raise MemorySinkError(f"memory-flow write returned {resp.status}")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
-            raise MemorySinkError(f"memory sink write returned {exc.code}: {detail}") from exc
+            raise MemorySinkError(f"memory-flow write returned {exc.code}: {detail}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise MemorySinkError(str(exc)) from exc
 
@@ -127,12 +127,12 @@ def _record_to_experience(payload: dict[str, Any], record: dict[str, Any]) -> di
     )
     return {
         "slug": f"lto-{project}-{run_id}-{kind}-{suffix}",
-        "library": os.getenv("LTO_MEMORY_LIBRARY", "tech"),
-        "type_": os.getenv("LTO_MEMORY_TYPE", "experience"),
+        "library": "技术",
+        "type_": "经验",
         "title": title[:120],
         "body": body,
         "file_path": record.get("relative_path") or record.get("state_path") or f".lto/{run_id}/state.json",
-        "tags": ["lto", "artifact-memory", kind],
+        "tags": ["lto", "animem", "artifact-memory", kind],
         "task_id": record.get("task_id") or "",
         "source_agent": payload.get("host_runtime") or "lto",
     }

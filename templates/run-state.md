@@ -19,7 +19,7 @@
 - sandbox / approval:
 - network:
 - tmux/session:
-- artifact-memory sink / MCP:
+- memory-flow / MCP:
 - production access:
 - child runner write roots:
 

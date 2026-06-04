@@ -27,8 +27,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--consequences", required=True)
     parser.add_argument("--status", default="accepted")
     parser.add_argument("--slug")
-    parser.add_argument("--memory-slug", dest="memory_slug")
-    parser.add_argument("--memory-flow-slug", dest="memory_slug", help=argparse.SUPPRESS)
+    parser.add_argument("--memory-flow-slug")
     return parser.parse_args(argv)
 
 
@@ -59,8 +58,8 @@ def render_adr(args: argparse.Namespace, run_id: str, slug: str, today: str) -> 
         f"- lto_run: {run_id}",
         f"- slug: {slug}",
     ]
-    if args.memory_slug:
-        lines.append(f"- memory_slug: {args.memory_slug}")
+    if args.memory_flow_slug:
+        lines.append(f"- memory_flow_slug: {args.memory_flow_slug}")
     lines.extend([
         "",
         "## Context",
@@ -101,7 +100,7 @@ def register_decision(repo: Path, run_id: str, rel_path: str, args: argparse.Nam
         "status": args.status,
         "path": rel_path,
         "slug": slug,
-        "memory_slug": args.memory_slug or "",
+        "memory_flow_slug": args.memory_flow_slug or "",
         "timestamp": st.iso_now(),
     })
     st.save_state(state_path, state)

@@ -1,16 +1,16 @@
-"""AgentJob / AgentResult — agent 世界的数据合同（dynamic workflow 地基）。
+"""AgentJob / AgentResult — agent 世界的数据合同（harness 地基）。
 
-这是 spawn 原语(agent_exec)、调度器(scheduler)、pattern 路由器(lto next)
+这是 spawn 原语(agent_exec)、调度器(scheduler)、事实简报器(lto next)
 三方共享的单一真源。刻意区别于 exec.py 的 shell 世界合同
-（command/cwd/rc/stdout/stderr）——dynamic workflow 编排的是带独立 context
-的 agent，不是 shell 命令。
+（command/cwd/rc/stdout/stderr）——agent harness 编排的是带独立 context 的
+agent，不是 shell 命令。
 
 设计原则（codex 异构审纠正）：
-- 不用 run_command 的 shell 签名锁死 spawn，否则 router 被卡天花板。
+- 不用 run_command 的 shell 签名锁死 spawn，否则 host agent 的组合空间会被卡住。
 - 每个字段都对应一个真实消费者：
   · scheduler 读 budget / retry_policy / runner（并发、退避、限流）
   · agent_exec 读 prompt_ref / runner / model / isolation / output_schema
-  · lto next 路由器读 parent_pattern / verifier_of / children（编排结构）
+  · lto next 读 parent_pattern / verifier_of / children（给 host agent 的编排事实）
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from enum import Enum
 from typing import Any
 
 
-# 编排 pattern（官方 dynamic workflow 7 pattern 的子集，按路线增量铺开）
+# 编排 pattern（官方文章中 pattern 的实用子集，按真实需求增量铺开）
 class Pattern(str, Enum):
     LINEAR = "linear"            # 单 agent 顺序
     FAN_OUT = "fan-out"          # 拆多步并发 + barrier 合成
@@ -66,7 +66,7 @@ class RetryPolicy:
 
 @dataclass
 class AgentJob:
-    """一个待调度的 agent 任务（router-facing 合同）。"""
+    """一个待调度的 agent 任务（host-agent-facing 合同）。"""
     job_id: str
     prompt_ref: str                                # 简报文件路径或内联文本
     runner: str = "codex"                          # KNOWN_RUNNERS 之一

@@ -16,7 +16,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -66,55 +65,10 @@ def main() -> int:
         else:
             print(f"OK   no stale term: {term}")
 
-    # 3b. Bundled delegate runtime works offline with fake runners.
-    delegate_dir = SCRIPTS_DIR / "delegate"
-    delegate_scripts = [
-        delegate_dir / "delegate.sh",
-        delegate_dir / "triad.sh",
-        delegate_dir / "runners" / "healthcheck.sh",
-    ]
-    for script in delegate_scripts:
-        errors += check(script.exists(), f"delegate script {script.relative_to(SKILL_DIR)} exists")
-        if script.exists():
-            proc = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
-            errors += check(proc.returncode == 0, f"delegate script {script.name} bash syntax")
-
-    with tempfile.TemporaryDirectory() as tmp:
-        tmpdir = Path(tmp)
-        fake_runners = tmpdir / "runners"
-        fake_runners.mkdir()
-        for agent in ("codex", "pi", "agy"):
-            runner = fake_runners / f"{agent}.sh"
-            runner.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "printf '%s fake reply\\n' \"$(basename \"$0\" .sh)\" > \"$2\"\n",
-                encoding="utf-8",
-            )
-            os.chmod(runner, 0o755)
-        prompt = tmpdir / "prompt.md"
-        replies = tmpdir / "replies"
-        prompt.write_text("review this\n", encoding="utf-8")
-        proc = subprocess.run(
-            [
-                "bash", str(delegate_dir / "triad.sh"), "--headless",
-                "-p", str(prompt), "-d", str(replies),
-                "-a", "codex pi agy", "-t", "5",
-            ],
-            capture_output=True, text=True,
-            env={**os.environ, "AGENT_DELEGATE_RUNNERS": str(fake_runners)},
-            timeout=20,
-        )
-        errors += check(proc.returncode == 0, "bundled delegate triad fake runners")
-        for agent in ("codex", "pi", "agy"):
-            reply = replies / f"{agent}.md"
-            errors += check(reply.exists() and "fake reply" in reply.read_text(encoding="utf-8"),
-                            f"bundled delegate collected {agent} reply")
-
     # 4. lto_run.py self-test
     result = subprocess.run(
         [sys.executable, str(SKILL_DIR / "scripts" / "lto_run.py"), "self-test"],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=30,
     )
     errors += check(result.returncode == 0, f"lto_run.py self-test: {result.stdout.strip().split(chr(10))[-1]}")
     if result.returncode != 0:
@@ -136,7 +90,7 @@ def main() -> int:
             print(ledger_result.stderr, file=sys.stderr)
 
     # 4c. Six load-bearing module self-tests / adversarial tests.
-    #     These guard the dynamic-workflow safety logic (scheduler exit-code
+    #     These guard the harness safety logic (scheduler exit-code
     #     judgment, agent spawn, audit dispatch, decision convergence, next
     #     routing, worktree sandbox red-lines). Their tests exist but smoke
     #     never ran them — a P0 chmod bug shipped because of exactly this gap.
@@ -208,7 +162,8 @@ def main() -> int:
         "audit-convergence.md", "cross-runtime-host-notes.md",
         "decision-logging.md", "deploy-sequencing.md",
         "engineering-map.md", "long-loop-state.md",
-        "onboarding.md", "run-state-workflow.md", "sharing-guide.md", "validation-log.md",
+        "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
+        "validation-log.md", "workflow-playbook.md",
     ]:
         path = SKILL_DIR / "references" / ref
         errors += check(path.exists(), f"reference {ref} exists")
@@ -220,7 +175,8 @@ def main() -> int:
         "audit-convergence.md", "cross-runtime-host-notes.md",
         "decision-logging.md", "deploy-sequencing.md",
         "engineering-map.md", "long-loop-state.md",
-        "onboarding.md", "run-state-workflow.md", "sharing-guide.md", "validation-log.md",
+        "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
+        "validation-log.md", "workflow-playbook.md",
     ]:
         path = SKILL_DIR / "references" / ref
         if path.exists():

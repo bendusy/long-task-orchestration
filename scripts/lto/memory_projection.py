@@ -20,9 +20,7 @@ MAX_GOAL = 160
 SECRET_RE = re.compile(
     r"(?i)(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*['\"]?[^\s'\"]+"
 )
-ABS_PATH_RE = re.compile(
-    r"(/Users/[^\s]+|/Volumes/[^\s]+|/home/[^\s]+|/private/[^\s]+|[A-Za-z]:\\\\[^\s]+)"
-)
+ABS_PATH_RE = re.compile(r"(/Users/[^\s]+|/Volumes/[^\s]+|[A-Za-z]:\\\\[^\s]+)")
 
 
 def build_projection(repo: Path, run_id: str) -> dict[str, Any]:
@@ -167,8 +165,8 @@ def _project_key(repo: Path) -> str:
 
 def _project_aliases(repo: Path) -> list[str]:
     aliases = [repo.name]
-    if repo.name == "long-task-orchestration":
-        aliases.append("lto")
+    if repo.name == "agent-skills":
+        aliases.extend(["skills", "lto"])
     return sorted(set(a for a in aliases if a))
 
 

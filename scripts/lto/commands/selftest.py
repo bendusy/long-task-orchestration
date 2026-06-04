@@ -283,17 +283,17 @@ def run(_args: argparse.Namespace) -> int:
             print(f"FAIL decide budget0: terminal status should be budget_exhausted, got: {r.stdout[-300:]}", file=sys.stderr)
             return 1
 
-        # (5) 负数 budget 无意义 → 按 0 处理，避免 typo 触发真派工烧 token。
+        # (5) 负数 budget 无意义 → 回落默认（不显示 ≈-N）
         clear_autopilot_digest()
         r = lto("autopilot", "--supervised", "--decide", "--decide-budget", "-5")
-        if r.returncode != 21:
+        if r.returncode != 12:
             print(f"FAIL decide budget-neg terminal code: rc={r.returncode} stderr={r.stderr}", file=sys.stderr)
             return 1
         if "为负" not in r.stdout or "budget_remaining≈-" in r.stdout:
             print(f"FAIL decide: negative budget must fall back, got: {r.stdout[-300:]}", file=sys.stderr)
             return 1
-        if '"status": "budget_exhausted"' not in r.stdout:
-            print(f"FAIL decide budget-neg: terminal status should be budget_exhausted, got: {r.stdout[-300:]}", file=sys.stderr)
+        if '"status": "needs_human"' not in r.stdout:
+            print(f"FAIL decide budget-neg: terminal status should be needs_human, got: {r.stdout[-300:]}", file=sys.stderr)
             return 1
 
         # (6) supervised 只建议 judge/closeout，不自动执行 → NEEDS_CONFIRM=11

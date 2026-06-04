@@ -1,8 +1,8 @@
 """lto audit — 对抗审计提取：编排异构三方审计 + 收口进 ledger。
 
 设计原则（与 LTO 架构一致）：
-- LTO 只编排和收口，不自己派工（导航仪不是码农）。
-- 内置 delegate：优先使用 scripts/delegate/triad.sh，也允许环境变量覆盖。
+- LTO 只编排和收口，不自己当被审/写码方。
+- 不硬绑 agent-delegate：检测到 triad.sh 就给真派工指令，否则给降级方案。
 - 强制「审者 runtime ≠ 写者 host」——同家族自审无对抗价值。
 
 两个动作：
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -606,10 +605,10 @@ def _dispatch_hint(repo: Path, brief_path: Path, audit_dir: Path, auditors: list
     rel_brief = brief_path.relative_to(repo) if _is_relative_to(brief_path, repo) else brief_path
     rel_replies = (audit_dir / "replies")
     rel_replies_str = rel_replies.relative_to(repo) if _is_relative_to(rel_replies, repo) else rel_replies
-    lines = ["下一步：派异构三方审计（LTO 用 bundled delegate 编排，不自审）", ""]
+    lines = ["下一步：派异构三方审计（LTO 不自己派工，交给 agent-delegate）", ""]
     if triad:
         lines += [
-            "  # 用 bundled delegate triad.sh 一键派工（有 tmux 时可观测）：",
+            "  # 用 agent-delegate triad.sh 一键派工（需 tmux）：",
             f"  bash {triad} \\",
             f"    -p {rel_brief} \\",
             f"    -d {rel_replies_str} \\",
@@ -620,7 +619,7 @@ def _dispatch_hint(repo: Path, brief_path: Path, audit_dir: Path, auditors: list
         ]
     else:
         lines += [
-            "  # 未检测到 triad.sh。降级方案：",
+            "  # 未检测到 agent-delegate（triad.sh）。降级方案：",
             "  # 手动让 3 个不同家族的 AI 各读简报独立审，回复存到一个目录，",
             f"  # 文件名带 runtime（如 reply-codex.md / reply-agy.md），然后：",
             f"  python3 scripts/lto_run.py audit --collect <reply-dir>",
@@ -632,18 +631,9 @@ def _dispatch_hint(repo: Path, brief_path: Path, audit_dir: Path, auditors: list
 
 
 def _find_triad() -> Path | None:
-    env_path = os.environ.get("AGENT_DELEGATE_TRIAD")
-    env_home = os.environ.get("AGENT_DELEGATE_HOME")
-    repo_root = Path(__file__).resolve().parents[3]
-    candidates = []
-    if env_path:
-        candidates.append(Path(env_path).expanduser())
-    if env_home:
-        candidates.append(Path(env_home).expanduser() / "scripts" / "triad.sh")
-    candidates += [
-        repo_root / "scripts" / "delegate" / "triad.sh",
+    candidates = [
+        Path.home() / "Projects" / "agent-skills" / "skills" / "agent-delegate" / "scripts" / "triad.sh",
         Path.home() / ".agents" / "skills" / "agent-delegate" / "scripts" / "triad.sh",
-        Path.home() / "Projects" / "agent-delegate" / "scripts" / "triad.sh",
     ]
     for c in candidates:
         if c.is_file():

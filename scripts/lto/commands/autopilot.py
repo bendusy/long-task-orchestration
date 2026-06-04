@@ -294,8 +294,8 @@ def _run_decide(
     # 负数无意义（会显示 ≈-1 困惑用户），当无效输入回落默认。
     raw_budget = getattr(args, "decide_budget", None)
     if raw_budget is not None and raw_budget < 0:
-        print(f"    ⚠️ --decide-budget {raw_budget} 为负，无意义，按 0 处理以避免误烧 token。")
-        raw_budget = 0
+        print(f"    ⚠️ --decide-budget {raw_budget} 为负，无意义，回落默认 {_DEFAULT_DECIDE_BUDGET}。")
+        raw_budget = None
     budget = _DEFAULT_DECIDE_BUDGET if raw_budget is None else raw_budget
 
     print(f"    decision_kind: {kind}  (覆盖用 --decide-kind direction|review|both)")

@@ -9,7 +9,7 @@ parallel/pipeline 暂不做（YAGNI）。memory 覆盖 export/resume/publish
 边界，防止 artifact-memory 第一片回归。
 
 跑法：
-  cd scripts && python3 test_orchestration_cmds.py
+  cd skills/long-task-orchestration/scripts && python3 test_orchestration_cmds.py
 """
 
 from __future__ import annotations
@@ -189,13 +189,13 @@ def test_memory(repo: Path) -> None:
     """memory export/resume/publish 基本边界：redaction + degraded local-first + token error。"""
     lto = _lto_factory(repo)
 
-    r = lto("start", "--goal", "memory e2e token=SAMPLE_VALUE", "--host", "codex",
-            "--why", "path /home/example/private/file and api_key=SAMPLE_VALUE", "--force")
+    r = lto("start", "--goal", "memory e2e token=SECRET", "--host", "codex",
+            "--why", "path /Users/example/private/file and api_key=SECRET", "--force")
     ok(r.returncode == 0, f"memory: start rc=0 (got {r.returncode}; {r.stderr.strip()[:120]})")
     run_id = r.stdout.strip().split("/")[-1]
 
     r = lto("task-add", "--task-id", "T1", "--title", "publish projection",
-            "--command", "echo token=SAMPLE_VALUE")
+            "--command", "echo token=SECRET")
     ok(r.returncode == 0, f"memory: task-add rc=0 (got {r.returncode})")
 
     r = lto("memory", "export", "--dry-run")
@@ -208,7 +208,7 @@ def test_memory(repo: Path) -> None:
        "memory: all records use top-level project_key")
     ok("request_hash" in text and "original_user_request" not in text,
        "memory: original_user_request omitted, hash retained")
-    ok("api_key=SAMPLE_VALUE" not in text and "token=SAMPLE_VALUE" not in text and "/home/example/private" not in text,
+    ok("api_key=SECRET" not in text and "token=SECRET" not in text and "/Users/example/private" not in text,
        "memory: secrets and absolute private paths redacted")
     ok(any(rec.get("kind") == "workflow_routing_memory" and rec.get("schema_only")
            for rec in data.get("records", [])),

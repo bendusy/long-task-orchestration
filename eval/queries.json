@@ -15,7 +15,7 @@
     "id": "pos-3-stage-advance",
     "query": "框架算稳了吗，各种场景实测做了吗，稳了的话开始推下一层数据治理",
     "should_trigger": true,
-    "reason": "阶段性推进 + 端到端实测判停 + 后台审计，本 skill §1/§6 范式"
+    "reason": "阶段性推进 + 端到端实测判停 + 后台审计，属于 LTO 的状态恢复与收敛纪律"
   },
   {
     "id": "pos-4-resume-run-state",

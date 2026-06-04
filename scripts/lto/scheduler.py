@@ -19,7 +19,6 @@ import subprocess
 import tempfile
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-import os
 from pathlib import Path
 from typing import Any
 
@@ -43,8 +42,7 @@ class Scheduler:
     Parameters
     ----------
     repo:
-        Repository root. Default runners_dir comes from AGENT_DELEGATE_RUNNERS,
-        bundled scripts/delegate/runners, or common user-level override paths.
+        Repository root.  Default runners_dir is repo/skills/agent-delegate/scripts/runners/.
     max_concurrency:
         Max simultaneous jobs in flight (ThreadPoolExecutor workers).
     max_total_agents:
@@ -77,22 +75,9 @@ class Scheduler:
         if runners_dir is not None:
             self.runners_dir = Path(runners_dir).resolve()
         else:
-            self.runners_dir = self._default_runners_dir()
-
-    def _default_runners_dir(self) -> Path:
-        env_path = os.getenv("AGENT_DELEGATE_RUNNERS")
-        candidates = []
-        if env_path:
-            candidates.append(Path(env_path).expanduser())
-        candidates += [
-            self.repo / "scripts" / "delegate" / "runners",
-            Path.home() / ".agents" / "skills" / "agent-delegate" / "scripts" / "runners",
-            Path.home() / "Projects" / "agent-delegate" / "scripts" / "runners",
-        ]
-        for candidate in candidates:
-            if candidate.is_dir():
-                return candidate.resolve()
-        return candidates[0].resolve() if candidates else Path("agent-delegate-runners").resolve()
+            self.runners_dir = (
+                self.repo / "skills" / "agent-delegate" / "scripts" / "runners"
+            ).resolve()
 
     # -- helpers -----------------------------------------------------------
 

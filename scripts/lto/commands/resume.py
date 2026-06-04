@@ -33,6 +33,7 @@ def run(args: argparse.Namespace) -> int:
     if state is None:
         print(f"LTO: no state.json found for {run_id}", file=sys.stderr)
         return 1
+    is_closed = state.get("current_phase") == "closed"
 
     # Validate workspace
     ws = state.get("workspace", {})
@@ -74,6 +75,16 @@ def run(args: argparse.Namespace) -> int:
 
     if dirty:
         warnings.append("worktree has uncommitted changes outside .lto")
+
+    if is_closed:
+        if revalidate_tasks:
+            warnings.append(
+                "run is closed; resume is read-only and will not reopen tasks "
+                "or update recorded HEAD"
+            )
+            revalidate_tasks = []
+        _print_capsule(repo, run_id, state, warnings, revalidate_tasks)
+        return 0
 
     # Update state
     ws["head"] = actual_head

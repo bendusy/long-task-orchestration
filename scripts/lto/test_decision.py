@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-test for decision.py — tally_votes, merge_findings, injection defense, brief builder.
 
-Run: PYTHONPATH=scripts python3 scripts/lto/test_decision.py
+Run: PYTHONPATH=skills/long-task-orchestration/scripts python3 skills/long-task-orchestration/scripts/lto/test_decision.py
 """
 
 from __future__ import annotations

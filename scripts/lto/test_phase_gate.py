@@ -205,6 +205,26 @@ def test_forward_related_file_drift(repo: Path) -> None:
     ok(state["tasks"][0]["status"] == "pending", "resume sets done task pending")
 
 
+def test_closed_resume_is_read_only(repo: Path) -> None:
+    commit_file(repo, "src/closed-owned.txt", "one\n", "add closed owned file")
+    run_id = "phase-drift-closed"
+    start(repo, run_id, phase="closed")
+    set_done_task(repo, run_id, ["src/closed-owned.txt"])
+    (repo / ".lto" / run_id / "handoff.md").write_text("closed\n", encoding="utf-8")
+    before = load_state(repo, run_id)
+    recorded_head = before["workspace"]["head"]
+    commit_file(repo, "src/closed-owned.txt", "two\n", "change closed owned file")
+
+    proc = lto(repo, "resume", "--run-id", run_id)
+    ok(proc.returncode == 0, "closed resume rc=0 despite related drift", proc.stdout[-300:])
+    text = proc.stdout + proc.stderr
+    ok("run is closed; resume is read-only" in text, "closed resume explains read-only drift")
+    after = load_state(repo, run_id)
+    ok(after["workspace"]["head"] == recorded_head, "closed resume keeps recorded HEAD")
+    ok(after["tasks"][0]["status"] == "done", "closed resume keeps done task done")
+    ok(after["tasks"][0]["blockers"] == [], "closed resume does not add revalidation blocker")
+
+
 def test_forward_unrelated_file_drift(repo: Path) -> None:
     commit_file(repo, "src/owned.txt", "owned\n", "add owned file")
     run_id = "phase-drift-unrelated"
@@ -240,6 +260,7 @@ def main() -> int:
         test_argparse_rejects_other_phases(repo)
         test_closed_task_gate(repo)
         test_forward_related_file_drift(repo)
+        test_closed_resume_is_read_only(repo)
         test_forward_unrelated_file_drift(repo)
         test_forward_no_touched_files_warning(repo)
     if FAIL:

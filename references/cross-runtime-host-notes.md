@@ -17,10 +17,10 @@
 1. **权限边界是「启动时冻结」的，不是运行中能力**。子进程/tmux 在 codex 不是默认能力——要 sandbox+approval+network+MCP 启动时全允许才成立。派工命令能启动但子 runner 写 `~/.pi`/`~/.gemini`/锁/token cache/联网全被截断，且 `approval_policy=never`/headless `codex exec` 下基本不能中途补救。
 2. **Codex Host Preflight**（采纳为建议，非强制闸门）：codex 当宿主前记录 宿主模式(interactive/exec) / sandbox / approval policy / child 写路径 / network / MCP env 可见性。任一失败 → 降级为「本机自审/活着的 runner 子集」，不硬宣称 triad 可用。
 3. **`codex exec` 子任务契约**：子 runner 必须禁止反问用户、一次性输出到 stdout/约定文件、不依赖中途审批、失败返回非零退出码（空输出和 timeout 分开记）、prompt 写明「默认只审计写 report，不改仓库除非明确授权」。
-4. **MCP 不从宿主会话继承**：codex child runner 用 MCP 前要在同启动方式下跑 `codex mcp list` 或等价 smoke——别因为宿主会话有 MCP tool 就假设 child `codex exec` 也有。MCP 失败时只能降级，不得覆盖本地 `.lto` 真源。
+4. **MCP 不从宿主会话继承**：codex child runner 用 MCP 前要在同启动方式下跑 `codex mcp list` 或等价 smoke——别因为宿主会话有 MCP tool 就假设 child `codex exec` 也有。实测旁证：codex TUI 启动时 memory-flow MCP 就 `failed`。
 5. **resume/fork 恢复协议**：codex 长任务恢复不信 transcript 旧状态。建议每轮写 `run-state.md`，并让产物登记进 `.lto/<run-id>/artifacts.json`（run id / git SHA / sandbox profile / tmux id / 每 runner 的 reply/stdout 路径 / MCP smoke / 已采纳否决 blocker）。resume 后从 state + manifest + tmux + 进程重建状态，不信「1 background terminal running」之类旧叙述。
-6. **Artifact memory 是可选索引，不是本地真源**：codex 当宿主时可以先跑
-   `lto memory resume --project <key>` 找跨项目 artifact memory，但没装 sink
+6. **ANIMEM/memory-flow 是可选索引，不是本地真源**：codex 当宿主时可以先跑
+   `lto memory resume --project <key>` 找跨项目 artifact memory，但没装 ANIMEM
    或 child MCP 不可见时必须降级到本地 `lto resume`。不要因为 memory projection
    比本地 `.lto` 旧就覆盖本地 state；`.lto/current` 和 `state.json` 永远优先。
 
@@ -28,7 +28,7 @@
 
 ### pi 调用速查 sample
 
-> **标注约定**：每条 sample 标明来源——`[CLI]` pi 官方命令行参数（v0.78+），`[delegate]` bundled delegate runner 实测，`[内部工具]` pi coding agent 运行时内部工具（非 CLI flag）。
+> **标注约定**：每条 sample 标明来源——`[CLI]` pi 官方命令行参数（v0.78+），`[ad]` agent-delegate runner 实测，`[内部工具]` pi coding agent 运行时内部工具（非 CLI flag）。
 
 **pi 当宿主跑 LTO 主循环 `[CLI]`**：
 ```bash
@@ -45,9 +45,9 @@ pi --name "lto-chengpi-audit"    # 命名会话
 pi --fork <session-id>           # fork 会话到新文件
 ```
 
-**pi 当审计方（被 bundled delegate 派工，headless）`[delegate]`**：
+**pi 当审计方（被 agent-delegate 派工，headless）`[ad]`**：
 ```bash
-# scripts/delegate/runners/pi.sh 实测命令：
+# agent-delegate runners/pi.sh 实测命令：
 pi -p --provider deepseek --model deepseek-v4-pro "$(cat prompt.txt)" > reply.txt
 
 # -p                : 非交互式，stdout 输出
@@ -91,30 +91,29 @@ pi --no-extensions --no-skills    # 禁用自动发现
 pi --export session.jsonl report.html  # 导出会话
 ```
 
-1. **pi 派工：CLI 子进程 vs 内部 Agent 工具**（核验后修正）：pi CLI 层面无内置 subagent——派工方式分两层：① CLI headless `pi -p` 子进程（bundled delegate runner 实测可用）；② pi 运行时内部 Agent 工具（含 `subagent_type`/`isolation:worktree`/`run_in_background`），仅在 pi 作为 coding agent 运行时可用，非 CLI flag。原先文档将二者混淆为 pi "原生能力"，现已分列标注。
+1. **pi 派工：CLI 子进程 vs 内部 Agent 工具**（核验后修正）：pi CLI 层面无内置 subagent——派工方式分两层：① CLI headless `pi -p` 子进程（agent-delegate runner 实测可用）；② pi 运行时内部 Agent 工具（含 `subagent_type`/`isolation:worktree`/`run_in_background`），仅在 pi 作为 coding agent 运行时可用，非 CLI flag。原先文档将二者混淆为 pi "原生能力"，现已分列标注。
 
-**pi 当宿主通过 bundled delegate 派 codex/agy/claude（推荐方式）**：
+**pi 当宿主通过 agent-delegate 派 codex/agy/claude（推荐方式）**：
 ```bash
 # ad 的 runner 脚本是语言无关的——任何能跑 bash 的宿主都能调
 # 统一接口：runner.sh <prompt_file> <reply_file> <timeout_sec>
-AD=${AGENT_DELEGATE_RUNNERS:-scripts/delegate/runners}
+AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
 
 # pi 当宿主时：不派自己（同家族无交叉诊断）→ 派 codex + agy + claude
 $AD/codex.sh  /tmp/audit-brief.md /tmp/reply-codex.md  300 &
 $AD/agy.sh    /tmp/audit-brief.md /tmp/reply-agy.md    300 &
 $AD/claude.sh /tmp/audit-brief.md /tmp/reply-claude.md 300 &
 wait
-# pi 读三方 reply → 按 LTO §3 B2-B4 综合（不投票、亲核源码）
+# pi 读三方 reply → 按 audit-convergence 综合（不投票、亲核源码）
 
 # 或用 triad.sh 一键派工（需 tmux）
-TRIAD=${AGENT_DELEGATE_TRIAD:-scripts/delegate/triad.sh}
-bash "$TRIAD" \
+bash ~/Projects/agent-skills/skills/agent-delegate/scripts/triad.sh \
   -p /tmp/audit-brief.md -r codex agy claude -t 300
 ```
 
 **pi 当被审方（被其他宿主派工时）**：
 ```bash
-# scripts/delegate/runners/pi.sh 实测命令
+# agent-delegate runners/pi.sh 实测命令
 pi -p --provider deepseek --model deepseek-v4-pro "$(cat prompt.txt)" > reply.txt
 # timeout≥240s：deepseek-v4-pro thinking 审 16KB ~170-200s
 ```
@@ -131,23 +130,23 @@ pi -p --provider deepseek --model deepseek-v4-pro "$(cat prompt.txt)" > reply.tx
 1. **`agy -i "初始prompt"` 启动**：交互式必须带初始 prompt，不带会立即退出 → 通用派工脚本拉起 agy 时因管道适配崩溃。派工端把指令重组为 `agy -i "Prompt"`。
 2. **无需放开沙箱**：agy 当宿主用细粒度权限弹窗授权，不要套 codex 的 bypass（安全降级）。
 3. **`--print-timeout` 防上游 API 超时**：审大文件（16KB+）给 agy 传 `--print-timeout <秒>` 防上游连接过早断开。
-4. **`--continue` 断点恢复**：横切纪律里 agy 的 stale 恢复用 `agy --continue` 结合 `git status`（同 pi 的 §三.4）。
-5. **未装 artifact-memory sink 不降级为失败**：agy 当宿主也按本地 `.lto` 优先。`lto memory resume`
+4. **`--continue` 断点恢复**：横切纪律里 agy 的 stale 恢复用 `agy --continue` 结合 `git status`（同 pi 的 stale 陷阱条目）。
+5. **未装 ANIMEM 不降级为失败**：agy 当宿主也按本地 `.lto` 优先。`lto memory resume`
    无 sink 配置时出现 warning 是正常 degraded，不是任务失败；继续用 `lto resume`
    和 artifacts manifest 接手。
 
 ## 五、主 agent 的核验态度（不盲从）
 
-三家自评质量都高，但仍逐条核验：实测能坐实的（沙箱差异、thinking 耗时、agy 启动）直接采纳；属各家自述其内部机制、主 agent 无法外部验证的（pi 的 Agent 工具细节、allowed-tools 解析行为），标注「据自述」不绝对化。这本身是 skill §4「核验而非信仰」——连被审对象给的改进意见也要核，不因为「它最懂自己」就全盘照收。
+三家自评质量都高，但仍逐条核验：实测能坐实的（沙箱差异、thinking 耗时、agy 启动）直接采纳；属各家自述其内部机制、主 agent 无法外部验证的（pi 的 Agent 工具细节、allowed-tools 解析行为），标注「据自述」不绝对化。这本身是 SKILL.md 的核验证据原则——连被审对象给的改进意见也要核，不因为「它最懂自己」就全盘照收。
 
 ## 六、派工前 preflight（以详细指标为依据，不靠"我觉得三家都行"）
 
 异构审计派工前**必须先 preflight**——这次实测靠人工一个个试各 runner 健康度，浪费大量时间且误判（claude 的 35 字节在 codex 沙箱里被误读过）。preflight 是清单，不是框架：
 
-落地产物：用 `templates/preflight.md` 写 `.lto/<run-id>/preflight.md`。preflight 不是额外文档工作，它是「实际用了几家、为什么降级、timeout 怎么给」的证据。
+落地产物：用 `../templates/preflight.md` 写 `.lto/<run-id>/preflight.md`。preflight 不是额外文档工作，它是「实际用了几家、为什么降级、timeout 怎么给」的证据。
 
 **第 1 步：runner 健康巡检（实物工具）**
-跑 `scripts/delegate/runners/healthcheck.sh`，得一张**详细指标表**，按 verdict 挑能用的家：
+跑 `agent-delegate/scripts/runners/healthcheck.sh`，得一张**详细指标表**，按 verdict 挑能用的家：
 
 ```
 RUNNER   EXIT   ELAPSED  BYTES    VERDICT

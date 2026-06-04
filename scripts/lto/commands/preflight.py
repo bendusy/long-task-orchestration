@@ -1,9 +1,4 @@
-"""lto preflight — 默认只 stdout；--record 写 state.json。
-
-Only repo write and git status are hard requirements. Network and MCP checks are
-optional probes: missing ANIMEM/memory-flow/MCP or corporate offline networks
-must not make core LTO look broken.
-"""
+"""lto preflight — 默认只 stdout；--record 写 state.json。"""
 
 from __future__ import annotations
 
@@ -20,27 +15,18 @@ def collect_checks(repo: Path) -> tuple[list[dict], str]:
     sandbox_ok = _check_write(repo)
     checks.append({"name": "sandbox_write", "pass": sandbox_ok, "detail": "can write to repo" if sandbox_ok else "write failed"})
 
-    # Optional network check. Defaults are configurable and non-blocking.
-    net_host = os.getenv("LTO_PREFLIGHT_NETWORK_HOST", "8.8.8.8")
-    net_port = _env_int("LTO_PREFLIGHT_NETWORK_PORT", 53)
-    net_ok = _check_network(net_host, net_port)
-    checks.append({
-        "name": "network",
-        "pass": net_ok,
-        "required": False,
-        "detail": f"{net_host}:{net_port} reachable" if net_ok else f"{net_host}:{net_port} unreachable or blocked",
-    })
+    # Network check
+    net_ok = _check_network()
+    checks.append({"name": "network", "pass": net_ok, "detail": "outbound ok" if net_ok else "no outbound"})
 
     # Git check
     git_ok = (repo / ".git").is_dir()
     checks.append({"name": "git_repo", "pass": git_ok, "detail": "git repo" if git_ok else "not a git repo"})
 
-    # Optional MCP check. Set LTO_PREFLIGHT_MCP_PORTS=8787:name,18080:asr
-    # to probe local services on a specific machine.
+    # MCP check
     mcp_services = _check_mcp()
-    checks.append({"name": "mcp_services", "pass": bool(mcp_services), "required": False,
-                   "raw": mcp_services,
-                   "detail": ", ".join(mcp_services) if mcp_services else "none configured/detected"})
+    checks.append({"name": "mcp_services", "pass": bool(mcp_services), "raw": mcp_services,
+                   "detail": ", ".join(mcp_services) if mcp_services else "none detected"})
 
     # Tmux check
     in_tmux = "TMUX" in os.environ
@@ -83,40 +69,23 @@ def _check_write(repo: Path) -> bool:
         return False
 
 
-def _check_network(host: str, port: int) -> bool:
+def _check_network() -> bool:
     try:
-        with socket.create_connection((host, port), timeout=3):
+        with socket.create_connection(("8.8.8.8", 53), timeout=3):
             pass
         return True
     except OSError:
         return False
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-
-
 def _check_mcp() -> list[str]:
     services = []
-    raw = os.getenv("LTO_PREFLIGHT_MCP_PORTS", "")
-    if not raw:
-        return services
-    for item in raw.split(","):
-        if not item.strip():
-            continue
-        port_s, _, name = item.partition(":")
-        try:
-            port = int(port_s)
-        except ValueError:
-            continue
-        label = name or f"port-{port}"
+    # Check common MCP ports
+    for port, name in [(8787, "mlx"), (18080, "asr"), (18081, "asr-router")]:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 pass
-            services.append(label)
+            services.append(name)
         except OSError:
             pass
     return services

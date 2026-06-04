@@ -1,4 +1,4 @@
-"""lto memory — optional artifact-memory projection helpers."""
+"""lto memory — ANIMEM/memory-flow projection helpers."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def _resume(args: argparse.Namespace) -> int:
         print_resume_result(result)
     except MemorySinkError as exc:
         print(
-            "warning: artifact-memory sink unavailable; "
+            "warning: memory-flow/ANIMEM unavailable; "
             f"using local .lto only. cross-project history unavailable. ({exc})",
             file=sys.stderr,
         )
@@ -117,7 +117,7 @@ def _hash_note(repo: Path, run_id: str) -> str:
 
 
 def add_parser(subparsers) -> None:
-    p = subparsers.add_parser("memory", help="export/publish/resume optional artifact-memory projection")
+    p = subparsers.add_parser("memory", help="export/publish/resume ANIMEM artifact-memory projection")
     mem = p.add_subparsers(dest="memory_action", required=True)
 
     export = mem.add_parser("export", help="print redacted LTO memory projection JSON")
@@ -125,17 +125,17 @@ def add_parser(subparsers) -> None:
     export.add_argument("--dry-run", action="store_true", help="accepted for clarity; export never writes")
     export.set_defaults(func=run)
 
-    publish = mem.add_parser("publish", help="publish redacted projection to compatible memory sink")
+    publish = mem.add_parser("publish", help="publish redacted projection to legacy memory-flow REST")
     publish.add_argument("--run-id")
-    publish.add_argument("--url", help="memory sink base URL; defaults to MEMORY_FLOW_URL")
-    publish.add_argument("--token", help="memory sink token; defaults to MEMORY_FLOW_TOKEN")
+    publish.add_argument("--url", help="memory-flow base URL; defaults to MEMORY_FLOW_URL")
+    publish.add_argument("--token", help="memory-flow token; defaults to MEMORY_FLOW_TOKEN")
     publish.add_argument("--timeout", type=float, default=5.0)
     publish.set_defaults(func=run)
 
     resume = mem.add_parser("resume", help="discover memory projection, then print local-first capsule")
     resume.add_argument("--project", help="project key; defaults to repo directory name")
     resume.add_argument("--run-id", help="local run id for fallback capsule")
-    resume.add_argument("--url", help="memory sink base URL; defaults to MEMORY_FLOW_URL")
-    resume.add_argument("--token", help="memory sink token; defaults to MEMORY_FLOW_TOKEN")
+    resume.add_argument("--url", help="memory-flow base URL; defaults to MEMORY_FLOW_URL")
+    resume.add_argument("--token", help="memory-flow token; defaults to MEMORY_FLOW_TOKEN")
     resume.add_argument("--timeout", type=float, default=5.0)
     resume.set_defaults(func=run)

@@ -1,8 +1,6 @@
-# 决策落盘 — ADR 先行 + artifact memory 复利
+# 决策落盘 — ADR 先行 + memory-flow 复利
 
-> 主文件 §4 的执行细节。第一层先写 repo-local ADR，保证
-> codex/pi/agy/claude 换宿主也能接手；有 ANIMEM / memory-flow compatible
-> sink 时再把值得复利的经验写入 artifact memory。
+> SKILL.md 决策落盘纪律的执行细节。第一层先写 repo-local ADR，保证 codex/pi/agy/claude 换宿主也能接手；有 memory-flow 时再把值得复利的经验写入库。
 
 ## 一、为什么「即时落盘」而非事后补
 
@@ -31,10 +29,10 @@
 一个 MVP 沉淀两层，互相 wikilink 外键：
 
 ```
-里程碑层 (project 库, type=milestone)
-  2026-05-31-example-rollout-state-backfill-kept-audit-trail
-  ├─ links: [[previous milestone]] [[backfill decision]]   ← slug 外键互链
-  └─ 记: 三断言、状态修复、存量需 backfill、ssh 引号坑
+里程碑层 (tech 库, type=里程碑)
+  2026-05-31-技术-animem-W3-X-lite-上生产实测-取代降级保留证据闭环
+  ├─ links: [[W1 里程碑]] [[W4a D0 决策]]   ← slug 外键互链
+  └─ 记: W6 三断言、"取代即软删"修复、存量需 backfill、ssh 引号坑
 
 backlog 层 (research-absorbed-backlog 等)
   └─ 记: 还没做的缺口、待验证假设、下一个 MVP 的入口
@@ -42,19 +40,19 @@ backlog 层 (research-absorbed-backlog 等)
 
 **commit ↔ 决策追踪桥**：commit message 引经验 slug，形成「代码改动 ↔ 为什么这么改」的可追溯链。
 
-## 五、写经验的铁律（适用于任何 memory sink）
+## 五、写经验的铁律（来自 memory-flow skill）
 
 - **supersede 而非覆盖**：旧结论被推翻 → 写新条目带 `supersedes=[旧slug]`，不 PATCH 覆盖（保留知识版本）。
 - **reinforce 而非复制**：同事实再次确认 → `experience_reinforce`，不新写一条。
 - **type 决定衰减**：决策/范式 τ=365d（衰减慢）；坑 τ=30d（过期重验）。选对 type。
-- **source_agent 溯源**：写时带宿主 runtime，多客户端共用记忆库时谁写的一目了然。
+- **X-Agent-ID 溯源**：写时带 `X-Agent-ID: claude-code`，多客户端共用记忆库时谁写的一目了然。
 
 ## 六、LTO ADR helper
 
-没有 artifact-memory sink，或还没指定凭据/库映射时，先用脚本写 ADR：
+没有 memory-flow，或还没指定 memory-flow 凭据/库映射时，先用脚本写 ADR：
 
 ```bash
-python3 scripts/write_decision.py \
+python3 skills/long-task-orchestration/scripts/write_decision.py \
   --repo . \
   --run-id <id> \
   --title "why keep wrapper opt in" \
@@ -72,11 +70,11 @@ python3 scripts/write_decision.py \
 - `--slug` 只允许小写 ASCII 字母、数字和连字符；中文标题请显式给英文 slug。
 - 没有对应 `state.json` 时仍写 ADR 并 warning，不伪装成已登记。
 
-脚本**不直接调用外部 memory sink**。原因是 sink 凭据、库名、MCP/REST 可达性属于另一个集成面；本层只保证 repo-local 可接手。
+脚本**不直接调用 memory-flow**。原因是 memory-flow 凭据、库名、MCP/REST 可达性属于另一个集成面；本层只保证 repo-local 可接手。
 
-## 七、降级（无 artifact memory）
+## 七、降级（无 memory-flow）
 
-没有 ANIMEM / memory-flow compatible sink 时，落盘降级到：
+朋友没有 memory-flow 时，落盘降级到：
 - `docs/decisions/` ADR 文件（一决策一文件，带 status/context/decision/consequences），优先用 `write_decision.py` 生成。
 - 项目根 `MEMORY.md` 索引（一行一条 + 链接）。
 - **纪律不变**：即时写、记反例与天花板、条目互链、commit 引文件名。丢的只是检索命中率/衰减/复利，不丢纪律。

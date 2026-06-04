@@ -5,9 +5,9 @@
 
 ## 一句话
 
-**LTO 是一个跨 runtime 的自研 dynamic workflow：长任务里它帮你 spawn 隔离 agent 做 fan-out / 对抗审计 / pattern 路由，并把状态、证据、审计收敛落进可恢复可审计的轨道，对抗"做一半就停 / 偏爱自己结论 / 多轮后忘了目标"这三个长任务通病。**
+**LTO 是一个跨 runtime 的长任务 harness：它给你 state、artifact、runner、audit、sandbox、resume/recap 和 gate。你这个 host agent 仍然是 planner；LTO 让你的选择可恢复、可审计、可自动化推进。**
 
-它不抢 Claude Code 原生 dynamic workflow 的活——它是给**任意 runtime**用的版本，只依赖 Python + bash。
+它不复制 Claude Code 原生任务 harness 的实现——它是给**任意 runtime**用的版本，只依赖 Python + bash。
 
 ## 它解决什么（你为什么要装它）
 
@@ -23,15 +23,9 @@
 
 ### 前提
 - Python 3.10+、bash。
-- git（HEAD 锚定、drift 检测、worktree 沙箱需要）。
-- 至少一个宿主 runtime：codex / claude / pi / agy / 其他能读本文件并执行 shell 的 agent。
 - 纯标准库，无第三方依赖（核心命令）。
-- 内置：`scripts/delegate/` 提供 codex/pi/agy/claude 的 runner 脚本；有 `tmux` 时 `lto audit --auto-dispatch` 可观测性更好，没有 tmux 时自动用 headless 子进程。
-- 可选：codex / claude / pi / agy CLI 中的其他 runtime。真异构审计至少需要非宿主家族可用；没有则只能同 runtime 自审，必须声明对抗性较弱。
-- 可选：ANIMEM / memory-flow compatible sink。没装也能完整使用 LTO 核心命令；它只增强跨项目 artifact memory。
-
-如需替换内置 delegate，用
-`AGENT_DELEGATE_HOME` / `AGENT_DELEGATE_TRIAD` / `AGENT_DELEGATE_RUNNERS` 指向外部实现。
+- 可选：`agent-delegate` skill（提供 codex/pi/agy/claude 的 runner 脚本，`lto audit --auto-dispatch` 和 spawn agent 要用它）。没有它，审计走手动派工路径仍可用。
+- 可选：ANIMEM / memory-flow。没装也能完整使用 LTO 核心命令；它只增强跨项目 artifact memory。
 
 ### 找到入口
 LTO 的入口是一个 Python 脚本：
@@ -40,14 +34,13 @@ LTO 的入口是一个 Python 脚本：
 ```
 `<skill-root>` 取决于你怎么装的 skill：
 - 软链装载（推荐）：`~/.agents/skills/long-task-orchestration/`（codex/agy 标准路径）或 `~/.claude/skills/long-task-orchestration/`（claude）。
-- 仓库内直接用：`<lto-repo>/scripts/lto_run.py`。
+- 仓库内直接用：`<repo>/skills/long-task-orchestration/scripts/lto_run.py`。
 
-安装全局 `lto` wrapper（在 long-task-orchestration 仓库根）：
+装载方式（在 agent-skills 仓库根）：
 ```bash
-bash scripts/install.sh          # 生成/刷新 ~/.local/bin/lto（或 LTO_BIN_DIR 指定目录）
+bash scripts/install.sh          # 软链到 ~/.claude/skills + ~/.agents/skills
 bash scripts/install.sh --check  # 只检查不装
 ```
-这个脚本不自动安装 skill 目录；你仍需按所用 runtime 的规则复制或软链本仓。
 
 ### 在你这家 runtime 里怎么调
 LTO 是个 CLI，任何能跑 bash 的 runtime 都能调，不需要你内置什么 Agent 工具：
@@ -67,9 +60,9 @@ python3 <skill-root>/scripts/lto_run.py --repo <目标仓库> <子命令> [参�
 | `start --goal "..."` | 创建 `.lto/<run-id>/`，记下目标、宿主、HEAD | 开工 |
 | `resume` | 跨 session 拉回上下文胶囊（目标/进度/上次失败/下一步） | 接续 |
 | `memory export/resume/publish` | 可选 artifact memory：导出 redacted projection / 发现历史 run / 显式发布到 sink | 接续 |
-| `next` | **决策核心**：分析状态 → 给下一步 pattern 建议或决策简报 | 导航 |
+| `next` | **事实简报**：分析状态 → 给下一步 primitive 建议或决策简报 | 导航 |
 | `check [--strict] [--to implementation\|closed] [--json]` | 校验状态完整性；只读输出 phase-entry 证据 | 自检 |
-| `preflight` | 探活环境（sandbox/git/network/tmux/可选 MCP） | 自检 |
+| `preflight` | 探活环境（sandbox/network/git/mcp/tmux） | 自检 |
 | `task-add --task-id T1 --title "..."` | 给当前 run 加一个 task（runner/next 的操作对象） | 开工 |
 | `runner --task-id T1 --command "..."` | 执行单 task（跑命令）+ 落证据 | 执行 |
 | `parallel --phase X` | 并发批量跑多 task 的 shell 校验命令 | 执行 |
@@ -86,20 +79,21 @@ python3 <skill-root>/scripts/lto_run.py --repo <目标仓库> <子命令> [参�
 > `runner/parallel/pipeline` 编排的是 **shell 命令**（pytest/lint 批处理）。
 > 真正的 **agent fan-out**（spawn 隔离 agent 做对抗审计/找风险）走 `audit --auto-dispatch` 和 `audit --discover-risks`，底层是 `agent_exec` spawn 原语 + scheduler（带并发/退避/限流/healthcheck）。
 
-## dynamic workflow 新能力（区别于旧"导航仪"）
+## Harness-first 新能力（区别于旧提示清单）
 
-LTO 现在不只是"告诉你做什么"，它能**自己 spawn agent 编排**：
+LTO 现在不只是"告诉你做什么"，它把长任务拆成可组合 primitive。你先读状态和 playbook，再决定下一段组合：
 
 - **agent fan-out**：`audit --auto-dispatch` 自动派 codex/pi/agy 三家异构审计方，并发跑、自动收口。底层 scheduler 处理并发上限、429 退避、healthcheck 剔除挂的 runner。
 - **对抗审计闭环**：审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词），`--collect` 校验异构（审者 ≠ 宿主家族）+ 抽 blocker 计数 + 判 ledger 收敛趋势。
 - **risk 对抗生成**：`--discover-risks` 派独立 agent 主动找你漏登记的风险点（source=risk-agent），对抗"自报完整性"。未审风险会被 closeout 闸门拦。
-- **pattern 路由（`lto next`）**：读状态 → 给宿主 LLM（就是你）一份富决策简报（目标 + task + 真实失败信息），让你推理下一段该 fan-out / adversarial / tournament / loop / linear。它自己零 LLM、零 key，只整理事实——**判断由你做**。无歧义时（如全 done 该 closeout）直接给可执行命令，`lto next --exec` 可跑；模糊时只出简报不替你猜。
+- **事实简报（`lto next`）**：读状态 → 给宿主 LLM（就是你）一份富决策简报（目标 + task + 真实失败信息），让你推理下一段该 fan-out / adversarial / linear / 停下来问人。它自己零 LLM、零 key，只整理事实——**判断由你做**。无歧义时（如全 done 该 closeout）直接给可执行命令，`lto next --exec` 可跑；模糊时只出简报不替你猜。
+- **playbook 调度先验**：`workflow-playbook.md` 把 `review/debug/migration/claim-verify/research` 写成 host agent 的调度先验：触发信号、可用 primitive、artifact、停止条件和反模式。它不是 CLI preset。
 
-这是"带护栏的 dynamic workflow"：pattern 你运行时选，但跑在可恢复可审计的 6 阶段 + state.json + git 边界轨道上。
+这是带护栏的 harness：路径你运行时选，但跑在可恢复可审计的 6 阶段 + state.json + git 边界轨道上。
 
 ## 自驱动：`lto autopilot`（受约束的自动推进）
 
-`lto autopilot` 让 LTO 自己读状态 → 决策 → 推进，而不只是给建议。三档：
+`lto autopilot` 让 LTO 读状态 → 给 brief / 执行安全子步骤 / 必要时组织异构讨论。它是受约束 harness，不是替 host agent 接管 planner。三档：
 
 - **`--supervised`（默认）**：出富决策简报 + 路由建议，escalate（多 blocked / 方案分歧 / 高风险）回吐你这个宿主 LLM 推理。集成 stall 检测（同失败指纹反复 = 停滞，提示别空转）。
 - **`--supervised --auto-exec`（opt-in）**：对 pending task 的 **safe/reversible** 命令，在 **worktree 沙箱**里自动跑 + 落证据。
@@ -151,9 +145,9 @@ $L task-add --task-id T1 --title "给 login 加判空" --command "pytest tests/t
 # 3. 干活：执行 task + 落证据
 $L runner --task-id T1 --kind test --command "pytest tests/test_auth.py -x" --note "验证空指针修复"
 
-# 4. 高风险？派异构对抗审计（使用内置 delegate）
+# 4. 高风险？派异构对抗审计（需 agent-delegate）
 $L audit --auto-dispatch        # 自动派 ≠ 你这家的审计方
-#   runtime 不可用：$L audit  然后按提示手动派，再 $L audit --collect <reply-dir>
+#   没装 agent-delegate：$L audit  然后按提示手动派，再 $L audit --collect <reply-dir>
 
 # 5. 开始写代码前，先看 entry evidence（不自动批准，仍要人拍板）
 $L check --to implementation
@@ -176,7 +170,7 @@ $L closeout --summary "登录模块重构完成，空指针已修，异构审计
 $L memory resume --project <repo-key>
 ```
 
-它会尝试查 artifact-memory sink；没装或没配置时不会失败成硬阻塞，
+它会尝试查 ANIMEM/memory-flow 的 artifact memory；没装或没配置时不会失败成硬阻塞，
 而是明确 warning 后降级读取本地 `.lto`。注意：`memory resume` 只读，不会覆盖
 本地 `.lto/current` 或 `state.json`。本地 `.lto` 永远是真源。
 
@@ -187,7 +181,7 @@ $L memory export --run-id <run-id> --dry-run
 ```
 
 它只输出 redacted JSON，不联网。只有显式 `$L memory publish` 才需要配置
-`MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 或其他兼容 sink 配置。
+`MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 或未来 ANIMEM sink。
 
 ## hook：让你别忘了用 LTO
 
@@ -200,6 +194,7 @@ hook 是 commit/deploy/closeout 前的边界闸门，提醒你"测过了吗 / �
 | 想了解 | 读 |
 |---|---|
 | 完整命令手册 + add-task | `run-state-workflow.md` |
+| workflow 调度先验 | `workflow-playbook.md` |
 | 执行循环器（runner/judge/parallel/pipeline）细节 | `execution-loop.md` |
 | 在 codex/pi/agy 当宿主的专项坑 | `cross-runtime-host-notes.md` |
 | 审计收敛逻辑 | `audit-convergence.md` |

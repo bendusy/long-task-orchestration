@@ -3,7 +3,7 @@
 
 这是 exec.run_command（shell 世界）的 agent 世界对应物。
 编排的是带独立 context 的 agent，不是 shell 命令。
-对上层 pattern 路由器（lto next）暴露干净接口。
+对上层事实路由器（lto next）暴露干净接口。
 
 设计原则：
 - 只做"组装 job + 调 scheduler + 落 state"，不重复 scheduler 已有的并发/重试/限流。

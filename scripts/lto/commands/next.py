@@ -1,17 +1,16 @@
-"""lto next — deterministic decision router (zero LLM, zero key).
+"""lto next — deterministic fact brief generator (zero LLM, zero key).
 
 Design contract:
 - This module produces a "decision brief" for the **host LLM** (the agent
   running LTO) to read and reason about. It never embeds any LLM call itself.
-- It is "constrained dynamic": on the 6-phase rail, each exit gate lets the
-  host LLM pick a pattern from the library (linear / fan-out / adversarial /
-  tournament / loop).
+- It runs on the 6-phase rail and leaves path selection to the host LLM
+  (linear / fan-out / adversarial / stop / ask human).
 - Rich context: every blocked task carries a failure summary drawn from the
   last N lines of its stderr artifact, so the host LLM can reason like Coco:
   "goal is X but T3 failed because Y, suggest Z first."
 
 Usage:
-  lto next          → print route (unambiguous) or decision brief (escalate)
+  lto next          → print command (unambiguous) or decision brief (escalate)
   lto next --exec   → execute unambiguous cmd; escalate → print brief only
   lto next --json   → output facts + route as JSON
 """
@@ -557,7 +556,7 @@ def _print_json(facts: dict, route_result: dict, drift: str) -> None:
 
 
 def add_parser(subparsers) -> None:
-    p = subparsers.add_parser("next", help="decision router: analyze state → suggest next pattern")
+    p = subparsers.add_parser("next", help="fact brief: analyze state → suggest next primitive")
     p.add_argument("--run-id")
     p.add_argument("--exec", dest="exec_mode", action="store_true",
                    help="execute unambiguous cmd; escalate → print only")

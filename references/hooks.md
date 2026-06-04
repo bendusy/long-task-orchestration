@@ -52,18 +52,18 @@ python3 scripts/lto_run.py hook pre-closeout
 
 等价于 `lto_run.py check --strict`。
 
-## Artifact-memory publish hook 边界
+## ANIMEM / memory-flow publish hook 边界
 
 artifact memory publish 是可选增强，不是核心 hook：
 
 - 当前第一片不自动安装 publish hook；
 - `lto memory export --dry-run` 纯本地，可随时跑；
-- `lto memory publish` 只有用户显式执行才连接 ANIMEM / memory-flow compatible sink；
+- `lto memory publish` 只有用户显式执行才连接 memory-flow/ANIMEM；
 - 未来如在 `closeout` / `audit --collect` / `runner` 后触发 publish，失败也只能记录
   warning 或 retry artifact，不能阻断本地 `.lto` 状态写入；
 - `lto resume` 和 `lto memory resume` 都必须保持只读，不触发 publish。
 
-没装 artifact-memory sink 或未配置 `MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 时，LTO hook 仍应正常工作。
+没装 ANIMEM 或未配置 `MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 时，LTO hook 仍应正常工作。
 
 ## 安装（opt-in，2026-06-03 改）
 
