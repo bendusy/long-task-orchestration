@@ -31,6 +31,7 @@ class Pattern(str, Enum):
 
 # 已知 runner 家族（与 audit.py 的家族映射保持一致，跨 runtime 异构判定用）
 KNOWN_RUNNERS = ("codex", "pi", "agy", "gemini", "claude")
+CODEX_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 
 
 class JobStatus(str, Enum):
@@ -41,6 +42,40 @@ class JobStatus(str, Enum):
     TIMEOUT = "timeout"
     RATE_LIMITED = "rate_limited"
     SKIPPED = "skipped"
+
+
+@dataclass
+class PermissionPolicy:
+    """Per-job permission intent, used by scheduler/runner env guards."""
+    sandbox: str = "read-only"
+    reason: str = ""
+    user_approved: bool = False
+
+    def validate_for_runner(self, runner: str, env: dict[str, str]) -> None:
+        if not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+            raise ValueError("env keys and values must be strings")
+
+        if runner != "codex":
+            return
+
+        sandbox = env.get("CODEX_SANDBOX", self.sandbox)
+        if sandbox != self.sandbox:
+            raise ValueError(
+                "CODEX_SANDBOX conflicts with permission_policy.sandbox "
+                f"({sandbox!r} != {self.sandbox!r})"
+            )
+        if sandbox not in CODEX_SANDBOXES:
+            raise ValueError(f"invalid codex sandbox: {sandbox!r}")
+        if sandbox == "workspace-write" and not self.reason.strip():
+            raise ValueError("workspace-write requires permission_policy.reason")
+        if sandbox == "danger-full-access":
+            if not self.reason.strip():
+                raise ValueError("danger-full-access requires permission_policy.reason")
+            if not self.user_approved:
+                raise ValueError("danger-full-access requires user_approved=True")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -72,6 +107,8 @@ class AgentJob:
     runner: str = "codex"                          # KNOWN_RUNNERS 之一
     prompt_is_inline: bool = False                 # True=prompt_ref 是文本不是路径
     model: str | None = None                       # 可选，model routing 用
+    env: dict[str, str] = field(default_factory=dict)  # per-job runner env (CODEX_SANDBOX, etc.)
+    permission_policy: PermissionPolicy = field(default_factory=PermissionPolicy)
     isolation: str = "none"                        # none | worktree
     output_schema: dict[str, Any] | None = None    # 强制审者结构化输出（findings/severity）
     parent_pattern: str = Pattern.LINEAR.value     # 本 job 属于哪个编排 pattern
@@ -91,11 +128,13 @@ class AgentJob:
             raise ValueError(f"invalid parent_pattern: {self.parent_pattern!r}")
         if not self.prompt_ref:
             raise ValueError("prompt_ref is required")
+        self.permission_policy.validate_for_runner(self.runner, self.env)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["budget"] = self.budget.to_dict()
         d["retry_policy"] = self.retry_policy.to_dict()
+        d["permission_policy"] = self.permission_policy.to_dict()
         return d
 
     @classmethod
@@ -108,6 +147,8 @@ class AgentJob:
             if "retry_on" in rp and isinstance(rp["retry_on"], list):
                 rp["retry_on"] = tuple(rp["retry_on"])
             d["retry_policy"] = RetryPolicy(**rp)
+        if "permission_policy" in d and isinstance(d["permission_policy"], dict):
+            d["permission_policy"] = PermissionPolicy(**d["permission_policy"])
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -122,6 +163,7 @@ class AgentResult:
     findings: list[dict[str, Any]] = field(default_factory=list)  # 结构化（非 regex 扫文本）
     reply_text: str = ""                           # 原始回复（findings 解析失败时兜底）
     cost: dict[str, Any] = field(default_factory=dict)  # tokens / elapsed_sec
+    permissions: dict[str, Any] = field(default_factory=dict)  # runner sandbox/env decision snapshot
     artifacts: list[str] = field(default_factory=list)  # reply 文件路径等
     attempts: int = 1                              # 实际尝试次数（含重试）
     error: str = ""                                # 失败时的诊断信息

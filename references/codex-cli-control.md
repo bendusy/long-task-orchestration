@@ -111,7 +111,42 @@ Standalone LTO ships `scripts/delegate/runners/codex.sh` with these controls:
 | `CODEX_JSON` | `0` | add `--json`; reply file remains final answer sink |
 | `CODEX_IMAGES` | unset | comma/colon-separated image attachments |
 
-## 9. Failure handling
+## 9. Job-level env and permission guard
+
+LTO's scheduler can pass env per `AgentJob` instead of relying on process-global exports:
+
+```python
+AgentJob(
+    job_id="impl-review",
+    runner="codex",
+    prompt_ref="...",
+    prompt_is_inline=True,
+    env={"CODEX_PROFILE": "lto"},
+    permission_policy=PermissionPolicy(
+        sandbox="read-only",
+        reason="audit only; no file edits",
+        user_approved=False,
+    ),
+)
+```
+
+Guard rules:
+
+- default Codex sandbox is `read-only`, even if parent process has `CODEX_SANDBOX` set;
+- `workspace-write` requires `permission_policy.reason`;
+- `danger-full-access` requires `permission_policy.reason` and `user_approved=True`;
+- `env["CODEX_SANDBOX"]` must match `permission_policy.sandbox` or validation fails;
+- scheduler persists a safe permission snapshot in `AgentResult.permissions` (`sandbox`, `reason`, `user_approved`, `env_keys`) so closeout can audit why a runner had write power.
+
+Use this pattern for host-agent judgment:
+
+| Job intent | `permission_policy.sandbox` |
+|---|---|
+| review / audit / plan / critique | `read-only` |
+| approved implementation/edit pass | `workspace-write` with reason |
+| externally sandboxed emergency only | `danger-full-access` with explicit approval |
+
+## 10. Failure handling
 
 Report Codex failures plainly:
 

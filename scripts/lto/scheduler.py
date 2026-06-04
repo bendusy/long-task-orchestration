@@ -28,6 +28,7 @@ from lto.agent_job import (
     Budget,
     JobStatus,
     KNOWN_RUNNERS,
+    PermissionPolicy,
     RetryPolicy,
 )
 
@@ -168,6 +169,7 @@ class Scheduler:
                     runner=j.runner,
                     status=JobStatus.SKIPPED.value,
                     error=f"runner unhealthy: {j.runner}",
+                    permissions=_permission_snapshot(j),
                 )
 
         runnable = [j for j in jobs if j.job_id not in results_map]
@@ -296,6 +298,7 @@ class Scheduler:
                     text=True,
                     timeout=timeout_total,
                     cwd=str(self.repo),
+                    env=_effective_env(job),
                 )
                 exit_code = proc.returncode
                 stderr = proc.stderr
@@ -320,6 +323,7 @@ class Scheduler:
                 exit_code=exit_code,
                 reply_text=reply_text,
                 cost={"elapsed_sec": exec_elapsed},
+                permissions=_permission_snapshot(job),
                 attempts=attempt,
                 error=error,
                 artifacts=[],  # reply file is deleted in finally; content is in reply_text
@@ -330,6 +334,39 @@ class Scheduler:
                 _unlink_safe(prompt_path)
             if reply_path is not None:
                 _unlink_safe(reply_path)
+
+
+# ---------------------------------------------------------------------------
+# Per-job runner environment / permission snapshots
+# ---------------------------------------------------------------------------
+
+def _effective_env(job: AgentJob) -> dict[str, str]:
+    """Build subprocess env from process env + AgentJob.env + permission policy.
+
+    Parent CODEX_SANDBOX is intentionally not inherited for Codex jobs: each
+    job must carry its own permission_policy, defaulting to read-only.
+    """
+    env = os.environ.copy()
+    env.update({k: str(v) for k, v in job.env.items()})
+    if job.runner == "codex":
+        env["CODEX_SANDBOX"] = job.permission_policy.sandbox
+        if job.model and "CODEX_MODEL" not in job.env:
+            env["CODEX_MODEL"] = job.model
+    return env
+
+
+def _permission_snapshot(job: AgentJob) -> dict[str, Any]:
+    """Return safe-to-persist permission evidence for state/artifacts."""
+    snap: dict[str, Any] = {
+        "runner": job.runner,
+        "sandbox": job.permission_policy.sandbox if job.runner == "codex" else None,
+        "reason": job.permission_policy.reason,
+        "user_approved": job.permission_policy.user_approved,
+        "env_keys": sorted(job.env.keys()),
+    }
+    if job.runner == "codex" and job.model:
+        snap["model_source"] = "job.model" if "CODEX_MODEL" not in job.env else "env.CODEX_MODEL"
+    return snap
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +478,8 @@ if ctrl_path and os.path.exists(ctrl_path):
 sleep_sec = float(behaviour.get("sleep", 0))
 exit_code = int(behaviour.get("exit_code", 0))
 output = str(behaviour.get("output", ""))
+if "output_env" in behaviour:
+    output = json.dumps({k: os.environ.get(k) for k in behaviour["output_env"]}, sort_keys=True)
 
 if sleep_sec > 0:
     time.sleep(sleep_sec)
@@ -849,6 +888,75 @@ exit 0
         ok("REG5c: healthcheck valid list → correct healthy/unhealthy")
     else:
         fail("REG5c", f"got {hc_valid_result}")
+
+
+    # REG6: per-job env + permission_policy become runner env and result evidence
+    set_healthcheck([{"agent": "codex", "verdict": "OK"}])
+    set_control({
+        "reg6_env": {
+            "exit_code": 0,
+            "output_env": ["CODEX_SANDBOX", "CODEX_MODEL", "CUSTOM_FLAG"],
+        },
+    })
+    job_env = make_job(
+        "reg6_env",
+        model="gpt-test",
+        env={"CUSTOM_FLAG": "yes"},
+        permission_policy=PermissionPolicy(
+            sandbox="workspace-write",
+            reason="user approved implementation job",
+            user_approved=True,
+        ),
+    )
+    r = sched.submit([job_env])[0]
+    env_seen = json.loads(r.reply_text)
+    if (env_seen.get("CODEX_SANDBOX") == "workspace-write"
+            and env_seen.get("CODEX_MODEL") == "gpt-test"
+            and env_seen.get("CUSTOM_FLAG") == "yes"
+            and r.permissions.get("sandbox") == "workspace-write"
+            and r.permissions.get("reason") == "user approved implementation job"):
+        ok("REG6: per-job env/permission_policy passed and snapshotted")
+    else:
+        fail("REG6", f"env_seen={env_seen}, permissions={r.permissions}")
+
+    # REG7: sandbox escalation guard catches unsafe Codex permission choices
+    try:
+        make_job("reg7_bad_write", permission_policy=PermissionPolicy(sandbox="workspace-write")).validate()
+        fail("REG7a", "workspace-write without reason should fail")
+    except ValueError as e:
+        if "workspace-write" in str(e) and "reason" in str(e):
+            ok(f"REG7a: workspace-write without reason blocked: {e}")
+        else:
+            fail("REG7a", f"wrong error: {e}")
+
+    try:
+        make_job(
+            "reg7_danger",
+            permission_policy=PermissionPolicy(sandbox="danger-full-access", reason="test only"),
+        ).validate()
+        fail("REG7b", "danger-full-access without approval should fail")
+    except ValueError as e:
+        if "user_approved" in str(e):
+            ok(f"REG7b: danger-full-access without approval blocked: {e}")
+        else:
+            fail("REG7b", f"wrong error: {e}")
+
+    try:
+        make_job(
+            "reg7_conflict",
+            env={"CODEX_SANDBOX": "read-only"},
+            permission_policy=PermissionPolicy(
+                sandbox="workspace-write",
+                reason="conflicting env test",
+                user_approved=True,
+            ),
+        ).validate()
+        fail("REG7c", "conflicting CODEX_SANDBOX should fail")
+    except ValueError as e:
+        if "conflicts" in str(e):
+            ok(f"REG7c: CODEX_SANDBOX conflict blocked: {e}")
+        else:
+            fail("REG7c", f"wrong error: {e}")
 
     # ---- cleanup ----
     shutil.rmtree(tmpdir, ignore_errors=True)
