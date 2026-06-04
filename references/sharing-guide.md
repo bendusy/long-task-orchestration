@@ -1,10 +1,13 @@
 # 分享给朋友 — 前置安装清单 + 降级路径
 
-> 主文件 §5 的展开。LTO 深度集成两个可选 skill（agent-delegate / memory-flow）和项目脚本（deploy.sh）。朋友没有这些也能用核心纪律——下面分清「0 安装能用什么」和「跑满整套要装什么」。
+> 主文件 §5 的展开。LTO 核心只依赖 Python/bash/git 和一个宿主 runtime；
+> bundled delegate、多家 AI CLI、ANIMEM/memory-flow compatible sink、生产部署脚本
+> 都是可选增强。下面分清「最小能用什么」和「跑满整套要装什么」。
 
-## 一、最小可用集（0 安装）
+## 一、最小可用集
 
-只用这些纯方法论，拷过去就能用，不依赖任何基建：
+装好 Python 3.10+、bash、git，并让一个宿主 agent 能读 `SKILL.md` 后，
+下面这些不依赖任何额外基建：
 
 - §0 防归因三道闸口令
 - §2 闸一（premature 挂 X）、闸三（用户拍板）、收缩不抽象
@@ -17,24 +20,42 @@
 
 | # | 依赖 | 是什么 | 没有则降级 |
 |---|---|---|---|
-| 1 | `agent-delegate` skill | 异构三方审计（triad.sh + codex/pi/agy runner），依赖 `tmux-autopilot` | 同模型多 subagent 自审；**对抗性大幅缩水，须显式声明「未做异构交叉」** |
-| 2 | 3 个异构 runtime | codex(OpenAI) / pi(DeepSeek) / agy(Gemini) 本机装好各持 token | 同模型 subagent 自审；对抗性缩水 |
-| 3 | `memory-flow` skill（可选） | 经验库落盘/检索/衰减/复利 | 落盘换 ADR/`MEMORY.md`，纪律不变 |
-| 4 | 生产数据访问 | 真数据探针要能跑聚合查询（mf 的库仅内网可达） | 换朋友自己的生产库/指标源；无则造样本（盖不住真实分布） |
-| 5 | 可回滚部署脚本 | mf 的 deploy.sh：dry-run + health-check + 自动 .bak 回滚 + master guard | 自己复刻 **dry-run + auto-rollback** 两个安全网，否则别上生产 |
+| 1 | 内置 `scripts/delegate/` + 可选 `tmux` | 异构三方审计（`scripts/delegate/triad.sh` + codex/pi/agy/claude runner） | 无 tmux 时 headless；runtime 不可用时同 runtime 自审，须声明对抗性缩水 |
+| 2 | 多个异构 runtime | codex(OpenAI) / claude(Anthropic) / pi(DeepSeek) / agy(Gemini) 本机装好并登录 | 同 runtime 自审；对抗性缩水 |
+| 3 | ANIMEM / memory-flow compatible sink（可选） | artifact memory 落盘/检索/跨项目发现 | 落盘换 ADR/`.lto`/`MEMORY.md`，纪律不变 |
+| 4 | 生产数据访问 | 真数据探针要能跑聚合查询 | 换你自己的指标源；无则造样本，但不能冒充真实分布 |
+| 5 | 可回滚部署脚本 | dry-run + health-check + 自动回滚 + 分支 guard | 自己复刻 **dry-run + auto-rollback** 两个安全网，否则别上生产 |
 | — | AskUserQuestion / Task / Workflow | Claude Code 原生 | 无需安装 |
 
 ## 三、安装顺序建议
 
 ```
-只装方法论(§0/§2 闸一闸三/§4 核验/stale 免疫)  → 0 安装，立刻可用
+核心 CLI(Python+bash+git+一个宿主 runtime)        → 立刻可用
   ↓ 想要异构审计闭环
-装 agent-delegate(+ tmux-autopilot + 3 runtime)  → 解锁异构收敛
+启用 bundled delegate(+ tmux + 3 runtime)        → 解锁异构收敛
   ↓ 想要落盘复利
-装 memory-flow(+ 常驻服务)                       → 解锁决策落盘检索
+装 ANIMEM / memory-flow compatible sink          → 解锁 artifact memory 检索
   ↓ 想要完整主循环上生产
-接生产库 + 复刻 deploy.sh 安全网                  → 完整闭环
+接生产指标源 + 复刻部署安全网                    → 完整闭环
 ```
+
+### 全局 `lto` wrapper
+
+运行本仓库安装脚本会创建或刷新 `${LTO_BIN_DIR:-$HOME/.local/bin}/lto`：
+
+```bash
+cd ~/Projects/long-task-orchestration
+bash scripts/install.sh
+bash scripts/install.sh --check
+```
+
+规则：
+
+- wrapper 带 `# long-task-orchestration managed lto wrapper` sentinel；重装只覆盖托管文件。
+- 如果同名 `lto` 已存在但没有 sentinel，安装按冲突退出 2，不覆盖用户文件。
+- wrapper 内部指向当前 checkout 的 `scripts/lto_run.py`，仓库移动后重跑安装。
+- 如果 `$HOME/.local/bin` 不在 `PATH`，安装会 warning；可用 `LTO_BIN_DIR=/your/bin` 改落点。
+- wrapper 透传参数，跨 repo 可用 `lto --repo /path/to/repo check` 或 `lto check --repo /path/to/repo`。
 
 ## 四、在 codex / pi / gemini 当宿主时怎么用（cross-runtime）
 
@@ -42,14 +63,14 @@
 
 - **skill 照常加载**：`allowed-tools` 里的 `Task`/`AskUserQuestion` 是 Claude 专属 hint，codex/gemini **静默忽略不报错**（skill-creator 实测 12/12 过）。它们读 body 的**能力描述**照样能跑。
 - **能力映射**（body §7 表）：「问用户拍板」→ 各自交互提问；「起独立 agent」→ 子进程/tmux window；「后台并行」→ tmux 多 window。
-- **异构审计的关键**：审计方必须跟**当前宿主**不同家族。朋友用 codex 当宿主 → 派 claude+pi+agy 审；用 pi 当宿主 → 派 claude+codex+agy。agent-delegate 的 runner 表本来就覆盖四家、互为委派方。
-- **落盘**：无 memory-flow MCP 时走 REST（带 `X-Agent-ID` 标明是谁写的），或降级 ADR/MEMORY.md。
+- **异构审计的关键**：审计方必须跟**当前宿主**不同家族。朋友用 codex 当宿主 → 派 claude+pi+agy 审；用 pi 当宿主 → 派 claude+codex+agy。内置 delegate runner 表覆盖四家、互为委派方。
+- **落盘**：先用 `write_decision.py` 写 repo-local ADR 并登记 artifact；artifact-memory sink 是后续显式集成，不默认碰凭据。
 
 **一句话**：谁当宿主，就把「另外几家」当审计方——这正是异构对抗性的来源，跟宿主是不是 Claude 无关。
 
-#### pi 当宿主 quickstart：LTO 编排 → ad 派 codex/agy/claude 异构审计
+#### pi 当宿主 quickstart：LTO 编排 → bundled delegate 派 codex/agy/claude 异构审计
 
-**完整流程**：pi (DeepSeek) 加载 LTO → LTO 判定需审计 → 调用 agent-delegate 派 codex (OpenAI) + agy (Gemini) + claude (Anthropic) → pi 综合三方结论。
+**完整流程**：pi (DeepSeek) 加载 LTO → LTO 判定需审计 → 调用 bundled delegate 派 codex (OpenAI) + agy (Gemini) + claude (Anthropic) → pi 综合三方结论。
 
 ```bash
 # ===== 第 1 步：pi 启动，加载 LTO skill =====
@@ -71,9 +92,9 @@ cat > /tmp/lto-audit-brief.md << 'EOF'
 逐 blocker 举证，附置信度 HIGH/MODERATE/LOW。先给最强反驳，禁止迎合。
 EOF
 
-# ===== 第 3 步：pi 通过 agent-delegate runner 派工 =====
-# agent-delegate 的 runner 是独立 shell 脚本，任何宿主可调
-AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
+# ===== 第 3 步：pi 通过 bundled delegate runner 派工 =====
+# runner 是独立 shell 脚本，任何宿主可调
+AD=${AGENT_DELEGATE_RUNNERS:-scripts/delegate/runners}
 
 # 派 codex (OpenAI)，后台跑
 $AD/codex.sh /tmp/lto-audit-brief.md /tmp/lto-reply-codex.md 300 &
@@ -101,9 +122,9 @@ wait $CODEX_PID $AGY_PID $CLAUDE_PID
 
 **如果用 triad.sh 一键派工**（需 tmux 环境）：
 ```bash
-# agent-delegate 的 triad.sh 自动开 tmux window 并行跑三家
-cd ~/Projects/agent-skills
-bash skills/agent-delegate/scripts/triad.sh \
+# bundled delegate 的 triad.sh 自动开 tmux window 并行跑三家
+TRIAD=${AGENT_DELEGATE_TRIAD:-scripts/delegate/triad.sh}
+bash "$TRIAD" \
   -p /tmp/lto-audit-brief.md \
   -r codex pi agy claude \
   -t 300
@@ -135,6 +156,39 @@ bash skills/agent-delegate/scripts/triad.sh \
 
 ## 五、提醒朋友的三个坑
 
-1. **别把仪式当因果**：装了 agent-delegate 跑三方审计，不等于不会过度设计。三道闸（尤其闸一挂 X）才是防过度设计的核心，审计只是推进引擎。
+1. **别把仪式当因果**：跑三方审计不等于不会过度设计。三道闸（尤其闸一挂 X）才是防过度设计的核心，审计只是推进引擎。
 2. **降级要声明**：用同模型 subagent 替代异构三方时，必须在结论里写明「未做异构交叉，对抗性弱」——否则会高估结论可信度。
 3. **真数据闸门不能省阈值**：换自己的数据源没关系，但「先承诺阈值再看数」这一步不能省，否则闸门退化成「跑个数据找继续做的理由」。
+
+## 六、让 agent 自动想起用 LTO（项目级注入）
+
+光装 skill 不够——长任务跑一半模型经常忘了用 LTO。在**你自己项目**的 `CLAUDE.md` / `AGENTS.md` 加一段轻量触发指引（只放触发条件 + 入口命令，**不要**复制整套手册，手册在 SKILL.md，按需加载即可）：
+
+```markdown
+## 长任务（>3 文件 / 跨 session / 需审计 / 要上线）
+
+开工前 `lto start --goal "…"`，跨 session 接续用 `lto resume` 拉回上下文胶囊，
+迷路时先 `lto check`。详见 long-task-orchestration skill（不必整篇读，按阶段加载）。
+```
+
+若未安装 wrapper，用绝对路径替代：
+
+```bash
+python3 /path/to/long-task-orchestration/scripts/lto_run.py \
+  --repo . check
+```
+
+**不要做的**：
+- ❌ 不要把 `lto start --install-hooks` 写进项目初始化脚本默认执行——hook 是 opt-in，自动装会撞 husky / pre-commit framework（见 `start.py` 的冲突检测）。
+- ❌ 不要把 `--auto-commit` 设成默认——LTO 默认不替你 commit，提交权在你手里。
+- ❌ 不要把整份 SKILL.md 贴进 CLAUDE.md——那是反渐进式披露，每次对话白烧 context。
+
+### 和 pi-dynamic-workflows 同装会冲突吗？
+
+**不会，且互补。** 两者编排的东西不同：
+- `pi-dynamic-workflows`（Pi extension / Node VM）管 **agent fan-out**——拉独立子 agent 跑 LLM 任务，沙箱保证可复现。
+- LTO（Py CLI）管 **长任务状态导航 + 批量跑 shell 校验**——跨 session 持久化、evidence 落盘、审计收敛。
+
+Pi tool 命名上 LTO 用了 `lto_` 前缀（`lto_pipeline` / `lto_parallel`），与 pi-dynamic-workflows 注册的 `workflow` 工具不撞名。同装时模型两种能力都有：要派 agent 做 fan-out 审查/重构走 pi-dynamic-workflows，要长任务导航走 LTO。
+
+> 注意：LTO 的 `parallel` / `pipeline` 子命令**借了 pi-dynamic-workflows 的命令名但语义不同**——LTO 编排的是 shell 命令（`pytest`/`lint`）不是 agent。这是命令批处理，不是 agent fan-out。别因为同名就以为它们能互相替代。

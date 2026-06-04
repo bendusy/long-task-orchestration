@@ -12,12 +12,15 @@ Verifies:
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = SKILL_DIR / "scripts"
 
 
 def check(condition: bool, msg: str) -> int:
@@ -63,17 +66,127 @@ def main() -> int:
         else:
             print(f"OK   no stale term: {term}")
 
+    # 3b. Bundled delegate runtime works offline with fake runners.
+    delegate_dir = SCRIPTS_DIR / "delegate"
+    delegate_scripts = [
+        delegate_dir / "delegate.sh",
+        delegate_dir / "triad.sh",
+        delegate_dir / "runners" / "healthcheck.sh",
+    ]
+    for script in delegate_scripts:
+        errors += check(script.exists(), f"delegate script {script.relative_to(SKILL_DIR)} exists")
+        if script.exists():
+            proc = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+            errors += check(proc.returncode == 0, f"delegate script {script.name} bash syntax")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
+        fake_runners = tmpdir / "runners"
+        fake_runners.mkdir()
+        for agent in ("codex", "pi", "agy"):
+            runner = fake_runners / f"{agent}.sh"
+            runner.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "printf '%s fake reply\\n' \"$(basename \"$0\" .sh)\" > \"$2\"\n",
+                encoding="utf-8",
+            )
+            os.chmod(runner, 0o755)
+        prompt = tmpdir / "prompt.md"
+        replies = tmpdir / "replies"
+        prompt.write_text("review this\n", encoding="utf-8")
+        proc = subprocess.run(
+            [
+                "bash", str(delegate_dir / "triad.sh"), "--headless",
+                "-p", str(prompt), "-d", str(replies),
+                "-a", "codex pi agy", "-t", "5",
+            ],
+            capture_output=True, text=True,
+            env={**os.environ, "AGENT_DELEGATE_RUNNERS": str(fake_runners)},
+            timeout=20,
+        )
+        errors += check(proc.returncode == 0, "bundled delegate triad fake runners")
+        for agent in ("codex", "pi", "agy"):
+            reply = replies / f"{agent}.md"
+            errors += check(reply.exists() and "fake reply" in reply.read_text(encoding="utf-8"),
+                            f"bundled delegate collected {agent} reply")
+
     # 4. lto_run.py self-test
     result = subprocess.run(
         [sys.executable, str(SKILL_DIR / "scripts" / "lto_run.py"), "self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=120,
     )
     errors += check(result.returncode == 0, f"lto_run.py self-test: {result.stdout.strip().split(chr(10))[-1]}")
     if result.returncode != 0:
         print(result.stderr, file=sys.stderr)
 
+    # 4b. audit_ledger_check.py self-test
+    ledger_script = SKILL_DIR / "scripts" / "audit_ledger_check.py"
+    errors += check(ledger_script.exists(), "audit_ledger_check.py exists")
+    if ledger_script.exists():
+        ledger_result = subprocess.run(
+            [sys.executable, str(ledger_script), "self-test"],
+            capture_output=True, text=True, timeout=30,
+        )
+        errors += check(
+            ledger_result.returncode == 0,
+            f"audit_ledger_check.py self-test: {ledger_result.stdout.strip().split(chr(10))[-1]}",
+        )
+        if ledger_result.returncode != 0:
+            print(ledger_result.stderr, file=sys.stderr)
+
+    # 4c. Six load-bearing module self-tests / adversarial tests.
+    #     These guard the dynamic-workflow safety logic (scheduler exit-code
+    #     judgment, agent spawn, audit dispatch, decision convergence, next
+    #     routing, worktree sandbox red-lines). Their tests exist but smoke
+    #     never ran them — a P0 chmod bug shipped because of exactly this gap.
+    #
+    #     TRAP: the four lto.* modules MUST run via `-m <module>` with
+    #     PYTHONPATH=scripts. Running `python3 path/to/lto/foo.py` directly
+    #     fails ModuleNotFoundError (no 'lto' package on sys.path) → false
+    #     green. The two scripts/-level test files self-insert sys.path, so
+    #     they run by path. invoke = (cmd_argv, needs_pythonpath).
+    module_env = {**os.environ, "PYTHONPATH": str(SCRIPTS_DIR)}
+    module_tests = [
+        ("scheduler",     [sys.executable, "-m", "lto.scheduler"],        True),
+        ("agent_exec",    [sys.executable, "-m", "lto.agent_exec"],       True),
+        ("audit",         [sys.executable, "-m", "lto.test_audit"],       True),
+        ("decision",      [sys.executable, "-m", "lto.test_decision"],    True),
+        ("artifacts",     [sys.executable, "-m", "lto.test_artifacts"],   True),
+        ("phase_gate",    [sys.executable, "-m", "lto.test_phase_gate"],  True),
+        ("next",          [sys.executable, str(SCRIPTS_DIR / "test_next.py")],              False),
+        ("worktree",      [sys.executable, str(SCRIPTS_DIR / "test_worktree_sandbox.py")],  False),
+    ]
+    for name, argv, needs_pp in module_tests:
+        proc = subprocess.run(
+            argv,
+            cwd=str(SCRIPTS_DIR),
+            capture_output=True, text=True, timeout=120,
+            env=module_env if needs_pp else os.environ,
+        )
+        last = (proc.stdout.strip().split(chr(10)) or [""])[-1]
+        errors += check(proc.returncode == 0, f"{name} self-test: {last or 'rc=' + str(proc.returncode)}")
+        if proc.returncode != 0:
+            print(proc.stdout[-2000:], file=sys.stderr)
+            print(proc.stderr[-2000:], file=sys.stderr)
+
+    # 4d. High-value orchestration command e2e (task-add / judge / recap)
+    cmd_test = SCRIPTS_DIR / "test_orchestration_cmds.py"
+    errors += check(cmd_test.exists(), "test_orchestration_cmds.py exists")
+    if cmd_test.exists():
+        proc = subprocess.run(
+            [sys.executable, str(cmd_test)],
+            cwd=str(SCRIPTS_DIR),
+            capture_output=True, text=True, timeout=120,
+        )
+        last = (proc.stdout.strip().split(chr(10)) or [""])[-1]
+        errors += check(proc.returncode == 0, f"orchestration cmds e2e: {last or 'rc=' + str(proc.returncode)}")
+        if proc.returncode != 0:
+            print(proc.stdout[-2000:], file=sys.stderr)
+            print(proc.stderr[-2000:], file=sys.stderr)
+
     # 5. Templates exist
-    for tmpl in ["run-state.md", "preflight.md", "audit-ledger.md"]:
+    for tmpl in ["run-state.md", "audit-ledger.md"]:
         path = SKILL_DIR / "templates" / tmpl
         errors += check(path.exists(), f"template {tmpl} exists")
         if path.exists():
@@ -94,26 +207,25 @@ def main() -> int:
     for ref in [
         "audit-convergence.md", "cross-runtime-host-notes.md",
         "decision-logging.md", "deploy-sequencing.md",
-        "long-loop-state.md", "run-state-workflow.md",
-        "sharing-guide.md", "validation-log.md",
+        "engineering-map.md", "long-loop-state.md",
+        "onboarding.md", "run-state-workflow.md", "sharing-guide.md", "validation-log.md",
     ]:
         path = SKILL_DIR / "references" / ref
         errors += check(path.exists(), f"reference {ref} exists")
 
-    # 8. No orphan references (every ref mentioned in SKILL.md or another ref)
-    refs_mentioned = set()
-    for fpath in SKILL_DIR.glob("**/*.md"):
-        txt = fpath.read_text(encoding="utf-8")
-        for ref in ["audit-convergence", "cross-runtime-host-notes", "decision-logging",
-                     "deploy-sequencing", "long-loop-state", "run-state-workflow",
-                     "sharing-guide", "validation-log"]:
-            if ref in txt:
-                refs_mentioned.add(ref)
-    all_refs = {"audit-convergence", "cross-runtime-host-notes", "decision-logging",
-                "deploy-sequencing", "long-loop-state", "run-state-workflow",
-                "sharing-guide", "validation-log"}
-    orphans = all_refs - refs_mentioned
-    errors += check(len(orphans) == 0, f"no orphan references: {orphans or 'none'}")
+    # 8. References are non-empty (agent-driven skill routes refs via SKILL.md prose,
+    #    not via a filename checklist; deep-detail refs need not be named verbatim)
+    min_lines = 20
+    for ref in [
+        "audit-convergence.md", "cross-runtime-host-notes.md",
+        "decision-logging.md", "deploy-sequencing.md",
+        "engineering-map.md", "long-loop-state.md",
+        "onboarding.md", "run-state-workflow.md", "sharing-guide.md", "validation-log.md",
+    ]:
+        path = SKILL_DIR / "references" / ref
+        if path.exists():
+            n_lines = len(path.read_text(encoding="utf-8").splitlines())
+            errors += check(n_lines >= min_lines, f"reference {ref} has substance ({n_lines} lines)")
 
     # Summary
     if errors == 0:

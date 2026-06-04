@@ -1,95 +1,355 @@
 # LTO run-state workflow
 
 Use `scripts/lto_run.py` when a long task needs durable repo-local state instead
-of chat-memory coordination.
+of chat-memory coordination. The script is a thin dispatcher to `lto/commands/`.
 
 ## Start
 
-Inside `agent-skills`, run from the repo root:
+Inside a target repository, call the standalone LTO CLI:
 
 ```bash
-# minimal: run-state.md only (default)
-python3 skills/long-task-orchestration/scripts/lto_run.py start \
+# minimal: state.json + run-state.md (default)
+python3 scripts/lto_run.py start \
   --goal "short task goal" \
   --host codex \
-  --request "original user request"
+  --request "original user request" \
+  --why "why this run exists (for human recap after long gaps)" \
+  --done-when "how you'll know it's finished (recap data source)"
 
-# audit: run-state + preflight + audit-ledger
-python3 skills/long-task-orchestration/scripts/lto_run.py start \
+# with audit ledger (only INITIALISES the ledger; run `audit` to fill+converge it)
+python3 scripts/lto_run.py start \
   --goal "spec audit task" \
   --host codex \
-  --profile audit
+  --with-audit
 
-# deploy: full all three (deployment-safe)
-python3 skills/long-task-orchestration/scripts/lto_run.py start \
-  --goal "deploy workflow" \
-  --host codex \
-  --profile deploy
+# opt-in: install LTO pre-commit gate into .git/hooks (skips if husky/pre-commit detected)
+#   add --install-hooks ; NOT installed by default
 ```
 
-When the target repo is not `agent-skills`, call this script by absolute path:
+`--why` / `--done-when` feed `recap`'s human-facing view. `--install-hooks` is
+opt-in (default off). `--with-audit` only creates `audit-ledger.md`; the actual
+adversarial audit + convergence runs via the `audit` command.
+
+When calling from another repository, pass that repository with `--repo`:
 
 ```bash
-python3 /Users/ben/Projects/agent-skills/skills/long-task-orchestration/scripts/lto_run.py \
+python3 /path/to/long-task-orchestration/scripts/lto_run.py \
   --repo /path/to/target/repo \
   start --goal "short task goal" --host codex
 ```
 
-This creates `.lto/<run-id>/` with artifacts per profile:
-- `minimal`: `run-state.md` only
-- `audit`: `run-state.md` + `preflight.md` + `audit-ledger.md`
-- `deploy`: all three (same as audit)
+After `bash scripts/install.sh`, the global wrapper is shorter:
+
+```bash
+lto --repo /path/to/target/repo start --goal "short task goal" --host codex
+lto check --repo /path/to/target/repo
+```
+
+The wrapper is sentinel-managed and points at this `long-task-orchestration`
+checkout. If the repo moves, rerun `scripts/install.sh`.
+
+This creates `.lto/<run-id>/` with:
+- `state.json` — machine-readable state (source of truth)
+- `run-state.md` — human-readable state
+- `audit-ledger.md` — only when `--with-audit` is set
 
 It also writes `.lto/current`, so later commands can omit `--run-id`.
+
+**Git hook install is opt-in** (2026-06-03): pass `--install-hooks` to add the LTO
+pre-commit gate into `.git/hooks/pre-commit`. It is **not** installed by default,
+and is **skipped with a warning** when husky / pre-commit framework / an existing
+custom pre-commit hook is detected, to avoid clobbering your setup.
+
+## Task-Add
+
+After `start`, add the tasks the run will work on. A task is the unit that
+`runner` / `next` / `audit` operate on — `runner` does NOT auto-create them.
+
+```bash
+python3 .../scripts/lto_run.py --repo . task-add \
+  --task-id T1 \
+  --title "给 login 加判空校验" \
+  --command "pytest tests/test_auth.py -x"   # optional: planned command (runner/autopilot use it)
+```
+
+`--task-id` must be unique (duplicate is rejected). `--phase` defaults to the
+current phase. Then run it via `runner --task-id T1 --command "..."`.
+
+## Resume
+
+Recover from a previous session:
+
+```bash
+python3 scripts/lto_run.py resume
+```
+
+Prints a context capsule (phase, tasks, last failure, next action).
+Validates git HEAD: forward drift with unrelated changes is OK, rewrite triggers
+revalidation. Returns exit code 2 when tasks need revalidation.
+
+For forward HEAD drift, `resume` compares changed commit paths against task
+`touched_files`. Related changes mark done/in-progress tasks pending. If tasks
+exist but no `touched_files` are recorded, it warns that file drift precision is
+unavailable instead of guessing across the whole repo.
+
+## Memory Projection (optional artifact-memory sink)
+
+LTO core does **not** require ANIMEM, memory-flow, MCP, PostgreSQL, or any
+memory service. Local `.lto/<run-id>/state.json` and `artifacts.json`
+remain the source of truth.
+
+Use memory projection only when you want cross-runtime/cross-project discovery:
+
+```bash
+# Pure local, redacted JSON. No network or memory sink required.
+python3 scripts/lto_run.py memory export \
+  --run-id <run-id> --dry-run
+
+# Try artifact-memory discovery, then always print local-first capsule.
+# If no sink is configured, prints a warning and degrades to local .lto.
+python3 scripts/lto_run.py memory resume \
+  --project my-project --run-id <run-id>
+
+# Explicit publish only. Requires MEMORY_FLOW_URL + MEMORY_FLOW_TOKEN or flags.
+python3 scripts/lto_run.py memory publish \
+  --run-id <run-id>
+```
+
+Projection privacy rules:
+
+- `original_user_request` is hash-only; raw text is not projected.
+- `goal` / `why` / `done_when` / `next_action` / artifact summaries are capped
+  and redacted.
+- `agent_runs`, `decision_escalate_points`, raw runner output, source file
+  bodies, secrets, env values, and private document bodies are not projected.
+- Dirty worktree details are `dirty_count` plus capped/redacted samples.
+
+`lto memory resume` is read-only. It never overwrites `.lto/current`,
+`state.json`, or tasks. If remote hashes differ from local state, report drift;
+local files win.
+
+## Preflight
+
+Probe environment health (stdout only, no file):
+
+```bash
+python3 scripts/lto_run.py preflight
+python3 scripts/lto_run.py preflight --record  # also write to state.json
+```
+
+## Runner
+
+Execute a single task and auto-record evidence:
+
+```bash
+python3 scripts/lto_run.py runner \
+  --task-id T1 \
+  --kind test \
+  --command "pytest tests/test_auth.py -x" \
+  --touch src/auth.py \
+  --note "验证登录修复"
+```
+
+On success: task.status=done, evidence recorded, gates.last_tested_head updated.
+On failure: task.status=blocked, blocker recorded, state.last_failure set,
+retry_count bumped (per command fingerprint).
+
+Other flags: `--status-on-fail {blocked,in_progress}` (default blocked),
+`--cwd`, `--timeout`, `--auto-commit` (opt-in commit of .lto state).
+
+## Judge
+
+Read-only review of runner output, outputs YAML verdict:
+
+```bash
+# Review entire phase
+python3 scripts/lto_run.py judge --phase implementation
+
+# Review single high-risk task
+python3 scripts/lto_run.py judge --task-id T5
+
+# Rerun recorded tests
+python3 scripts/lto_run.py judge --phase implementation --rerun-tests
+```
+
+Saves verdict to `.lto/<run-id>/judge/judge-<phase>-<ts>.yaml`.
+Other flags: `--since <git-base>` (diff review base), `--runner <name>`
+(auditor agent name, default codex), `--auto-commit` (opt-in commit of .lto state).
+Updates `gates.last_reviewed_head`.
+
+## Hook
+
+Boundary gate checks for irreversible actions:
+
+```bash
+python3 scripts/lto_run.py hook pre-commit
+python3 scripts/lto_run.py hook pre-deploy
+python3 scripts/lto_run.py hook pre-closeout
+
+# Force override
+python3 scripts/lto_run.py hook pre-commit --force --reason "docs-only"
+```
+
+Environment variable `LTO_HOOK_MODE` controls pre-commit behavior:
+- `off` — disabled
+- `warn` (default) — warn only (except unresolved blocks)
+- `block` — warn also blocks
 
 ## Check
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py check
+python3 scripts/lto_run.py check
+python3 scripts/lto_run.py check --strict
+python3 scripts/lto_run.py check --to implementation
+python3 scripts/lto_run.py check --to closed --strict
+python3 scripts/lto_run.py check --to implementation --json
 ```
 
-Use strict mode before claiming the run is current:
+Validates state.json integrity, git HEAD anchor, dirty worktree, handoff
+completeness, and optional audit-ledger convergence.
 
-```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py check --strict
-```
+When HEAD advanced normally, `check` uses the same task `touched_files`
+commit-to-commit drift detector as `resume`. Default mode warns on related task
+file changes; `--strict` returns rc 1. It does not mutate state. Dirty worktree
+changes are still handled by the existing dirty warning/error and are not
+intersected with `touched_files` in this pass.
 
-Strict mode fails when:
+`--to implementation|closed` adds a read-only phase-entry evidence report. It
+does not transition state and does not approve the phase; the report always
+includes `human_gate_required: true`.
 
-- required state fields are blank
-- required artifacts are missing
-- the target is not a git worktree
-- recorded git HEAD differs from the current repo HEAD outside `.lto`
-- the worktree has uncommitted changes outside `.lto`
-- a closed run has no `handoff.md`
+Targets covered in this first version:
 
-When non-strict mode sees git HEAD drift or dirty files outside `.lto`, it
-prints a warning instead of failing. `.lto` changes are ignored by drift checks
-because the state files themselves may be committed after the code commit.
+| Target | Required evidence under `--strict` | Advisory evidence |
+|---|---|---|
+| `implementation` | no unresolved gate blocks or open unverified risks; filled audit ledger is `CONVERGED` when present | task list present, phase direction |
+| `closed` | no open tasks (`status` not in `done`/`skipped`); no unresolved gate blocks; risk points verified or closed; filled audit ledger is `CONVERGED` when present | artifact manifest, handoff if already closed, phase direction |
+
+Default mode reports missing phase evidence but keeps rc 0 when the base
+`check` passes. `--strict` upgrades missing required evidence to rc 1.
+`--json` prints one JSON object to stdout and suppresses text/WARN output so
+other host runtimes can parse it directly.
 
 ## Closeout
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py closeout \
+python3 scripts/lto_run.py closeout \
   --summary "what changed and how it was verified" \
   --next-action "none"
 ```
 
-Closeout updates `run-state.md`, marks `current_phase: closed`, refreshes git
-HEAD/branch, appends a closeout note, and writes `.lto/<run-id>/handoff.md`.
-It refuses to run when required artifacts are missing, when `preflight.md`
-has no `preflight_verdict`, when `audit-ledger.md` has no latest
-HIGH/CRITICAL count or close/continue verdict, or when there are uncommitted
-changes outside `.lto` unless `--allow-dirty` is explicitly used. Running
-closeout on an already closed run requires `--force`; force rewrites the
-existing closeout section instead of appending duplicate entries.
+Closeout updates state.json (phase→closed), syncs run-state.md, writes
+handoff.md, and renders its Artifacts section from `.lto/<run-id>/artifacts.json`.
+Refuses when: ledger not converged, unresolved blocks exist,
+uncommitted changes outside .lto, or run already closed (use `--force`).
+Also refuses if a high-risk task has no/empty audit ledger, or if there are
+unverified `risk_points` (use `--force` / `--allow-dirty` to override).
+
+Add `--auto-commit` to commit `.lto` + CHANGELOG.md (opt-in, uses repo git
+identity, default off).
+
+## Parallel / Pipeline (shell command batching)
+
+These batch-run **shell commands** (not agent fan-out — same names as
+pi-dynamic-workflows but different semantics).
+
+```bash
+L="python3 scripts/lto_run.py"
+
+# parallel: run many tasks' shell verify commands concurrently, record evidence
+$L parallel --phase implementation --concurrency 4 --command "pytest -x"
+
+# pipeline: each task runs sequential stages ({task_id} placeholder), items concurrent
+$L pipeline --phase implementation --stages "ruff check {task_id}" "pytest -k {task_id}"
+```
+
+Each records evidence via the shared `exec.run_command` kernel. `--auto-commit`
+opt-in. Real **agent fan-out** is `audit --auto-dispatch` / `--discover-risks`.
+stdout/stderr artifacts are registered in `.lto/<run-id>/artifacts.json` using
+repo-relative paths.
+
+## Audit (adversarial heterogeneous review)
+
+```bash
+$L audit --auto-dispatch        # auto-dispatch heterogeneous auditors (≠ host family) + collect
+$L audit --discover-risks       # spawn agent to find unregistered risk points (source=risk-agent)
+$L audit                        # write brief + print dispatch instructions (manual)
+$L audit --collect <reply-dir>  # collect replies → heterogeneity check + blocker count + converge
+```
+
+Auditors emit structured JSON findings (severity is a field, not a regex scan).
+`--collect` rejects same-family auditors (use `--allow-same-family` to override).
+
+## Next (pattern router — zero LLM)
+
+```bash
+$L next            # print decision brief (escalate) or unambiguous cmd suggestion
+$L next --exec     # execute unambiguous routes (closeout/judge/resume); escalate → print only
+$L next --json     # facts + route as JSON
+```
+
+Analyzes state, gives the host LLM a rich decision brief (goal + blocked task
+failure summaries). Decisions stay with the host. Empty phases never auto-advance.
+
+## Autopilot (self-driving, constrained)
+
+```bash
+$L autopilot --supervised               # brief + route, escalate to host (default)
+$L autopilot --supervised --auto-exec    # auto-run safe/reversible task commands in worktree sandbox
+```
+
+`--auto-exec` runs commands in an isolated git worktree (rm -rf only nuks the
+worktree; env-isolated HOME/credentials). Dangerous ops (rm -rf / git push /
+DROP / sudo / curl|sh / escape paths) are HELD for human confirm. Retry≥3 skips,
+stall detection reverts to brief-only. `--autonomous` is next-phase (not implemented).
+
+## Recap (human-facing review)
+
+```bash
+$L recap            # what you set out to do / why / how long / where you are / what's next
+$L recap --artifacts  # same recap plus recent artifact paths
+```
+
+Unlike `resume` (feeds the AI: git head / task ids), `recap` is for **humans** —
+plain-language answers after a long gap. Uses `state.json` + `--why`/`--done-when`.
+Artifact paths are opt-in to keep the default human recap low-noise.
+
+## Artifact Manifest
+
+Every new run creates `.lto/<run-id>/artifacts.json`. It indexes run artifacts
+with repo-relative paths: state/run-state, audit briefs/replies, decision briefs,
+shell evidence, judge verdicts, decision records, handoff, and volatile
+repo-level `CHANGELOG.md`.
+`resume` prints recent artifacts for the next host agent. Old runs without a
+manifest are synthesized best-effort in memory; closed runs are not dirtied by
+read-only synthesis.
+
+`decision_record` is the only additional run-outside artifact kind: paths must
+match `docs/decisions/*.md`, and both `relative_path` and `run_relative_path`
+store the full repo-relative path.
+
+## Decision Records
+
+```bash
+python3 scripts/write_decision.py \
+  --repo . \
+  --run-id <id> \
+  --title "why keep wrapper opt in" \
+  --slug "keep-wrapper-opt-in" \
+  --context "..." \
+  --decision "..." \
+  --consequences "..."
+```
+
+The helper writes `docs/decisions/YYYY-MM-DD-<slug>.md`, appends
+`state.user_decisions`, and registers the ADR as `decision_record` in the
+artifact manifest. It does not call external memory sinks directly.
 
 ## Self-Test
 
-The script has offline smoke coverage:
-
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py self-test
+python3 scripts/lto_run.py self-test
 ```
 
-Run it after editing the script or templates.
+Covers: start, resume, check, preflight, hook pre-commit, closeout, and
+gate regression (non-converged ledger rejection).

@@ -8,6 +8,32 @@
 
 ## 安装
 
+### 0. 依赖矩阵
+
+| 层级 | 必需性 | 依赖 | 用途 | 没有时 |
+|---|---|---|---|---|
+| 核心 CLI | 必需 | Python 3.10+ | 运行 `scripts/lto_run.py` / 自检 | 不能运行脚本 |
+| 核心 CLI | 必需 | bash | installer、wrapper、runner shell | 不能安装 wrapper |
+| 核心 CLI | 必需 | git | HEAD 锚定、drift 检测、worktree 沙箱 | 多数长任务证据不完整 |
+| 宿主 | 必需 | Codex / Claude Code / pi / agy / 其他能读 `SKILL.md` 并跑 shell 的 agent | 作为主 agent 推进任务 | LTO 只是文件和脚本，不能自己工作 |
+| 异构审计 | 内置 | `scripts/delegate/` | 标准化派 codex/claude/pi/agy 审计 | runtime 不可用时手动 `audit --collect` |
+| 异构审计 | 可选 | `tmux` | 内置 delegate 的可观测并行窗口 | 无 tmux 时用 headless 子进程 |
+| 异构审计 | 可选 | codex / claude / pi / agy CLI，至少 2 个非宿主家族可用 | 真异构交叉审计 | 同 runtime 自审，必须声明对抗性弱 |
+| artifact memory | 可选 | ANIMEM 或 memory-flow compatible sink | 跨 runtime / 跨项目发现历史 run 和产物 | 本地 `.lto` + ADR 仍完整可用 |
+
+LTO 已预装最小 delegate runtime：`scripts/delegate/`。如果你另有完整
+agent-delegate 安装，可用环境变量覆盖内置脚本：
+
+```bash
+export AGENT_DELEGATE_HOME=/path/to/agent-delegate
+export AGENT_DELEGATE_TRIAD=/path/to/agent-delegate/scripts/triad.sh
+export AGENT_DELEGATE_RUNNERS=/path/to/agent-delegate/scripts/runners
+```
+
+`bash scripts/install.sh --check` 只检查核心 CLI 和全局 `lto` wrapper 状态；
+可选 runtime 是否可派工，要在目标机器上跑 `lto preflight` 和
+`scripts/delegate/runners/healthcheck.sh` 取得实测结果。
+
 ### 1. 放 skill 目录
 
 把 `long-task-orchestration/` 整个目录放进你 agent 的 skills 加载路径。不同 agent 的惯例路径：
@@ -21,15 +47,29 @@
 
 SKILL.md + `references/` 子目录要一起放进去（主文件通过 `[[wikilink]]` 引用 references）。
 
+### 1b. 安装全局 `lto` wrapper（可选）
+
+在仓库根目录运行：
+
+```bash
+bash scripts/install.sh          # 生成/刷新 ${LTO_BIN_DIR:-$HOME/.local/bin}/lto
+bash scripts/install.sh --check  # 只检查，不写文件
+```
+
+这个脚本只安装 sentinel-managed `lto` 命令，不会自动把本仓软链到各
+runtime 的 skills 目录。skill 装载路径由你按上表复制或软链。
+
 ### 2. 验证加载
 
 agent 能读到 `SKILL.md` 并命中 description 里的触发场景（「长程任务」「开个 MVP」「起 spec」「是不是太早」「过度设计了吗」等）即生效。不需要重启或安装包。
 
 > 注：触发词以 SKILL.md frontmatter `description` 字段的实际内容为准。`premature`、`三道闸` 等词在 body 里，不在 description 触发关键词里；agent 会按能力描述全文语义匹配，不需要逐词对齐。
 
-### 3. 替换 references/ 里的项目特化示例
+### 3. 替换部署示例
 
-`references/deploy-sequencing.md` 包含基于作者项目的具体实例（占位符表名如 `<你的表>`、feature flag 等）。文件开头已声明"用户照着改成自己的拓扑"。**使用前把这些替换成你自己的数据库表和部署脚本**，否则示例会引起混淆。其他 references/ 文件（audit-convergence.md / decision-logging.md / long-loop-state.md / cross-runtime-host-notes.md / validation-log.md）是纯方法论，不需要替换。
+`references/deploy-sequencing.md` 使用中性 `example_service` 示例说明顺序。
+真实项目上线前，把其中的表名、服务名、构建命令和部署脚本替换成你自己的
+拓扑；LTO 只规定顺序，不知道你的生产环境。
 
 ---
 
@@ -46,7 +86,7 @@ LTO 依赖的是**接口**，不是具体实现。每个插槽都有两档：不
 | 档位 | 配置 | 能力 | 声明要求 |
 |---|---|---|---|
 | **零配置** | 不装任何东西 | 用当前 agent 起同家族 subagent 多视角自审（2-3 个独立子 agent，不共享上下文） | **必须**在结论里声明「未做异构交叉，对抗性弱于真异构」 |
-| **完整版** | 装 `agent-delegate`（含 `tmux-autopilot`）+ 本机装好 codex / pi(DeepSeek) / agy(Gemini) 各持 token | 真异构三方审计（宿主 Claude → 派 codex+pi+agy；宿主 codex → 派 claude+pi+agy，以此类推） | 记录实际可用了几家；**派工前对每个 runner 跑 smoke 巡检**（见下），不以"理论三家"当"实测三家" |
+| **完整版** | 使用内置 `scripts/delegate/` + `tmux` + 本机装好 codex / claude / pi(DeepSeek) / agy(Gemini) 中至少两家非宿主 runtime | 真异构三方审计（宿主 Claude → 派 codex+pi+agy；宿主 codex → 派 claude+pi+agy，以此类推） | 记录实际可用了几家；**派工前对每个 runner 跑 smoke 巡检**（见下），不以"理论三家"当"实测三家" |
 
 **关键规则**：审计方必须跟当前宿主**不同模型家族**——同家族多实例约等于自我重复，无交叉诊断价值。谁当宿主，就把另外几家当审计方。
 
@@ -67,9 +107,11 @@ LTO 依赖的是**接口**，不是具体实现。每个插槽都有两档：不
 | 档位 | 配置 | 能力 | 丢的东西 |
 |---|---|---|---|
 | **零配置** | 不装任何东西 | 写 `docs/decisions/` ADR 文件（一决策一文件）+ 项目根 `MEMORY.md` 索引 | 没有衰减/reinforce/语义检索，靠人工找 |
-| **完整版** | 接入 `memory-flow` MCP 后端（`experience_write` / `experience_search`）或兼容接口 | 语义检索、衰减权重、取代式版本链、跨项目经验复用 | — |
+| **完整版** | 接入 ANIMEM / `memory-flow` / compatible artifact-memory sink | 语义检索、衰减权重、取代式版本链、跨项目经验复用 | — |
 
-**预留插槽说明**：`memory-flow` 之外的记忆后端（任何其他实现了 `experience_write` / `experience_search` 语义的工具）可以直接插进来替换——LTO 只调用「写一条有 slug 的决策条目」和「按 slug 检索」这两个最小接口。未来任何符合此接口的后端（本地文件、向量库、第三方记忆服务）都可插入，不需要改 skill 主文件。
+**预留插槽说明**：ANIMEM / `memory-flow` 之外的记忆后端也可以接入。
+LTO 的公开语义只是 artifact memory projection：导出 redacted run snapshot、
+显式 publish、resume 时读取历史线索。没有 sink 时，本地 `.lto` 仍是真源。
 
 **降级纪律不变**：无论用哪一档，都要做到：拍板后即时写（不事后补）、记录为什么判 premature（缺的那个 X）、记录被证伪/否决的 blocker、commit message 引 slug 或 ADR 文件名。丢的只是检索命中率和复利，不丢纪律本身。
 
@@ -84,7 +126,7 @@ LTO 依赖的是**接口**，不是具体实现。每个插槽都有两档：不
 | 档位 | 配置 | 落地方式 |
 |---|---|---|
 | **零配置** | 不装任何东西 | 用 agent 原生机制起 subagent（Claude Code 用 `Task`/`Workflow`；codex 用 `codex exec`/tmux；pi 用 `Agent` 工具；agy 用子进程/tmux）——各家机制不同，见 SKILL.md §7 能力映射表 |
-| **完整版** | 装 `agent-delegate`（`triad.sh` + runner 表） | 标准化多 runtime 派工接口，统一管 tmux window、wait-for 回收、反迎合 prompt 约束 |
+| **完整版** | 使用内置 `scripts/delegate/`（`triad.sh` + runner 表） | 标准化多 runtime 派工接口，统一管 tmux window、wait-for 回收、反迎合 prompt 约束 |
 
 **后台派工原则**（纯方法论，两档通用）：
 - 派出去就不要轮询，设长兜底心跳，等通知。
@@ -121,7 +163,7 @@ LTO 不是万能的，以下场景走其他路径更高效：
 |---|---|
 | 单一 bugfix | diagnose/investigate skill |
 | 纯一次性代码审查 | review skill |
-| 只需要委派一轮给另一个 runtime | `agent-delegate`（LTO 是它的调用方，不是替代） |
+| 只需要委派一轮给另一个 runtime | `scripts/delegate/delegate.sh` |
 | 写 skill 本身 | `skill-creator` |
 | 纯跑一条部署命令 | 走 ship/land-and-deploy，不需要整套编排 |
 
@@ -131,6 +173,6 @@ LTO 不是万能的，以下场景走其他路径更高效：
 
 ## 安装后的三个常见坑
 
-1. **别把仪式当因果**：装上 agent-delegate 跑了三方审计，不等于不会过度设计。三道闸（尤其闸一挂具体 X）才是防过度设计的核心；审计只是推进引擎。
+1. **别把仪式当因果**：跑了三方审计，不等于不会过度设计。三道闸（尤其闸一挂具体 X）才是防过度设计的核心；审计只是推进引擎。
 2. **降级要声明**：用同模型 subagent 替代异构三方时，必须在结论里写明「未做异构交叉，对抗性弱」——否则会高估结论的可信度。
 3. **真数据闸门不能省阈值**：换自己的数据源完全没问题，但「先承诺阈值再看数」这一步不能省，否则闸门退化成「跑个数字找继续做的理由」。

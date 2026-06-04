@@ -14,11 +14,13 @@
 
 **冲突时信证据**：续会话指令描述的状态比一手证据旧 → 信证据，拒绝重做。
 
-实证：/compact 后收到「W3 待部署 commit dcde565」→ 三层核验发现 HEAD=062a837（含修复）+ 生产 bin 编译于实测后 + 里程碑 slug 已存在 → 判定指令 stale，**没有重复部署、没有二次污染生产**。
+示例：/compact 后收到「功能待部署 commit old1234」→ 三层核验发现
+HEAD=new5678（含修复）+ 生产服务编译于实测后 + 里程碑 ADR 已存在 →
+判定指令 stale，**没有重复部署、没有二次污染生产**。
 
 ### run-state 文件是恢复锚点
 
-新开长任务时，跑 `../scripts/lto_run.py start --goal <goal>`（默认 `--profile minimal` 只创建 `run-state.md`；加 `--profile audit|deploy` 才创建 preflight/audit-ledger）。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `../scripts/lto_run.py check [--strict]`，再按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
+新开长任务时，跑 `../scripts/lto_run.py start --goal <goal>`（默认 `--profile minimal` 只创建 `run-state.md`；`--profile audit` 加 `audit-ledger.md`；`--profile deploy` 在 audit 基础上再落一份 preflight 环境快照进 `state.json`）。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `../scripts/lto_run.py check [--strict]`；要判断能否进写码/收尾，再跑 `../scripts/lto_run.py check --to implementation|closed [--strict]` 读 phase-entry evidence。之后按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
 
 ## 二、后台派工不阻塞 + 等待期挖地基
 
@@ -45,5 +47,5 @@
 
 ## 五、阶段性推进 + 生产边界
 
-- **阶段闸**：上一层稳了才进下一层。实证「框架稳定后才开始讨论数据治理」「W1 跑稳再推 W3」。
+- **阶段闸**：上一层稳了才进下一层。先让当前功能在真实流量下跑稳，再推下一个高风险变更。
 - **生产边界 = 审计边界**：服务端只在受限网络可达（如 PG 仅绑回环、服务仅绑内网地址）。开发机查被 refused **不是 bug**，是边界正确。不为「方便」打穿它，生产数据不离开生产环境。

@@ -1,0 +1,208 @@
+# LTO 装载手册 — 给 agent 读的一份文档
+
+> 你是一个 agent（codex / pi / agy / claude / 任意能跑 Python + bash 的 runtime）。
+> 读完这一份，你就知道 LTO 是什么、怎么装给自己用、长任务里怎么用它不迷路。
+
+## 一句话
+
+**LTO 是一个跨 runtime 的自研 dynamic workflow：长任务里它帮你 spawn 隔离 agent 做 fan-out / 对抗审计 / pattern 路由，并把状态、证据、审计收敛落进可恢复可审计的轨道，对抗"做一半就停 / 偏爱自己结论 / 多轮后忘了目标"这三个长任务通病。**
+
+它不抢 Claude Code 原生 dynamic workflow 的活——它是给**任意 runtime**用的版本，只依赖 Python + bash。
+
+## 它解决什么（你为什么要装它）
+
+单 context window 跑长任务有三个通病，LTO 各有一道防线：
+
+| 通病 | 现象 | LTO 的防线 |
+|---|---|---|
+| agentic laziness | 50 项做了 20 项就宣布完成 | risk coverage 闸门 + ledger 收敛：没审完不让 closeout |
+| self-preferential bias | 偏爱自己的结论，自审等于没审 | `lto audit` 强制异构审计（审者 runtime ≠ 你这家） |
+| goal drift | 多轮后丢了原始目标，compaction 后更甚 | state.json 持久化 + `lto resume` 跨 session 拉回目标 |
+
+## 怎么装给自己用
+
+### 前提
+- Python 3.10+、bash。
+- git（HEAD 锚定、drift 检测、worktree 沙箱需要）。
+- 至少一个宿主 runtime：codex / claude / pi / agy / 其他能读本文件并执行 shell 的 agent。
+- 纯标准库，无第三方依赖（核心命令）。
+- 内置：`scripts/delegate/` 提供 codex/pi/agy/claude 的 runner 脚本；有 `tmux` 时 `lto audit --auto-dispatch` 可观测性更好，没有 tmux 时自动用 headless 子进程。
+- 可选：codex / claude / pi / agy CLI 中的其他 runtime。真异构审计至少需要非宿主家族可用；没有则只能同 runtime 自审，必须声明对抗性较弱。
+- 可选：ANIMEM / memory-flow compatible sink。没装也能完整使用 LTO 核心命令；它只增强跨项目 artifact memory。
+
+如需替换内置 delegate，用
+`AGENT_DELEGATE_HOME` / `AGENT_DELEGATE_TRIAD` / `AGENT_DELEGATE_RUNNERS` 指向外部实现。
+
+### 找到入口
+LTO 的入口是一个 Python 脚本：
+```
+<skill-root>/scripts/lto_run.py
+```
+`<skill-root>` 取决于你怎么装的 skill：
+- 软链装载（推荐）：`~/.agents/skills/long-task-orchestration/`（codex/agy 标准路径）或 `~/.claude/skills/long-task-orchestration/`（claude）。
+- 仓库内直接用：`<lto-repo>/scripts/lto_run.py`。
+
+安装全局 `lto` wrapper（在 long-task-orchestration 仓库根）：
+```bash
+bash scripts/install.sh          # 生成/刷新 ~/.local/bin/lto（或 LTO_BIN_DIR 指定目录）
+bash scripts/install.sh --check  # 只检查不装
+```
+这个脚本不自动安装 skill 目录；你仍需按所用 runtime 的规则复制或软链本仓。
+
+### 在你这家 runtime 里怎么调
+LTO 是个 CLI，任何能跑 bash 的 runtime 都能调，不需要你内置什么 Agent 工具：
+```bash
+python3 <skill-root>/scripts/lto_run.py --repo <目标仓库> <子命令> [参数]
+```
+`--repo` 指向你要做长任务的那个仓库（默认当前目录）。
+
+跨 runtime 当宿主的专项坑（沙箱、派工、preflight）见 `cross-runtime-host-notes.md`——不同家差异大，派工前先读。
+
+## 16 个命令速查
+
+> 16 个子命令（`audit --discover-risks` 是 audit 的变体，不单独计数）。
+
+| 命令 | 干什么 | 阶段 |
+|---|---|---|
+| `start --goal "..."` | 创建 `.lto/<run-id>/`，记下目标、宿主、HEAD | 开工 |
+| `resume` | 跨 session 拉回上下文胶囊（目标/进度/上次失败/下一步） | 接续 |
+| `memory export/resume/publish` | 可选 artifact memory：导出 redacted projection / 发现历史 run / 显式发布到 sink | 接续 |
+| `next` | **决策核心**：分析状态 → 给下一步 pattern 建议或决策简报 | 导航 |
+| `check [--strict] [--to implementation\|closed] [--json]` | 校验状态完整性；只读输出 phase-entry 证据 | 自检 |
+| `preflight` | 探活环境（sandbox/git/network/tmux/可选 MCP） | 自检 |
+| `task-add --task-id T1 --title "..."` | 给当前 run 加一个 task（runner/next 的操作对象） | 开工 |
+| `runner --task-id T1 --command "..."` | 执行单 task（跑命令）+ 落证据 | 执行 |
+| `parallel --phase X` | 并发批量跑多 task 的 shell 校验命令 | 执行 |
+| `pipeline --stages "..." "..."` | 每 task 串行过多 stage（item 间并发） | 执行 |
+| `judge --phase X [--rerun-tests]` | 只读审查 + YAML verdict | 审查 |
+| `audit [--auto-dispatch]` | **对抗审计**：派异构审计方 + 收口判收敛 | 审计 |
+| `audit --discover-risks` | 派独立 agent 主动发现漏掉的风险点 | 审计 |
+| `autopilot --supervised [--auto-exec]` | **自驱动**：读状态出决策简报，可在 worktree 沙箱自动跑 safe 子步骤 | 编排 |
+| `recap` | **给人看的回顾**：你当初要做啥/为什么/跑了多久/做到哪/还剩啥/现在轮到你 | 回顾 |
+| `hook <pre-commit\|pre-deploy\|pre-closeout>` | 边界闸门检查 | 闸门 |
+| `closeout --summary "..."` | 闭环 + 写 handoff + CHANGELOG | 收尾 |
+| `self-test` | 离线自检（验证 LTO 自己没坏） | — |
+
+> `runner/parallel/pipeline` 编排的是 **shell 命令**（pytest/lint 批处理）。
+> 真正的 **agent fan-out**（spawn 隔离 agent 做对抗审计/找风险）走 `audit --auto-dispatch` 和 `audit --discover-risks`，底层是 `agent_exec` spawn 原语 + scheduler（带并发/退避/限流/healthcheck）。
+
+## dynamic workflow 新能力（区别于旧"导航仪"）
+
+LTO 现在不只是"告诉你做什么"，它能**自己 spawn agent 编排**：
+
+- **agent fan-out**：`audit --auto-dispatch` 自动派 codex/pi/agy 三家异构审计方，并发跑、自动收口。底层 scheduler 处理并发上限、429 退避、healthcheck 剔除挂的 runner。
+- **对抗审计闭环**：审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词），`--collect` 校验异构（审者 ≠ 宿主家族）+ 抽 blocker 计数 + 判 ledger 收敛趋势。
+- **risk 对抗生成**：`--discover-risks` 派独立 agent 主动找你漏登记的风险点（source=risk-agent），对抗"自报完整性"。未审风险会被 closeout 闸门拦。
+- **pattern 路由（`lto next`）**：读状态 → 给宿主 LLM（就是你）一份富决策简报（目标 + task + 真实失败信息），让你推理下一段该 fan-out / adversarial / tournament / loop / linear。它自己零 LLM、零 key，只整理事实——**判断由你做**。无歧义时（如全 done 该 closeout）直接给可执行命令，`lto next --exec` 可跑；模糊时只出简报不替你猜。
+
+这是"带护栏的 dynamic workflow"：pattern 你运行时选，但跑在可恢复可审计的 6 阶段 + state.json + git 边界轨道上。
+
+## 自驱动：`lto autopilot`（受约束的自动推进）
+
+`lto autopilot` 让 LTO 自己读状态 → 决策 → 推进，而不只是给建议。三档：
+
+- **`--supervised`（默认）**：出富决策简报 + 路由建议，escalate（多 blocked / 方案分歧 / 高风险）回吐你这个宿主 LLM 推理。集成 stall 检测（同失败指纹反复 = 停滞，提示别空转）。
+- **`--supervised --auto-exec`（opt-in）**：对 pending task 的 **safe/reversible** 命令，在 **worktree 沙箱**里自动跑 + 落证据。
+- **`--decide`（opt-in，已实现）**：escalate 时 **opt-in** spawn 三方异构 agent 跑双轨收敛（direction 投票 / review union 合并），出一份收敛 brief 给你读——**决策权仍归你这个宿主**，工具只整理三方结论不替你拍板。配 `--decide-kind`（direction|review|both，默认从状态推断）选收敛轨、`--decide-budget` 给 token 预算上限（默认 50000；传 0 强制 needs_human 不 spawn）。`--autonomous`（escalate 自动 spawn 决策 + 自动执行回路）是下一期，当前**未实现**。
+
+安全是硬底线（autopilot 自动执行的命令全经 `worktree_exec` 沙箱）：
+- 每条自动执行的命令在**独立 git worktree 副本**里跑——`rm -rf` 再狠也只炸可弃的 worktree，主工作树/系统/家目录毫发无损。
+- 执行环境隔离 HOME + 剥离 git 凭据——读不到 `~/.ssh`，`git push` 无凭据推不动。
+- 危险命令（`rm -rf` / `git push` / `DROP` / `sudo` / `curl|sh` / 绝对路径逃逸 / 解释器 `-c -e` / 执行脚本文件）一律 **HELD = 不执行，回吐人确认**。
+- 同命令失败 ≥3 次自动跳过（不空转烧额度）；无推进则退回只出简报。
+- `--autonomous`（escalate 时 spawn 决策 agent 真全自动）是**下一期**，当前未实现。
+
+```bash
+$L autopilot --supervised               # 只出决策简报，回吐你判断（最安全）
+$L autopilot --supervised --auto-exec    # 安全子步骤自动在沙箱跑，危险的停下问你
+```
+
+## 给人看的回顾：`lto recap`（对抗"人忘了在做什么"）
+
+长任务跑几天后，**人**会忘了当初要做什么、为什么、跑这么久在干嘛——这是人类侧的 goal drift。`resume` 是给 **AI** 拉上下文的（git head / task id）；`recap` 是给 **人** 看的回顾，用人话答六个问题：
+
+```
+$L recap
+```
+```
+╭─ LTO Recap ─ 给人看的回顾（不是给 AI 看的状态）
+│ 你当初要做什么 ── 重构登录模块，消除空指针
+│ 为什么要做 ────── 线上空指针崩溃，影响登录（lto start --why 记录的）
+│ 跑了多久 ──────── 11 天，中间最长停了 168 小时（约 7 天）
+│ 已经做到哪 ────── 已完成 3 项：定位空指针、加判空、补测试
+│ 还剩什么 ──────── 1 项卡住（集成测试偶发失败）。算做完的标准：全测试绿 + code review 过
+│ 现在轮到你 ────── 决定怎么处理那 1 个卡住的任务
+╰─ run: ...
+```
+
+数据来自 `state.json`。开 run 时用 `lto start --why "..." --done-when "..."` 记录"为什么"和"做完的标准"，recap 才答得全；不记也能用（缺的字段温和提示补）。`resume` 检测到距上次活动 >24 小时时，会主动提示你跑 `recap`。
+
+## 最小跑通流程（照着做）
+
+```bash
+L="python3 <skill-root>/scripts/lto_run.py --repo ."
+
+# 1. 开工，记下目标
+$L start --goal "重构登录模块，消除空指针" --host <你这家:codex/pi/agy/claude>
+
+# 2. 加任务（task 是 runner/next/audit 的操作对象，先建出来）
+$L task-add --task-id T1 --title "给 login 加判空" --command "pytest tests/test_auth.py -x"
+
+# 3. 干活：执行 task + 落证据
+$L runner --task-id T1 --kind test --command "pytest tests/test_auth.py -x" --note "验证空指针修复"
+
+# 4. 高风险？派异构对抗审计（使用内置 delegate）
+$L audit --auto-dispatch        # 自动派 ≠ 你这家的审计方
+#   runtime 不可用：$L audit  然后按提示手动派，再 $L audit --collect <reply-dir>
+
+# 5. 开始写代码前，先看 entry evidence（不自动批准，仍要人拍板）
+$L check --to implementation
+
+# 6. 迷路了？问 LTO 下一步
+$L next                          # 给你决策简报或下一步命令建议
+
+# 7. 收尾前可先预查 required evidence
+$L check --to closed --strict
+
+# 8. 收尾
+$L closeout --summary "登录模块重构完成，空指针已修，异构审计收敛"
+```
+
+跨 session 回来：直接 `$L resume`，它把目标和进度念给你听。
+
+如果你在多 runtime / 多项目之间接手，先试：
+
+```bash
+$L memory resume --project <repo-key>
+```
+
+它会尝试查 artifact-memory sink；没装或没配置时不会失败成硬阻塞，
+而是明确 warning 后降级读取本地 `.lto`。注意：`memory resume` 只读，不会覆盖
+本地 `.lto/current` 或 `state.json`。本地 `.lto` 永远是真源。
+
+想看会写入记忆层的内容，先 dry-run：
+
+```bash
+$L memory export --run-id <run-id> --dry-run
+```
+
+它只输出 redacted JSON，不联网。只有显式 `$L memory publish` 才需要配置
+`MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 或其他兼容 sink 配置。
+
+## hook：让你别忘了用 LTO
+
+hook 是 commit/deploy/closeout 前的边界闸门，提醒你"测过了吗 / 审过了吗 / 有没有没解决的 block"。详见 `hooks.md`。
+
+**hook 是 opt-in**（2026-06-03 改）：`lto start --install-hooks` 才装进 `.git/hooks`，且检测到 husky / pre-commit framework / 已有自定义 hook 会跳过不覆盖。默认不装——LTO 不擅自动你的 git。
+
+## 还想深入
+
+| 想了解 | 读 |
+|---|---|
+| 完整命令手册 + add-task | `run-state-workflow.md` |
+| 执行循环器（runner/judge/parallel/pipeline）细节 | `execution-loop.md` |
+| 在 codex/pi/agy 当宿主的专项坑 | `cross-runtime-host-notes.md` |
+| 审计收敛逻辑 | `audit-convergence.md` |
+| 边界 hook 配置 | `hooks.md` |
+| 分享给朋友 / 项目级注入 | `sharing-guide.md` |
+| LTO 是什么、为什么这么设计 | `../SKILL.md` |

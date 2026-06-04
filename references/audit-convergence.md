@@ -27,11 +27,11 @@
   结论:     采纳(怎么修) / 否决(证伪依据)
 ```
 
-**实证记录（W1/W3）**：
-- agy「superseded_by 索引劣化」→ 单方独占 → 亲查 schema 无此 index + 生产实测 0.19s → **否决**。
-- pi「forced 加 X-lite」→ 单方建议 → 核验 forced 必命中 authoritative，X-lite 退化 no-op 且现状更安全 → **否决**。
-- codex「supersedes 未去重 / 未绑实际 experience」→ 两方收敛 → 亲核代码确认 → **采纳**，HashSet 去重 + INSERT…SELECT FROM experience。
-- agy「存量无伴生对象降级空转」→ 单方高置信 → 亲核 X-lite 真值表确认 NULL authority 退化 FALSE → **采纳**，降级前兜底 INSERT established。
+**示例记录**：
+- agy「新增索引会拖慢写入」→ 单方独占 → 亲查 schema 无此 index + staging 压测无劣化 → **否决**。
+- pi「强制 fallback 会吞掉异常」→ 单方建议 → 核验错误路径已有显式 fail-fast 且 fallback 不覆盖该分支 → **否决**。
+- codex「去重缺失 / 未绑定实际记录」→ 两方收敛 → 亲核代码确认 → **采纳**，补唯一键 + 写入前校验关联存在。
+- agy「存量记录缺字段导致新逻辑空转」→ 单方高置信 → 亲核真值表确认 NULL 分支确实跳过 → **采纳**，上线前 backfill。
 
 ## 三、反弹处理
 
@@ -42,4 +42,6 @@
 
 起草 spec 时，把自己嗅到「可能空转 / 可能接不上」的点，显式写进 spec 的「待审点」清单，让三方**严判**而不是替自己圆场。
 
-实证：W3 spec 第一轮特意让三方严判「方案 Z 的 superseded_by 隐藏会不会让降级空转」+「D0 低频下接通有无真实价值」+「连续第五次 premature 是否成立」。三方 100% 判方案 Z 空转 → 升级 X-lite。
+示例：spec 第一轮特意让三方严判「新字段缺失时是否空转」+
+「低频功能是否值得现在接通」+「连续追加范围是否 premature」。三方一致判
+方案空转 → 回到最小可用子集。
