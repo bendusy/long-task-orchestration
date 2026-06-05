@@ -57,6 +57,9 @@ $L plugin eval plugins/deep-agent-profiles --json  # static eval-pack validation
 $L plugin mount plugins/deep-agent-profiles
 # Real runtime eval design: references/plugin-real-eval-runner.md
 
+# 隐私自检（默认只报告；--delete 逐项输入 delete 才删）
+scripts/privacy_self_check.sh --repo .
+
 # 边界闸门 + 收尾
 $L hook pre-commit
 $L closeout --summary "做了什么，验证了什么"   # 自动生成 CHANGELOG.md
@@ -105,5 +108,6 @@ $L audit --collect replies/
 - [references/onboarding.md](./references/onboarding.md) — **给 agent 读一份就懂怎么装载 LTO**
 - [references/workflow-playbook.md](./references/workflow-playbook.md) — host agent 的 playbook 调度先验
 - [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md) — plugin 真实世界 eval-run 设计边界（sub-LTO-run compiler）
+- [references/privacy-self-check.md](./references/privacy-self-check.md) — 本机 AI coding 隐私自检与逐项确认清理
 - [references/sharing-guide.md](./references/sharing-guide.md) — 怎么装依赖、怎么给朋友用、项目级注入
 - [references/cross-runtime-host-notes.md](./references/cross-runtime-host-notes.md) — 不同 AI 工具当宿主的具体用法

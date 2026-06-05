@@ -1,5 +1,23 @@
 # Changelog
 
+## Privacy self-check script with confirmed cleanup
+
+- **Run ID**: `20260605-091834-privacy-self-check-script-with-confirmed-849b6fcd`
+- **Closed**: 2026-06-05T09:24:56+08:00
+- **Summary**: Added privacy self-check script with dry-run default, per-item delete confirmation, gitignore protections, docs, and smoke coverage.
+
+### Tasks
+
+- ✅ **T1**: Design privacy checker (done)
+  - ✅ [manual] manual: PASS
+- ✅ **T2**: Implement privacy checker (done)
+  - ✅ [test] test: PASS
+- ✅ **T3**: Add docs and smoke coverage (done)
+  - ✅ [test] test: PASS
+- ✅ **T4**: Validate and push (done)
+  - ✅ [test] test: PASS
+
+
 ## Plugin real eval runner with real-world evidence
 
 - **Run ID**: `20260604-233201-plugin-real-eval-runner-with-real-world--ef2b67a1`
