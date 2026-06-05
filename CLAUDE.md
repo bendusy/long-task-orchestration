@@ -81,7 +81,7 @@ Do not build a Cockpit UI. Strengthen CLI/file primitives that help the host pav
 
 ### 7. Run logs are tuning fuel
 
-LTO must preserve structured run telemetry for future tuning:
+LTO should preserve structured run telemetry for future tuning; event/telemetry files are a planned Phase 1 capability, not current implementation yet:
 
 - append-only `events.jsonl` style run log;
 - derived `telemetry.json` snapshots;
@@ -89,7 +89,7 @@ LTO must preserve structured run telemetry for future tuning:
 - finding/issue/decision provenance;
 - budget/time/quality signals.
 
-Logs must pass ingress redaction before write. They reference artifacts, not inline raw transcripts, secrets, private source contents, or absolute private paths. `telemetry.json` persists derived signals only; route-like recommendations belong in ephemeral `next` briefs, not persistent telemetry.
+When implemented, logs must pass ingress redaction before write. They reference artifacts, not inline raw transcripts, secrets, private source contents, or absolute private paths. `telemetry.json` persists derived signals only; route-like recommendations belong in ephemeral `next` briefs, not persistent telemetry.
 
 ### 8. External viewpoints enter as hypotheses
 
@@ -103,12 +103,8 @@ No direct core changes from article authority.
 
 ### 9. Typed shared workspace, not PM platform
 
-Absorb Cockpit-like ideas as typed workspace primitives, not as a coordinator daemon:
+Absorb Cockpit-like ideas as typed workspace primitives, not as a coordinator daemon. Current implemented primitives are `Task`, `AgentJob`, `AgentResult`, and `Artifact`; the following are future typed workspace targets, not current state fields or CLI commands yet:
 
-- Task;
-- AgentJob;
-- AgentResult;
-- Artifact;
 - Finding;
 - Issue;
 - ResearchNote;
@@ -118,7 +114,7 @@ Absorb Cockpit-like ideas as typed workspace primitives, not as a coordinator da
 - WorkerObservation;
 - Barrier.
 
-Workers may produce proposed findings/reports/research artifacts. Host/LTO gates decide what becomes accepted issue/decision/state.
+Workers may produce proposed findings/reports/research artifacts today as normal artifacts. Future LTO gates may decide what becomes accepted issue/decision/state.
 
 ### 10. Privacy is part of control
 

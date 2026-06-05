@@ -52,7 +52,7 @@ backlog 层 (research-absorbed-backlog 等)
 没有 memory-flow，或还没指定 memory-flow 凭据/库映射时，先用脚本写 ADR：
 
 ```bash
-python3 skills/long-task-orchestration/scripts/write_decision.py \
+python3 scripts/write_decision.py \
   --repo . \
   --run-id <id> \
   --title "why keep wrapper opt in" \

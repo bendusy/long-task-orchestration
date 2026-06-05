@@ -1,5 +1,7 @@
 # Plugin real eval runner design
 
+> **STATUS: Future design — `lto plugin eval-run` is not implemented.** Current plugin runtime support stops at `plugin eval` (static validation), `render-profile`, `source-note`, and `mount`.
+
 > `plugin eval-run` is not a new workflow engine. It is a compiler from data-only plugin eval packs into normal LTO runs, evidence artifacts, runner jobs, judge reports, and human promotion decisions.
 
 ## 1. Design invariant

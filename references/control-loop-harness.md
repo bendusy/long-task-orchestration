@@ -1,5 +1,7 @@
 # LTO control-loop harness spec
 
+> **STATUS: Design spec — not yet implemented.** Phase 0/0.5 is this reviewed specification. Phase 1 passive `events.jsonl` / `telemetry.json` logging is not implemented yet. Sections defining Issue/Finding/Claim/Decision/Barrier describe future typed workspace targets, not current CLI behavior.
+
 > LTO is not an agent UI, not a PM replacement, and not a marketplace of workflows. LTO is a control harness for long AI-agent work: observe state, detect drift, limit unsafe actions, improve flow, reduce waste, and preserve evidence for future tuning.
 
 ## 1. Purpose
@@ -438,7 +440,7 @@ Telemetry is derived signal only. It must not persist `control_recommendations` 
 
 This spec does not require UI. Typed objects live in files and briefs.
 
-### 6.1 Issue
+### 6.1 Issue (future typed workspace object; not implemented)
 
 ```json
 {
@@ -458,13 +460,15 @@ This spec does not require UI. Typed objects live in files and briefs.
 }
 ```
 
-Closeout gate:
+Future closeout gate (not implemented):
 
 ```text
 open/accepted critical or high issue -> closeout refused unless waived with reason + human approval.
 ```
 
-### 6.2 Finding
+Current closeout gates use existing state/risk/blocker/audit-ledger checks; there is no Issue object gate yet.
+
+### 6.2 Finding (future typed workspace object; not implemented)
 
 ```json
 {
@@ -481,7 +485,7 @@ open/accepted critical or high issue -> closeout refused unless waived with reas
 
 Findings are claims. Issues are accepted work/risk items.
 
-### 6.3 Research note / Claim / Hypothesis
+### 6.3 Research note / Claim / Hypothesis (future typed workspace object; not implemented)
 
 ```json
 {
@@ -495,7 +499,7 @@ Findings are claims. Issues are accepted work/risk items.
 }
 ```
 
-### 6.4 Decision
+### 6.4 Decision (future typed workspace object; not implemented)
 
 ```json
 {

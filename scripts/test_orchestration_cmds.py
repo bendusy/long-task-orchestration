@@ -9,7 +9,7 @@ parallel/pipeline 暂不做（YAGNI）。memory 覆盖 export/resume/publish
 边界，防止 artifact-memory 第一片回归。
 
 跑法：
-  cd skills/long-task-orchestration/scripts && python3 test_orchestration_cmds.py
+  cd scripts && python3 test_orchestration_cmds.py
 """
 
 from __future__ import annotations

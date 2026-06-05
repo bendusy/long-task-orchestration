@@ -14,7 +14,7 @@ LTO 不替你写代码，也不替你选完整路径。host agent 仍然是 plan
 ## 快速开始
 
 ```bash
-L="python3 skills/long-task-orchestration/scripts/lto_run.py"
+L="python3 scripts/lto_run.py"
 # 装过 scripts/install.sh 且 lto 在 PATH 后可用：L="lto"
 
 # 开一个长任务（记下为什么做、做完的标准——recap 会用到）
@@ -73,7 +73,7 @@ $L self-test                   # LTO 自检
 $L audit --auto-dispatch
 
 # 手工（没装 agent-delegate 时）：自己派工，回复存一个目录再收口
-AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
+AD="scripts/delegate/runners"
 $AD/codex.sh 方案.md replies/reply-codex.md 300 &
 $AD/agy.sh   方案.md replies/reply-agy.md   300 &
 wait
@@ -87,7 +87,7 @@ $L audit --collect replies/
 - **git push 永不自动**：任何 autopilot 档位，push / 部署 / 删库等不可逆操作都停下来等人确认。
 - **hook 默认不装**：`lto start --install-hooks` 才装（opt-in，撞 husky/pre-commit 会跳过）；auto-commit 也默认关。
 - **autopilot 当前只到 supervised**：`--supervised`（出 brief）和 `--auto-exec`（worktree 沙箱跑 safe 子步骤）已实现；`--autonomous`（spawn 决策 agent 全自动）是下一期，未实现。
-- **自动执行有沙箱**：`--auto-exec` 的命令全在独立 git worktree 副本里跑，`rm -rf` 再狠也只炸可弃的 worktree，主工作树/系统/凭据毫发无损。
+- **自动执行有沙箱**：`--auto-exec` 的命令在独立 git worktree 副本和隔离 HOME 中跑，可保护主工作树和常规凭据；这不是 OS chroot，仍靠危险命令拦截、路径校验和人工闸门兜底。
 - **外部观点先进插件**：文章/方法论先收录为 source note，再做 experimental path plugin + eval；验证前不进 core。
 
 ## 什么情况不要用

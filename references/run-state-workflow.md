@@ -5,11 +5,11 @@ of chat-memory coordination. The script is a thin dispatcher to `lto/commands/`.
 
 ## Start
 
-Inside `agent-skills`, run from the repo root:
+Inside the repository, run from the root:
 
 ```bash
 # minimal: state.json + run-state.md (default)
-python3 skills/long-task-orchestration/scripts/lto_run.py start \
+python3 scripts/lto_run.py start \
   --goal "short task goal" \
   --host codex \
   --request "original user request" \
@@ -17,7 +17,7 @@ python3 skills/long-task-orchestration/scripts/lto_run.py start \
   --done-when "how you'll know it's finished (recap data source)"
 
 # with audit ledger (only INITIALISES the ledger; run `audit` to fill+converge it)
-python3 skills/long-task-orchestration/scripts/lto_run.py start \
+python3 scripts/lto_run.py start \
   --goal "spec audit task" \
   --host codex \
   --with-audit
@@ -30,10 +30,10 @@ python3 skills/long-task-orchestration/scripts/lto_run.py start \
 opt-in (default off). `--with-audit` only creates `audit-ledger.md`; the actual
 adversarial audit + convergence runs via the `audit` command.
 
-When the target repo is not `agent-skills`, call this script by absolute path:
+When the target repo is not current directory, call this script by absolute path:
 
 ```bash
-python3 <repo>/skills/long-task-orchestration/scripts/lto_run.py \
+python3 <repo>/scripts/lto_run.py \
   --repo /path/to/target/repo \
   start --goal "short task goal" --host codex
 ```
@@ -80,7 +80,7 @@ current phase. Then run it via `runner --task-id T1 --command "..."`.
 Recover from a previous session:
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py resume
+python3 scripts/lto_run.py resume
 ```
 
 Prints a context capsule (phase, tasks, last failure, next action).
@@ -102,16 +102,16 @@ Use memory projection only when you want cross-runtime/cross-project discovery:
 
 ```bash
 # Pure local, redacted JSON. No network, no ANIMEM required.
-python3 skills/long-task-orchestration/scripts/lto_run.py memory export \
+python3 scripts/lto_run.py memory export \
   --run-id <run-id> --dry-run
 
 # Try memory-flow/ANIMEM discovery, then always print local-first capsule.
 # If no sink is configured, prints a warning and degrades to local .lto.
-python3 skills/long-task-orchestration/scripts/lto_run.py memory resume \
+python3 scripts/lto_run.py memory resume \
   --project agent-skills --run-id <run-id>
 
 # Explicit publish only. Requires MEMORY_FLOW_URL + MEMORY_FLOW_TOKEN or flags.
-python3 skills/long-task-orchestration/scripts/lto_run.py memory publish \
+python3 scripts/lto_run.py memory publish \
   --run-id <run-id>
 ```
 
@@ -133,8 +133,8 @@ local files win.
 Probe environment health (stdout only, no file):
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py preflight
-python3 skills/long-task-orchestration/scripts/lto_run.py preflight --record  # also write to state.json
+python3 scripts/lto_run.py preflight
+python3 scripts/lto_run.py preflight --record  # also write to state.json
 ```
 
 ## Runner
@@ -142,7 +142,7 @@ python3 skills/long-task-orchestration/scripts/lto_run.py preflight --record  # 
 Execute a single task and auto-record evidence:
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py runner \
+python3 scripts/lto_run.py runner \
   --task-id T1 \
   --kind test \
   --command "pytest tests/test_auth.py -x" \
@@ -163,13 +163,13 @@ Read-only review of runner output, outputs YAML verdict:
 
 ```bash
 # Review entire phase
-python3 skills/long-task-orchestration/scripts/lto_run.py judge --phase implementation
+python3 scripts/lto_run.py judge --phase implementation
 
 # Review single high-risk task
-python3 skills/long-task-orchestration/scripts/lto_run.py judge --task-id T5
+python3 scripts/lto_run.py judge --task-id T5
 
 # Rerun recorded tests
-python3 skills/long-task-orchestration/scripts/lto_run.py judge --phase implementation --rerun-tests
+python3 scripts/lto_run.py judge --phase implementation --rerun-tests
 ```
 
 Saves verdict to `.lto/<run-id>/judge/judge-<phase>-<ts>.yaml`.
@@ -182,12 +182,12 @@ Updates `gates.last_reviewed_head`.
 Boundary gate checks for irreversible actions:
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py hook pre-commit
-python3 skills/long-task-orchestration/scripts/lto_run.py hook pre-deploy
-python3 skills/long-task-orchestration/scripts/lto_run.py hook pre-closeout
+python3 scripts/lto_run.py hook pre-commit
+python3 scripts/lto_run.py hook pre-deploy
+python3 scripts/lto_run.py hook pre-closeout
 
 # Force override
-python3 skills/long-task-orchestration/scripts/lto_run.py hook pre-commit --force --reason "docs-only"
+python3 scripts/lto_run.py hook pre-commit --force --reason "docs-only"
 ```
 
 Environment variable `LTO_HOOK_MODE` controls pre-commit behavior:
@@ -198,11 +198,11 @@ Environment variable `LTO_HOOK_MODE` controls pre-commit behavior:
 ## Check
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py check
-python3 skills/long-task-orchestration/scripts/lto_run.py check --strict
-python3 skills/long-task-orchestration/scripts/lto_run.py check --to implementation
-python3 skills/long-task-orchestration/scripts/lto_run.py check --to closed --strict
-python3 skills/long-task-orchestration/scripts/lto_run.py check --to implementation --json
+python3 scripts/lto_run.py check
+python3 scripts/lto_run.py check --strict
+python3 scripts/lto_run.py check --to implementation
+python3 scripts/lto_run.py check --to closed --strict
+python3 scripts/lto_run.py check --to implementation --json
 ```
 
 Validates state.json integrity, git HEAD anchor, dirty worktree, handoff
@@ -233,7 +233,7 @@ other host runtimes can parse it directly.
 ## Closeout
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py closeout \
+python3 scripts/lto_run.py closeout \
   --summary "what changed and how it was verified" \
   --next-action "none"
 ```
@@ -254,7 +254,7 @@ These batch-run **shell commands** (not agent fan-out — same names as
 pi-dynamic-workflows but different semantics).
 
 ```bash
-L="python3 skills/long-task-orchestration/scripts/lto_run.py"
+L="python3 scripts/lto_run.py"
 
 # parallel: run many tasks' shell verify commands concurrently, record evidence
 $L parallel --phase implementation --concurrency 4 --command "pytest -x"
@@ -334,7 +334,7 @@ store the full repo-relative path.
 ## Decision Records
 
 ```bash
-python3 skills/long-task-orchestration/scripts/write_decision.py \
+python3 scripts/write_decision.py \
   --repo . \
   --run-id <id> \
   --title "why keep wrapper opt in" \
@@ -351,7 +351,7 @@ artifact manifest. It does not call memory-flow directly.
 ## Self-Test
 
 ```bash
-python3 skills/long-task-orchestration/scripts/lto_run.py self-test
+python3 scripts/lto_run.py self-test
 ```
 
 Covers: start, resume, check, preflight, hook pre-commit, closeout, and

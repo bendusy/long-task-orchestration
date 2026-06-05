@@ -34,7 +34,7 @@ LTO 的入口是一个 Python 脚本：
 ```
 `<skill-root>` 取决于你怎么装的 skill：
 - 软链装载（推荐）：`~/.agents/skills/long-task-orchestration/`（codex/agy 标准路径）或 `~/.claude/skills/long-task-orchestration/`（claude）。
-- 仓库内直接用：`<repo>/skills/long-task-orchestration/scripts/lto_run.py`。
+- 仓库内直接用：`<repo>/scripts/lto_run.py`。
 
 装载方式（在 agent-skills 仓库根）：
 ```bash

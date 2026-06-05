@@ -52,7 +52,7 @@
 | `lto_run.py start` | 建状态文件（state.json + run-state.md；audit/deploy 加 audit-ledger；deploy 再落 preflight 快照） | `--goal --host --profile{minimal\|audit\|deploy}` [--with-audit] | `.lto/<run-id>/` | `python3 scripts/lto_run.py start --goal X` |
 | `lto_run.py resume` | 跨 session 断点恢复 | `[--run-id]` | 上下文胶囊 + state.json 更新 | `python3 scripts/lto_run.py resume` |
 | `lto_run.py check` | 校验状态完整+git 锚定+收敛趋势；可附 phase-entry 证据报告 | `[--run-id] [--strict] [--to implementation\|closed] [--json]` | WARN/ERROR + `OK <dir>`；phase evidence；rc 0/1 | `python3 scripts/lto_run.py check --to implementation --strict` |
-| `write_decision.py` | 生成 ADR 决策记录，更新 state.user_decisions，并登记 `decision_record` artifact | `--repo --run-id --title --context --decision --consequences [--slug]` | `docs/decisions/YYYY-MM-DD-<slug>.md` + manifest entry | `python3 skills/long-task-orchestration/scripts/write_decision.py --run-id <id> --title "..." ...` |
+| `write_decision.py` | 生成 ADR 决策记录，更新 state.user_decisions，并登记 `decision_record` artifact | `--repo --run-id --title --context --decision --consequences [--slug]` | `docs/decisions/YYYY-MM-DD-<slug>.md` + manifest entry | `python3 scripts/write_decision.py --run-id <id> --title "..." ...` |
 | `lto_run.py preflight` | 即时探活 stdout | `[--record]` | 环境健康报告 | `python3 scripts/lto_run.py preflight` |
 | `lto_run.py task-add` | 给当前 run 加一个 task（runner/next/audit 的操作对象） | `--task-id --title [--phase] [--command]` | state.json tasks 追加 + commands_run 记录 | `python3 scripts/lto_run.py task-add --task-id T1 --title "..."` |
 | `lto_run.py runner` | 单 task 执行+证据记录 | `--task-id --kind --command [--cwd] [--timeout]` | evidence + state.json 更新 | `python3 scripts/lto_run.py runner --task-id T1 --kind test --command "..."` |

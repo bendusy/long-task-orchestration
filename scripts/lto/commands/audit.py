@@ -601,7 +601,7 @@ def _build_brief(state: dict, targets: list[dict]) -> str:
 # ---------- 派工指令 ----------
 
 def _dispatch_hint(repo: Path, brief_path: Path, audit_dir: Path, auditors: list[str]) -> str:
-    triad = _find_triad()
+    triad = _find_triad(repo)
     rel_brief = brief_path.relative_to(repo) if _is_relative_to(brief_path, repo) else brief_path
     rel_replies = (audit_dir / "replies")
     rel_replies_str = rel_replies.relative_to(repo) if _is_relative_to(rel_replies, repo) else rel_replies
@@ -630,8 +630,9 @@ def _dispatch_hint(repo: Path, brief_path: Path, audit_dir: Path, auditors: list
     return "\n".join(lines)
 
 
-def _find_triad() -> Path | None:
+def _find_triad(repo: Path) -> Path | None:
     candidates = [
+        repo / "scripts" / "delegate" / "triad.sh",
         Path.home() / "Projects" / "agent-skills" / "skills" / "agent-delegate" / "scripts" / "triad.sh",
         Path.home() / ".agents" / "skills" / "agent-delegate" / "scripts" / "triad.sh",
     ]

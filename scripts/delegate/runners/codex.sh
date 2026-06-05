@@ -30,7 +30,7 @@ if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
 fi
 
 # Codex CLI flags change over time; probe exec help before relying on -C/-s/-o.
-if ! "$CODEX_BIN" exec --help >/dev/null 2>&1; then
+if ! "$CODEX_BIN" exec --help </dev/null >/dev/null 2>&1; then
   echo "codex runner: 'codex exec --help' failed; CLI unavailable or unauthenticated" >&2
   exit 127
 fi

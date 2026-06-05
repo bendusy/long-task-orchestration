@@ -35,6 +35,7 @@ def main() -> int:
 
     # 1. Project instructions and SKILL.md parse
     claude_md = SKILL_DIR / "CLAUDE.md"
+    claude_txt = ""
     errors += check(claude_md.exists(), "CLAUDE.md exists")
     if claude_md.exists():
         claude_txt = claude_md.read_text(encoding="utf-8")
@@ -196,6 +197,46 @@ def main() -> int:
         if path.exists():
             n_lines = len(path.read_text(encoding="utf-8").splitlines())
             errors += check(n_lines >= min_lines, f"reference {ref} has substance ({n_lines} lines)")
+
+    # 9. Doc/code consistency lint
+    md_files = list(SKILL_DIR.glob("*.md")) + list((SKILL_DIR / "references").glob("*.md"))
+    stale_path = "skills/long-task-orchestration/scripts"
+    for md_file in md_files:
+        if md_file.exists():
+            text = md_file.read_text(encoding="utf-8")
+            count = text.count(stale_path)
+            errors += check(
+                count == 0,
+                f"doc {md_file.relative_to(SKILL_DIR)} is clean of stale path '{stale_path}' (found {count} occurrences)",
+            )
+
+    readme = (SKILL_DIR / "README.md").read_text(encoding="utf-8")
+    errors += check('L="python3 scripts/lto_run.py"' in readme, "README quickstart uses standalone lto_run.py path")
+    errors += check((SCRIPTS_DIR / "lto_run.py").exists(), "README quickstart script exists")
+    errors += check((SCRIPTS_DIR / "delegate" / "triad.sh").exists(), "bundled triad.sh exists")
+    errors += check((SCRIPTS_DIR / "delegate" / "runners" / "healthcheck.sh").exists(), "bundled delegate runners exist")
+
+    help_result = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "lto_run.py"), "--help"],
+        capture_output=True, text=True, timeout=10,
+    )
+    match = re.search(r"\{([^}]+)\}", help_result.stdout)
+    actual_cmds = [x.strip() for x in match.group(1).split(",")] if match else []
+    claimed = re.search(r"(\d+)\s*命令薄入口", content)
+    if claimed:
+        errors += check(int(claimed.group(1)) == len(actual_cmds), f"SKILL.md command count matches help ({len(actual_cmds)})")
+
+    plugin_help = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "lto_run.py"), "plugin", "--help"],
+        capture_output=True, text=True, timeout=10,
+    ).stdout
+    errors += check("eval-run" not in plugin_help, "plugin eval-run is not advertised as implemented")
+    real_eval_doc = (SKILL_DIR / "references" / "plugin-real-eval-runner.md").read_text(encoding="utf-8")
+    errors += check("Future design" in real_eval_doc and "not implemented" in real_eval_doc, "plugin eval-run doc is marked future")
+
+    control_doc = (SKILL_DIR / "references" / "control-loop-harness.md").read_text(encoding="utf-8")
+    errors += check("Design spec" in control_doc and "not implemented" in control_doc, "control-loop harness doc is marked future spec")
+    errors += check("planned Phase 1 capability" in claude_txt, "CLAUDE.md qualifies events/telemetry as planned")
 
     # Summary
     if errors == 0:

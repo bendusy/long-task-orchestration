@@ -97,7 +97,7 @@ pi --export session.jsonl report.html  # 导出会话
 ```bash
 # ad 的 runner 脚本是语言无关的——任何能跑 bash 的宿主都能调
 # 统一接口：runner.sh <prompt_file> <reply_file> <timeout_sec>
-AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
+AD="scripts/delegate/runners"  # standalone repo; or set to your agent-delegate install path
 
 # pi 当宿主时：不派自己（同家族无交叉诊断）→ 派 codex + agy + claude
 $AD/codex.sh  /tmp/audit-brief.md /tmp/reply-codex.md  300 &
@@ -107,8 +107,8 @@ wait
 # pi 读三方 reply → 按 audit-convergence 综合（不投票、亲核源码）
 
 # 或用 triad.sh 一键派工（需 tmux）
-bash ~/Projects/agent-skills/skills/agent-delegate/scripts/triad.sh \
-  -p /tmp/audit-brief.md -r codex agy claude -t 300
+bash scripts/delegate/triad.sh \
+  -p /tmp/audit-brief.md -d /tmp/audit-replies -a "codex agy claude" -t 300
 ```
 
 **pi 当被审方（被其他宿主派工时）**：

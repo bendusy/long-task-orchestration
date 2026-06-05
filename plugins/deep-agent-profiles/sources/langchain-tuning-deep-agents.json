@@ -7,17 +7,17 @@
     {
       "id": "c1",
       "text": "Harness profiles vary prompts, tools, middleware, subagents, and skills per model/provider.",
-      "status": "supported"
+      "status": "unverified"
     },
     {
       "id": "c2",
       "text": "Model-specific profiles improved a tau2-bench subset by roughly 10-20 points in reported examples.",
-      "status": "reported_by_source"
+      "status": "unverified"
     },
     {
       "id": "c3",
       "text": "Codex benefits from prompt/tool conventions such as apply_patch, shell_command, and batching independent reads/searches.",
-      "status": "reported_by_source"
+      "status": "unverified"
     }
   ],
   "hypotheses": [

@@ -43,7 +43,7 @@ class Scheduler:
     Parameters
     ----------
     repo:
-        Repository root.  Default runners_dir is repo/skills/agent-delegate/scripts/runners/.
+        Repository root. Default runners_dir is bundled repo/scripts/delegate/runners/ when present, with legacy skill-path fallback.
     max_concurrency:
         Max simultaneous jobs in flight (ThreadPoolExecutor workers).
     max_total_agents:
@@ -76,9 +76,9 @@ class Scheduler:
         if runners_dir is not None:
             self.runners_dir = Path(runners_dir).resolve()
         else:
-            self.runners_dir = (
-                self.repo / "skills" / "agent-delegate" / "scripts" / "runners"
-            ).resolve()
+            bundled = self.repo / "scripts" / "delegate" / "runners"
+            legacy = self.repo / "skills" / "agent-delegate" / "scripts" / "runners"
+            self.runners_dir = (bundled if bundled.exists() else legacy).resolve()
 
     # -- helpers -----------------------------------------------------------
 
@@ -543,6 +543,14 @@ exit 0
 
     repo = tmpdir / "repo"
     repo.mkdir()
+
+    # Regression: standalone release repo defaults to bundled scripts/delegate/runners.
+    bundled = repo / "scripts" / "delegate" / "runners"
+    bundled.mkdir(parents=True)
+    (bundled / "healthcheck.sh").write_text("#!/usr/bin/env bash\necho []\n", encoding="utf-8")
+    (bundled / "healthcheck.sh").chmod(0o755)
+    sched_default = Scheduler(repo=repo)
+    assert sched_default.runners_dir == bundled.resolve(), sched_default.runners_dir
 
     sched = Scheduler(repo=repo, max_concurrency=2, max_total_agents=50, runners_dir=runners_dir)
 

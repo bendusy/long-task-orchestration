@@ -50,7 +50,7 @@ bash scripts/install.sh --check
 
 - wrapper 带 `# agent-skills managed lto wrapper` sentinel；重装只覆盖托管文件。
 - 如果同名 `lto` 已存在但没有 sentinel，安装按冲突退出 2，不覆盖用户文件。
-- wrapper 内部指向当前 checkout 的 `skills/long-task-orchestration/scripts/lto_run.py`，仓库移动后重跑安装。
+- wrapper 内部指向当前 checkout 的 `scripts/lto_run.py`，仓库移动后重跑安装。
 - 如果 `$HOME/.local/bin` 不在 `PATH`，安装会 warning；可用 `LTO_BIN_DIR=/your/bin` 改落点。
 - wrapper 透传参数，跨 repo 可用 `lto --repo /path/to/repo check` 或 `lto check --repo /path/to/repo`。
 
@@ -91,7 +91,7 @@ EOF
 
 # ===== 第 3 步：pi 通过 agent-delegate runner 派工 =====
 # agent-delegate 的 runner 是独立 shell 脚本，任何宿主可调
-AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
+AD="scripts/delegate/runners"  # standalone repo; or set to your agent-delegate install path
 
 # 派 codex (OpenAI)，后台跑
 $AD/codex.sh /tmp/lto-audit-brief.md /tmp/lto-reply-codex.md 300 &
@@ -171,7 +171,7 @@ bash skills/agent-delegate/scripts/triad.sh \
 若未安装 wrapper，用绝对路径替代：
 
 ```bash
-python3 <repo>/skills/long-task-orchestration/scripts/lto_run.py \
+python3 <repo>/scripts/lto_run.py \
   --repo . check
 ```
 

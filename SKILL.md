@@ -90,7 +90,7 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 **一键编排（推荐）**：LTO 扫高风险 task、写审计简报、给派工指令、收口判收敛。下面命令默认从 `agent-skills` 仓库根目录运行；装过 `scripts/install.sh` 且 `lto` 在 `PATH` 后，可把 `$LTO` 换成 `lto`。LTO 只编排不自审（harness 不是被审/写码方），派工交给 agent-delegate，强制「审者 ≠ 你这个 host」：
 
 ```bash
-LTO="python3 skills/long-task-orchestration/scripts/lto_run.py"
+LTO="python3 scripts/lto_run.py"
 
 # 全自动（推荐，装了 agent-delegate）：扫高风险 task → 自动派异构三方 → 收口判收敛
 $LTO audit --auto-dispatch
@@ -109,7 +109,7 @@ $LTO audit --collect .lto/<run-id>/audit/replies     # 派完收口
 
 **手动派工（没装 agent-delegate 时）**：
 ```bash
-AD=~/Projects/agent-skills/skills/agent-delegate/scripts/runners
+AD="scripts/delegate/runners"  # standalone repo; use your agent-delegate install path if running elsewhere
 $AD/codex.sh  方案.md 回复-codex.md  300 &
 $AD/agy.sh    方案.md 回复-agy.md    300 &
 $AD/claude.sh 方案.md 回复-claude.md 300 &
@@ -126,7 +126,7 @@ wait  # 等它们都跑完
 每轮审完，把这一轮的大问题数量填进 ledger（`.lto/<run-id>/audit-ledger.md` 的 Round Summary 表，仅 `--with-audit` 或 `--profile audit|deploy` 时生成），然后让脚本替你判收敛：
 
 ```bash
-python3 skills/long-task-orchestration/scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
+python3 scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
 ```
 
 它会打出一行 `verdict:`——数量降到 0 是 CONVERGED（收敛了，可以收尾），还在降但没到 0 是 CONVERGING（继续修），数量反弹是 REBOUND、卡在原地不动（`--strict`）是 STALLED，这俩它会喊停，让你别自我感觉良好地往下冲。
@@ -178,7 +178,7 @@ $LTO memory publish --run-id <run-id>           # 只有显式 publish 才要求
 用一个文件记住当前状态：
 ```bash
 # 开始（--why/--done-when 记下为什么做、做完的标准，recap 会用到）
-LTO="python3 skills/long-task-orchestration/scripts/lto_run.py"
+LTO="python3 scripts/lto_run.py"
 
 $LTO start --goal "做用户登录" \
   --why "降低登录失败率" --done-when "失败率<5%，三端覆盖"
@@ -235,12 +235,12 @@ $LTO closeout --summary "做了什么，验证了什么"
 ## Resources
 
 **入口与文档**
-- `scripts/lto_run.py` — 16 命令薄入口（分发到 `lto/commands/`）
+- `scripts/lto_run.py` — 18 命令薄入口（分发到 `lto/commands/`）
 - `scripts/write_decision.py` — ADR-first 决策落盘 helper（写 `docs/decisions/` + state + artifact manifest）
 - `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper
 - `references/onboarding.md` — **给 agent 读一份就懂怎么装载 LTO**（跨 runtime）
 - `references/workflow-playbook.md` — `review/debug/migration/claim-verify/research` 调度先验
-- `references/run-state-workflow.md` — 16 命令详细用法手册
+- `references/run-state-workflow.md` — 18 命令详细用法手册
 - `references/execution-loop.md` — runner/judge/parallel/pipeline + agent 执行层
 - `references/hooks.md` — pre-commit/pre-deploy/pre-closeout 边界 hook（opt-in）
 - `references/sharing-guide.md` — 怎么装、怎么给朋友用、项目级注入

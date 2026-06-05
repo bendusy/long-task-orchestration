@@ -1,5 +1,24 @@
 # Changelog
 
+## Docs and implementation consistency audit for control harness
+
+- **Run ID**: `20260605-151521-docs-and-implementation-consistency-audi-0a4228a4`
+- **Closed**: 2026-06-05T15:33:57+08:00
+- **Summary**: Ran doc/implementation consistency triad audit and fixed standalone paths, future-spec banners, delegate wiring, source-note claim status, smoke doc-lint, and scheduler default runner path.
+
+### Tasks
+
+- ✅ **T1**: Run local consistency scan (done)
+  - ❌ [review] review: FAIL
+  - ✅ [review] review: PASS
+- ✅ **T2**: Run triad doc audit (done)
+  - ✅ [review] review: PASS
+- ✅ **T3**: Synthesize findings (done)
+  - ✅ [manual] manual: PASS
+- ✅ **T4**: Apply safe corrections (done)
+  - ✅ [test] test: PASS
+
+
 ## Control-loop harness spec with run telemetry
 
 - **Run ID**: `20260605-145906-control-loop-harness-spec-with-run-telem-b783ec00`
