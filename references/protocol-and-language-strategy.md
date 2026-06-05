@@ -93,6 +93,45 @@ Protocol rules:
    - test fixture;
    - backwards-compatibility behavior.
 
+## `interventions.jsonl` schema (v1)
+
+One JSON object per line, append-only.  This is the authoritative field
+reference; code docstrings defer to it.
+
+| field | type | nullable | source | redaction class | notes |
+|---|---|---|---|---|---|
+| `schema_version` | int | no | tool | none | currently `1`; adding optional fields does not bump it |
+| `event_id` | int | no | tool | none | 1-based, per-run sequence |
+| `at` | string | no | tool | none | ISO timestamp |
+| `type` | enum | no | tool | none | `human_intervention` \| `intervention_candidate` \| `avoided_intervention` |
+| `category` | enum | no | caller | none | whitelisted; see `_ALLOWED_CATEGORIES` |
+| `source` | string | no | caller | cleaned | short label, e.g. `lto closeout` |
+| `reason` | string | no | caller | cleaned | one-line human-readable cause |
+| `meaningful` | bool | no | caller | none | **author-asserted label, not a measurement** |
+| `avoidable` | bool | no | caller | none | **author-asserted label, not a measurement** |
+| `preventable` | bool | no | caller | none | **author-asserted label, not a measurement** |
+| `actor` | enum | yes | tool | whitelist | `runner` \| `gate` \| `operator`; primary cross-run group-by key |
+| `gate` | string | yes | tool | cleaned | gate name, e.g. `closeout`, `judge` |
+| `details` | object | no | caller | cleaned | **enums/numbers/bools only — no free text, diffs, or commands** |
+| `dedupe_key` | string | yes | caller | cleaned | repeat appends with same key return the existing event |
+
+"cleaned" = secrets redacted, `/Users/...` and `/home/...` paths redacted,
+whitespace collapsed, truncated to 500 chars.
+
+### Hard rules (CI must enforce these)
+
+1. **`details` carries only enums, numbers, and booleans.** No free text, no
+   diffs, no command lines, no source bodies.  Free-form context goes in
+   `reason` (which is cleaned), not `details`.
+2. **A new `category` is not mergeable without a fixture.** Every category in
+   `_ALLOWED_CATEGORIES` must have a conformance fixture exercising it.
+3. **`meaningful` / `avoidable` / `preventable` are author labels, not metrics.**
+   They are the caller's assertion at write time.  Downstream (briefs,
+   aggregation, future Go reimpl) must not weight them as objective truth.
+   They are retained as-is until real multi-run data proves whether they carry
+   signal beyond `actor`; if they don't, they collapse to a single `blame`
+   enum (`system_should_prevent` | `human_judgment_required`).
+
 ## Minimum protocol checklist before any rewrite
 
 Do not start a Go/Rust/TS rewrite until these are true:

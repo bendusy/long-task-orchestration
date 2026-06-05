@@ -234,6 +234,10 @@ def test_closeout_force_intervention(repo: Path) -> None:
     events = (repo / ".lto" / run_id / "interventions.jsonl").read_text(encoding="utf-8")
     ok("human_intervention" in events and "force_closeout" in events,
        "closeout_force: logs force closeout intervention")
+    ev = next(json.loads(l) for l in events.splitlines()
+              if l.strip() and json.loads(l).get("category") == "force_closeout")
+    ok(ev.get("actor") == "operator" and ev.get("gate") == "closeout",
+       f"closeout_force: event carries actor/gate facts (got actor={ev.get('actor')}, gate={ev.get('gate')})")
 
 
 def test_recap(repo: Path) -> None:

@@ -19,6 +19,9 @@ _ALLOWED_CATEGORIES = {
     "dirty_closeout_blocked",
     "superseded_blocker",
 }
+# actor is a *fact* (who triggered this), not a judgement.  It is the primary
+# group-by key for cross-run aggregation, so it is whitelisted.
+_ALLOWED_ACTORS = {"runner", "gate", "operator"}
 _SECRET_RE = re.compile(
     r"(sk-[A-Za-z0-9_-]{12,}|sk-ant-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|"
     r"AKIA[0-9A-Z]{16}|-----BEGIN [^-]*PRIVATE KEY-----|"
@@ -38,6 +41,8 @@ def append(
     meaningful: bool,
     avoidable: bool,
     preventable: bool,
+    actor: str | None = None,
+    gate: str | None = None,
     details: dict[str, Any] | None = None,
     dedupe_key: str | None = None,
 ) -> dict[str, Any]:
@@ -45,11 +50,22 @@ def append(
 
     If dedupe_key already exists in this run log, return the existing event and
     avoid inflating counts on repeated judge/closeout calls.
+
+    ``actor`` ("runner" | "gate" | "operator") and ``gate`` (the gate name) are
+    *facts* used for cross-run group-by, not judgements.  They are optional for
+    backwards compatibility: old events without them still load.
+
+    ``meaningful`` / ``avoidable`` / ``preventable`` are author-asserted labels
+    set by the caller, NOT measurements.  Downstream must not treat them as
+    objective truth or weight them as metrics.  See the schema doc in
+    references/protocol-and-language-strategy.md.
     """
     if type not in _ALLOWED_TYPES:
         raise ValueError(f"invalid intervention type: {type}")
     if category not in _ALLOWED_CATEGORIES:
         raise ValueError(f"invalid intervention category: {category}")
+    if actor is not None and actor not in _ALLOWED_ACTORS:
+        raise ValueError(f"invalid intervention actor: {actor}")
 
     path = repo / ".lto" / run_id / "interventions.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +87,12 @@ def append(
         "preventable": bool(preventable),
         "details": _clean_obj(details or {}),
     }
+    # Optional fact fields: only written when provided, to keep old/new events
+    # uniform and avoid a wall of nulls.
+    if actor is not None:
+        event["actor"] = actor
+    if gate is not None:
+        event["gate"] = _clean(gate)
     if dedupe_key:
         event["dedupe_key"] = _clean(dedupe_key)
 

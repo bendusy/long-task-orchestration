@@ -74,6 +74,8 @@ def run(args: argparse.Namespace) -> int:
             meaningful=False,
             avoidable=True,
             preventable=True,
+            actor="gate",
+            gate="closeout",
             details={"suggested_action": "commit_or_stash_then_closeout_no_changelog"},
         )
         raise SystemExit(
@@ -127,6 +129,8 @@ def run(args: argparse.Namespace) -> int:
             meaningful=True,
             avoidable=False,
             preventable=False,
+            actor="operator",
+            gate="closeout",
             details={"phase": state.get("current_phase", "unknown")},
             dedupe_key=f"closeout:force:{run_id}",
         )

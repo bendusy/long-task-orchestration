@@ -144,6 +144,8 @@ def _build_verdict(tasks: list[dict], test_results: list[dict], head: str, args:
                     meaningful=False,
                     avoidable=True,
                     preventable=True,
+                    actor="gate",
+                    gate="judge",
                     details={"task_id": task_id, "blocker_reason": reason},
                     dedupe_key=f"judge:superseded:{task_id}:{reason}:{head}",
                 )
