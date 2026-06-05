@@ -58,7 +58,7 @@
 | `lto_run.py runner` | 单 task 执行+证据记录 | `--task-id --kind --command [--cwd] [--timeout]` | evidence + state.json 更新 | `python3 scripts/lto_run.py runner --task-id T1 --kind test --command "..."` |
 | `lto_run.py judge` | 只读审查+YAML verdict | `[--phase] [--task-id] [--rerun-tests]` | `.lto/<id>/judge/*.yaml` | `python3 scripts/lto_run.py judge --phase implementation` |
 | `lto_run.py hook` | 外部边界闸门 | `pre-commit\|pre-deploy\|pre-closeout [--force --reason]` | rc 0/1 | `python3 scripts/lto_run.py hook pre-commit` |
-| `lto_run.py closeout` | 标 closed + 出 handoff | `--summary [--next-action] [--force]` | `handoff.md`；rc 0/非0 | `python3 scripts/lto_run.py closeout --summary "…"` |
+| `lto_run.py closeout` | 标 closed + 出 handoff，默认写 CHANGELOG；`--no-changelog` 用于已提交后的行政收尾 | `--summary [--next-action] [--force] [--no-changelog]` | `handoff.md`；rc 0/非0 | `python3 scripts/lto_run.py closeout --summary "…"` |
 | `audit_ledger_check.py` | 判 blocker 单调收敛 | `<ledger.md>` 或 `--run-id` `[--strict]` | verdict + rc 0/1/2 | `python3 scripts/audit_ledger_check.py .lto/<id>/audit-ledger.md` |
 | `lto_run.py self-test` | 离线自检 start→resume→check→closeout→hook | — | `SELFTEST OK`；rc 0/1 | `python3 scripts/lto_run.py self-test` |
 | `audit_ledger_check.py self-test` | 离线自检四档收敛 | — | `LEDGERCHECK SELFTEST OK`；rc 0/1 | `python3 scripts/audit_ledger_check.py self-test` |

@@ -62,7 +62,8 @@ scripts/privacy_self_check.sh --repo .
 
 # 边界闸门 + 收尾
 $L hook pre-commit
-$L closeout --summary "做了什么，验证了什么"   # 自动生成 CHANGELOG.md
+$L closeout --summary "做了什么，验证了什么"   # 默认生成 CHANGELOG.md
+$L closeout --summary "行政收尾" --no-changelog  # 已提交后收尾，避免新 tracked dirt
 $L self-test                   # LTO 自检
 ```
 

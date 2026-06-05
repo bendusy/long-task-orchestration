@@ -200,7 +200,8 @@ $LTO autopilot --supervised   # 出 brief 回吐你判断
 #   --decide：escalate 时派三方异构 agent 讨论收敛（opt-in 烧 token，决策权仍归你）
 
 # 完成
-$LTO closeout --summary "做了什么，验证了什么"
+$LTO closeout --summary "做了什么，验证了什么"      # 默认写 CHANGELOG.md
+$LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 tracked dirt
 ```
 
 > **resume vs recap**：resume 喂 AI（git head / task 状态，防 compact 后丢上下文）；

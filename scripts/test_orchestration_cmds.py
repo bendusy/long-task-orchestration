@@ -148,6 +148,52 @@ def test_judge(repo: Path) -> None:
     ok(judge_dir.exists() and any(judge_dir.glob("judge-*.yaml")),
        "judge: verdict yaml written to judge/ dir")
 
+    # Old runs may contain stale blockers on a task later marked done. Judge is
+    # read-only, but should classify them as superseded instead of forcing
+    # humans to edit state.json by hand.
+    state = json.loads(sp.read_text(encoding="utf-8"))
+    state["tasks"][0]["blockers"] = [{"reason": "old failed attempt", "at": "earlier"}]
+    state["tasks"][0]["evidence"] = [{"kind": "test", "rc": 0, "summary": "later pass"}]
+    sp.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    r = lto("judge")
+    ok(r.returncode == 0 and "verdict: pass" in r.stdout,
+       f"judge: stale blocker on done+pass task is superseded (got {r.stdout[-220:]})")
+    ok("Superseded Blockers" in r.stdout and "old failed attempt" in r.stdout,
+       "judge: reports superseded blockers without failing verdict")
+
+
+def test_runner_blocker_supersede(repo: Path) -> None:
+    """runner success archives old blockers instead of requiring human cleanup."""
+    lto = _lto_factory(repo)
+    r = lto("start", "--goal", "runner supersede e2e", "--host", "codex", "--force")
+    ok(r.returncode == 0, f"runner_supersede: start rc=0 (got {r.returncode})")
+    run_id = r.stdout.strip().split("/")[-1]
+    r = lto("task-add", "--task-id", "T1", "--title", "flaky command", "--command", "false")
+    ok(r.returncode == 0, f"runner_supersede: task-add rc=0 (got {r.returncode})")
+    r = lto("runner", "--task-id", "T1", "--kind", "test", "--command", "false")
+    ok(r.returncode != 0, "runner_supersede: failing command blocks task")
+    r = lto("runner", "--task-id", "T1", "--kind", "test", "--command", "true")
+    ok(r.returncode == 0, f"runner_supersede: passing rerun rc=0 (got {r.returncode})")
+    state = _state_of(repo, run_id)
+    t1 = next(t for t in state.get("tasks", []) if t.get("id") == "T1")
+    ok(t1.get("status") == "done", f"runner_supersede: task done (got {t1.get('status')})")
+    ok(t1.get("blockers") == [], f"runner_supersede: active blockers cleared (got {t1.get('blockers')})")
+    ok(t1.get("resolved_blockers") and t1["resolved_blockers"][0].get("resolved_by") == "runner_success",
+       "runner_supersede: old blocker archived with provenance")
+
+
+def test_closeout_no_changelog(repo: Path) -> None:
+    """--no-changelog supports post-commit/admin closeout without tracked dirt."""
+    lto = _lto_factory(repo)
+    r = lto("start", "--goal", "closeout no changelog e2e", "--host", "codex", "--force")
+    ok(r.returncode == 0, f"closeout_no_changelog: start rc=0 (got {r.returncode})")
+    r = lto("closeout", "--summary", "done", "--next-action", "none", "--no-changelog")
+    ok(r.returncode == 0, f"closeout_no_changelog: closeout rc=0 (got {r.returncode}; {r.stderr[:120]})")
+    ok(not (repo / "CHANGELOG.md").exists(), "closeout_no_changelog: does not create CHANGELOG.md")
+    dirty = subprocess.check_output(["git", "status", "--porcelain", "--", "."], cwd=repo, text=True)
+    tracked_dirty = [line for line in dirty.splitlines() if " .lto" not in line and " .lto/" not in line]
+    ok(not tracked_dirty, f"closeout_no_changelog: no tracked working-tree dirt (got {tracked_dirty})")
+
 
 def test_recap(repo: Path) -> None:
     """recap 基本路径：rc=0 + 六问输出齐全（给人看的回顾）。"""
@@ -234,6 +280,8 @@ def main() -> int:
         repo = _make_repo(Path(tmp))
         test_task_add(repo)
         test_judge(repo)
+        test_runner_blocker_supersede(repo)
+        test_closeout_no_changelog(repo)
         test_recap(repo)
         test_memory(repo)
 

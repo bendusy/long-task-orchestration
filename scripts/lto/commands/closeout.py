@@ -126,14 +126,16 @@ def run(args: argparse.Namespace) -> int:
         summary="human-readable state at closeout", tags=["state"],
     )
 
-    # Generate changelog
-    _write_changelog(repo, run_id, state, args)
-    if (repo / "CHANGELOG.md").exists():
-        af.register_path(
-            repo, run_id, repo / "CHANGELOG.md", kind="changelog",
-            producer="lto.commands.closeout", state=state,
-            summary="repo changelog updated", tags=["closeout", "changelog"],
-        )
+    # Generate changelog unless caller is doing a post-commit administrative
+    # closeout and wants to avoid creating new tracked dirt.
+    if not args.no_changelog:
+        _write_changelog(repo, run_id, state, args)
+        if (repo / "CHANGELOG.md").exists():
+            af.register_path(
+                repo, run_id, repo / "CHANGELOG.md", kind="changelog",
+                producer="lto.commands.closeout", state=state,
+                summary="repo changelog updated", tags=["closeout", "changelog"],
+            )
 
     # Write handoff.md from manifest, then register and rewrite once so the
     # handoff itself appears in the artifact list too.
@@ -158,7 +160,7 @@ def run(args: argparse.Namespace) -> int:
     gs.auto_commit_lto(
         repo,
         f"lto: closeout {run_id[:8]}",
-        paths=[".lto", "CHANGELOG.md"],
+        paths=[".lto"] if args.no_changelog else [".lto", "CHANGELOG.md"],
         enabled=args.auto_commit,
     )
 
@@ -195,6 +197,8 @@ def add_parser(subparsers) -> None:
     p.add_argument("--next-action", default="none")
     p.add_argument("--blocked-by", default="none")
     p.add_argument("--allow-dirty", action="store_true")
+    p.add_argument("--no-changelog", action="store_true",
+                   help="skip CHANGELOG.md update for post-commit/admin closeout")
     p.add_argument("--auto-commit", action="store_true",
                    help="commit .lto + CHANGELOG.md (opt-in; default off, uses repo git identity)")
     p.add_argument("--force", action="store_true")

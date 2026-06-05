@@ -1,5 +1,17 @@
 # Changelog
 
+## Small robustness fixes to reduce meaningless intervention
+
+- **Run ID**: `20260605-154647-small-robustness-fixes-to-reduce-meaning-6cee79d0`
+- **Summary**: Added stale-blocker superseding, read-only judge classification for old blockers, and `closeout --no-changelog` for post-commit/admin closeout without tracked dirt.
+
+### Changes
+
+- Runner success archives previous blockers into `resolved_blockers` and clears active blockers.
+- Judge treats blockers on done tasks with passing evidence as superseded instead of failing the verdict.
+- Closeout supports `--no-changelog` and avoids including `CHANGELOG.md` in auto-commit hints when skipped.
+- E2E tests cover blocker superseding and no-changelog closeout behavior.
+
 ## Docs and implementation consistency audit for control harness
 
 - **Run ID**: `20260605-151521-docs-and-implementation-consistency-audi-0a4228a4`

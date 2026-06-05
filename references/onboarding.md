@@ -73,7 +73,7 @@ python3 <skill-root>/scripts/lto_run.py --repo <目标仓库> <子命令> [参�
 | `autopilot --supervised [--auto-exec]` | **自驱动**：读状态出决策简报，可在 worktree 沙箱自动跑 safe 子步骤 | 编排 |
 | `recap` | **给人看的回顾**：你当初要做啥/为什么/跑了多久/做到哪/还剩啥/现在轮到你 | 回顾 |
 | `hook <pre-commit\|pre-deploy\|pre-closeout>` | 边界闸门检查 | 闸门 |
-| `closeout --summary "..."` | 闭环 + 写 handoff + CHANGELOG | 收尾 |
+| `closeout --summary "..."` | 闭环 + 写 handoff + CHANGELOG；已提交后可加 `--no-changelog` 避免新 tracked dirt | 收尾 |
 | `self-test` | 离线自检（验证 LTO 自己没坏） | — |
 
 > `runner/parallel/pipeline` 编排的是 **shell 命令**（pytest/lint 批处理）。

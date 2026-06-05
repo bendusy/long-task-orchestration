@@ -51,6 +51,24 @@ def run(args: argparse.Namespace) -> int:
 
     ended_at = evidence.get("ended_at", st.iso_now())
     if rc == 0:
+        # A later passing runner evidence supersedes earlier command blockers.
+        # Keep provenance, but remove the active brake so humans do not have to
+        # hand-edit state.json after a successful rerun.
+        if task.get("blockers"):
+            resolved = task.setdefault("resolved_blockers", [])
+            for blocker in task.get("blockers", []):
+                item = dict(blocker)
+                item.update({
+                    "resolved_at": ended_at,
+                    "resolved_by": "runner_success",
+                    "superseded_by": {
+                        "kind": evidence.get("kind"),
+                        "command": evidence.get("command"),
+                        "ended_at": ended_at,
+                    },
+                })
+                resolved.append(item)
+            task["blockers"] = []
         task["status"] = "done"
         state["gates"]["last_tested_head"] = evidence.get("head_after", gs.git_head(repo))
     else:
