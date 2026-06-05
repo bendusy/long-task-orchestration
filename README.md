@@ -9,7 +9,9 @@ LTO 不替你写代码，也不替你选完整路径。host agent 仍然是 plan
 4. **写代码**——runner 执行 + judge 审查 + 证据落盘
 5. **动态决策支持**——`next`/`autopilot` 整理事实、提供 safe action、必要时升级，最终路径由 host agent 判断
 6. **跨 session 回顾**——`recap` 用人话告诉你：做什么/为什么/跑多久/做到哪/还剩啥/现在轮到你
-7. **部署 + 收尾**——pre-deploy hook 闸门 + `closeout` 自动生成 CHANGELOG.md
+7. **少打扰人**——`interventions.jsonl` 记录 force、被拦 closeout、已避免的人手清理
+8. **越用越聪明**——先稳定 `.lto` 协议，再把真实 run 信号喂给 host agent 调优；Go shadow CLI 要等协议稳定
+9. **部署 + 收尾**——pre-deploy hook 闸门 + `closeout` 自动生成 CHANGELOG.md
 
 ## 快速开始
 

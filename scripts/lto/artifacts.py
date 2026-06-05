@@ -28,7 +28,7 @@ KNOWN_KINDS = {
     "decision_brief", "decision_reply", "decision_host_brief",
     "decision_record",
     "evidence_stdout", "evidence_stderr", "judge_verdict", "handoff",
-    "changelog", "preflight_snapshot", "other",
+    "changelog", "interventions", "preflight_snapshot", "other",
 }
 
 RUN_OUTSIDE_ALLOWLIST = {"CHANGELOG.md"}

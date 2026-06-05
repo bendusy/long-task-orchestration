@@ -8,11 +8,13 @@ from pathlib import Path
 from .. import state as st
 from .. import git_state as gs
 from .. import artifacts as af
+from .. import interventions as iv
 
 
 def run(args: argparse.Namespace) -> int:
     repo = args.repo.resolve()
     run_id = st.resolve_run_id(repo, args.run_id)
+    args.run_id_resolved = run_id
     state_path = repo / ".lto" / run_id / "state.json"
     state = st.load_state(state_path)
     if state is None:
@@ -129,8 +131,22 @@ def _build_verdict(tasks: list[dict], test_results: list[dict], head: str, args:
         task_id = task.get("id", "?")
         for blocker in blocker_state.get(task_id, {}).get("superseded", []):
             lines.append(f"- task: {task_id}")
-            lines.append(f"  reason: {blocker.get('reason', 'unknown')}")
+            reason = blocker.get('reason', 'unknown')
+            lines.append(f"  reason: {reason}")
             lines.append("  status: superseded_by_later_success")
+            if getattr(args, "run_id_resolved", None):
+                iv.append(
+                    args.repo.resolve(), args.run_id_resolved,
+                    type="avoided_intervention",
+                    category="superseded_blocker",
+                    reason=f"judge ignored stale blocker on done task {task_id}",
+                    source="lto judge",
+                    meaningful=False,
+                    avoidable=True,
+                    preventable=True,
+                    details={"task_id": task_id, "blocker_reason": reason},
+                    dedupe_key=f"judge:superseded:{task_id}:{reason}:{head}",
+                )
 
     lines.extend(["", "## Should Fix", "", "## Scope Drift", "", "## Residual Risks", ""])
     lines.append(f"next_action: {'fix_and_rerun' if has_failures or has_blockers else 'commit_allowed'}")

@@ -1,5 +1,19 @@
 # Changelog
 
+## Intervention log v0
+
+- **Run ID**: `20260605-171027-intervention-log-v0-for-reducing-meaning-50452529`
+- **Summary**: Added a privacy-safe intervention log for measuring avoidable human work before larger telemetry, and documented the protocol-first language roadmap.
+
+### Changes
+
+- Added `.lto/<run-id>/interventions.jsonl` with redacted, low-sensitivity events.
+- Judge logs avoided interventions when stale blockers are superseded by passing evidence.
+- Closeout logs dirty-tree intervention candidates and force-closeout human interventions.
+- Closeout prints and embeds an intervention summary in `handoff.md`.
+- Artifact manifest now recognizes `interventions` artifacts.
+- Added `references/protocol-and-language-strategy.md`: keep Python until protocol/conformance stabilizes; use Go later as shadow CLI; keep TypeScript for integration and Rust for narrow future components only.
+
 ## Refine closeout and stale-blocker workflow
 
 - **Run ID**: `20260605-170401-refine-lto-robustness-workflow-after-sta-414f38ec`

@@ -8,6 +8,7 @@ from pathlib import Path
 from .. import state as st
 from .. import git_state as gs
 from .. import artifacts as af
+from .. import interventions as iv
 
 from .audit import _is_high_risk
 
@@ -64,6 +65,17 @@ def run(args: argparse.Namespace) -> int:
     if not gs.is_git_repo(repo):
         raise SystemExit("closeout requires a git worktree")
     if gs.git_dirty(repo) and not args.allow_dirty:
+        iv.append(
+            repo, run_id,
+            type="intervention_candidate",
+            category="dirty_closeout_blocked",
+            reason="closeout blocked by dirty worktree outside .lto",
+            source="lto closeout",
+            meaningful=False,
+            avoidable=True,
+            preventable=True,
+            details={"suggested_action": "commit_or_stash_then_closeout_no_changelog"},
+        )
         raise SystemExit(
             "closeout refused: uncommitted changes outside .lto. "
             "Commit or stash code changes first; use --no-changelog after commit "
@@ -103,6 +115,22 @@ def run(args: argparse.Namespace) -> int:
                     "(run lto audit first, or use --force to override)"
                 )
 
+    # Force is a real human override. Log it before state changes so closeout
+    # reports the intervention in the handoff summary.
+    if args.force:
+        iv.append(
+            repo, run_id,
+            type="human_intervention",
+            category="force_closeout",
+            reason="operator used --force to bypass one or more closeout gates",
+            source="lto closeout",
+            meaningful=True,
+            avoidable=False,
+            preventable=False,
+            details={"phase": state.get("current_phase", "unknown")},
+            dedupe_key=f"closeout:force:{run_id}",
+        )
+
     # Update state
     head = gs.git_head(repo)
     branch = gs.git_branch(repo)
@@ -141,18 +169,27 @@ def run(args: argparse.Namespace) -> int:
                 summary="repo changelog updated", tags=["closeout", "changelog"],
             )
 
+    interventions_path = target_dir / "interventions.jsonl"
+    if interventions_path.exists():
+        af.register_path(
+            repo, run_id, interventions_path, kind="interventions",
+            producer="lto.commands.closeout", state=state,
+            summary="human intervention log", tags=["closeout", "interventions"],
+        )
+    intervention_summary = iv.render_summary(repo, run_id)
+
     # Write handoff.md from manifest, then register and rewrite once so the
     # handoff itself appears in the artifact list too.
     handoff_path = target_dir / "handoff.md"
     entries = af.load_manifest(repo, run_id, state=state).get("artifacts", [])
-    handoff_path.write_text(_build_handoff(run_id, state, args, head, branch, entries), encoding="utf-8")
+    handoff_path.write_text(_build_handoff(run_id, state, args, head, branch, entries, intervention_summary), encoding="utf-8")
     af.register_path(
         repo, run_id, handoff_path, kind="handoff",
         producer="lto.commands.closeout", state=state,
         summary="closeout handoff", tags=["closeout", "handoff"],
     )
     entries = af.load_manifest(repo, run_id, synthesize=False).get("artifacts", [])
-    handoff_path.write_text(_build_handoff(run_id, state, args, head, branch, entries), encoding="utf-8")
+    handoff_path.write_text(_build_handoff(run_id, state, args, head, branch, entries, intervention_summary), encoding="utf-8")
     af.register_path(
         repo, run_id, handoff_path, kind="handoff",
         producer="lto.commands.closeout", state=state,
@@ -170,12 +207,13 @@ def run(args: argparse.Namespace) -> int:
     )
 
     print(target_dir / "handoff.md")
+    print(intervention_summary)
     return 0
 
 
 def _build_handoff(
     run_id: str, state: dict, args: argparse.Namespace, head: str, branch: str,
-    entries: list[dict],
+    entries: list[dict], intervention_summary: str,
 ) -> str:
     header = "\n".join([
         "# LTO Handoff",
@@ -189,6 +227,7 @@ def _build_handoff(
         f"- blocked_by: {args.blocked_by}",
         f"- summary: {st.single_line(args.summary)}",
         f"- next_action: {st.single_line(args.next_action)}",
+        f"- intervention_summary: {intervention_summary}",
         "",
     ])
     ordered = sorted(entries, key=lambda e: (e.get("kind", ""), e.get("relative_path", "")))

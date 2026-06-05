@@ -160,6 +160,9 @@ def test_judge(repo: Path) -> None:
        f"judge: stale blocker on done+pass task is superseded (got {r.stdout[-220:]})")
     ok("Superseded Blockers" in r.stdout and "old failed attempt" in r.stdout,
        "judge: reports superseded blockers without failing verdict")
+    interventions = (repo / ".lto" / run_id / "interventions.jsonl").read_text(encoding="utf-8")
+    ok("avoided_intervention" in interventions and "superseded_blocker" in interventions,
+       "judge: logs avoided intervention for superseded blocker")
 
 
 def test_runner_blocker_supersede(repo: Path) -> None:
@@ -201,7 +204,36 @@ def test_closeout_no_changelog(repo: Path) -> None:
     ok(r.returncode != 0, "closeout_no_changelog: dirty tree still blocked")
     ok("Commit or stash code changes first" in (r.stderr + r.stdout),
        "closeout_no_changelog: dirty error gives actionable workflow")
+    run_id = (repo / ".lto" / "current").read_text(encoding="utf-8").strip()
+    interventions = (repo / ".lto" / run_id / "interventions.jsonl").read_text(encoding="utf-8")
+    ok("intervention_candidate" in interventions and "dirty_closeout_blocked" in interventions,
+       "closeout_no_changelog: logs dirty closeout intervention candidate")
     subprocess.run(["git", "checkout", "--", "README.md"], cwd=repo, capture_output=True)
+
+
+def test_closeout_force_intervention(repo: Path) -> None:
+    """--force is logged as a meaningful human intervention and summarized."""
+    lto = _lto_factory(repo)
+    r = lto("start", "--goal", "force intervention e2e", "--host", "codex", "--force")
+    ok(r.returncode == 0, f"closeout_force: start rc=0 (got {r.returncode})")
+    run_id = r.stdout.strip().split("/")[-1]
+    sp = repo / ".lto" / run_id / "state.json"
+    state = json.loads(sp.read_text(encoding="utf-8"))
+    state.setdefault("risk_points", []).append({
+        "id": "RP1", "source": "test", "claim": "force required",
+        "evidence_to_check": "none", "verified_by": "", "disposition": "open",
+    })
+    sp.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    r = lto("closeout", "--summary", "forced", "--no-changelog", "--force")
+    ok(r.returncode == 0, f"closeout_force: forced closeout rc=0 (got {r.returncode}; {r.stderr[:120]})")
+    ok("Interventions:" in r.stdout and "meaningful=1" in r.stdout,
+       f"closeout_force: prints intervention summary (got {r.stdout[-220:]})")
+    handoff = (repo / ".lto" / run_id / "handoff.md").read_text(encoding="utf-8")
+    ok("intervention_summary: Interventions:" in handoff,
+       "closeout_force: handoff includes intervention summary")
+    events = (repo / ".lto" / run_id / "interventions.jsonl").read_text(encoding="utf-8")
+    ok("human_intervention" in events and "force_closeout" in events,
+       "closeout_force: logs force closeout intervention")
 
 
 def test_recap(repo: Path) -> None:
@@ -291,6 +323,7 @@ def main() -> int:
         test_judge(repo)
         test_runner_blocker_supersede(repo)
         test_closeout_no_changelog(repo)
+        test_closeout_force_intervention(repo)
         test_recap(repo)
         test_memory(repo)
 

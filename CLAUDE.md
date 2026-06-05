@@ -79,7 +79,18 @@ Do not build a Cockpit UI. Strengthen CLI/file primitives that help the host pav
 - worker observations;
 - closeout gates.
 
-### 7. Run logs are tuning fuel
+### 7. Protocol before rewrite
+
+The `.lto/<run-id>/` file protocol is the product boundary. Do not rewrite LTO in Go/Rust/TS before protocol contracts, redaction rules, and conformance fixtures are stable.
+
+Current posture:
+
+- Python remains primary while protocol is changing.
+- Go is a later shadow-CLI candidate after conformance tests exist.
+- TypeScript is for wrappers/MCP/editor integration, not core control logic.
+- Rust is only for narrow future security/sandbox components.
+
+### 8. Run logs are tuning fuel
 
 LTO should preserve structured run telemetry for future tuning; event/telemetry files are a planned Phase 1 capability, not current implementation yet:
 
@@ -91,7 +102,7 @@ LTO should preserve structured run telemetry for future tuning; event/telemetry 
 
 When implemented, logs must pass ingress redaction before write. They reference artifacts, not inline raw transcripts, secrets, private source contents, or absolute private paths. `telemetry.json` persists derived signals only; route-like recommendations belong in ephemeral `next` briefs, not persistent telemetry.
 
-### 8. External viewpoints enter as hypotheses
+### 9. External viewpoints enter as hypotheses
 
 Articles, tweets, framework claims, and model-specific advice enter via:
 
@@ -101,7 +112,7 @@ source note -> unverified claim -> falsifiable hypothesis -> eval evidence -> pr
 
 No direct core changes from article authority.
 
-### 9. Typed shared workspace, not PM platform
+### 10. Typed shared workspace, not PM platform
 
 Absorb Cockpit-like ideas as typed workspace primitives, not as a coordinator daemon. Current implemented primitives are `Task`, `AgentJob`, `AgentResult`, and `Artifact`; the following are future typed workspace targets, not current state fields or CLI commands yet:
 
@@ -116,7 +127,7 @@ Absorb Cockpit-like ideas as typed workspace primitives, not as a coordinator da
 
 Workers may produce proposed findings/reports/research artifacts today as normal artifacts. Future LTO gates may decide what becomes accepted issue/decision/state.
 
-### 10. Privacy is part of control
+### 11. Privacy is part of control
 
 Telemetry and logs must be redaction-aware. Never commit `.lto/`, transcripts, feedback bundles, secrets, or private local paths.
 
@@ -130,6 +141,7 @@ Read these before changing related areas:
 - `references/plugin-boundary.md` — data-only plugin boundary.
 - `references/plugin-real-eval-runner.md` — real eval as sub-LTO-run compiler.
 - `references/privacy-self-check.md` — privacy scan and confirmed cleanup.
+- `references/protocol-and-language-strategy.md` — protocol-first learning loop and language roadmap.
 - `references/workflow-playbook.md` — host-agent playbook philosophy.
 
 ## Implementation posture
