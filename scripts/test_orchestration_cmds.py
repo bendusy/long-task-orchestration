@@ -194,6 +194,15 @@ def test_closeout_no_changelog(repo: Path) -> None:
     tracked_dirty = [line for line in dirty.splitlines() if " .lto" not in line and " .lto/" not in line]
     ok(not tracked_dirty, f"closeout_no_changelog: no tracked working-tree dirt (got {tracked_dirty})")
 
+    # If code is dirty, closeout should tell the operator the plain workflow:
+    # commit/stash first; then --no-changelog for admin closeout.
+    (repo / "README.md").write_text("dirty\n", encoding="utf-8")
+    r = lto("closeout", "--summary", "admin", "--no-changelog")
+    ok(r.returncode != 0, "closeout_no_changelog: dirty tree still blocked")
+    ok("Commit or stash code changes first" in (r.stderr + r.stdout),
+       "closeout_no_changelog: dirty error gives actionable workflow")
+    subprocess.run(["git", "checkout", "--", "README.md"], cwd=repo, capture_output=True)
+
 
 def test_recap(repo: Path) -> None:
     """recap 基本路径：rc=0 + 六问输出齐全（给人看的回顾）。"""

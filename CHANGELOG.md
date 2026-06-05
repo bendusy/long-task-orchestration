@@ -1,5 +1,17 @@
 # Changelog
 
+## Refine closeout and stale-blocker workflow
+
+- **Run ID**: `20260605-170401-refine-lto-robustness-workflow-after-sta-414f38ec`
+- **Summary**: Simplified judge blocker classification and made closeout dirty-tree errors point to the intended workflow: commit/stash code first, then use `--no-changelog` for admin closeout.
+
+### Changes
+
+- Collapsed judge stale-blocker helpers into one `active` / `superseded` classifier.
+- Reworded closeout dirty-tree refusal with direct operator guidance.
+- Reworded `--auto-commit` help so it stays correct when `--no-changelog` is used.
+- Added E2E coverage for actionable dirty-tree closeout guidance.
+
 ## Small robustness fixes to reduce meaningless intervention
 
 - **Run ID**: `20260605-154647-small-robustness-fixes-to-reduce-meaning-6cee79d0`

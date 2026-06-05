@@ -64,7 +64,11 @@ def run(args: argparse.Namespace) -> int:
     if not gs.is_git_repo(repo):
         raise SystemExit("closeout requires a git worktree")
     if gs.git_dirty(repo) and not args.allow_dirty:
-        raise SystemExit("closeout refused: uncommitted changes outside .lto")
+        raise SystemExit(
+            "closeout refused: uncommitted changes outside .lto. "
+            "Commit or stash code changes first; use --no-changelog after commit "
+            "for admin closeout without new tracked dirt."
+        )
 
     # Gate: already closed
     if state.get("current_phase") == "closed" and not args.force:
@@ -157,10 +161,11 @@ def run(args: argparse.Namespace) -> int:
 
     # Optionally commit produced artifacts (opt-in; default off — closeout writes
     # CHANGELOG.md and .lto, both the user's real files, so never commit silently)
+    closeout_paths = [".lto"] if args.no_changelog else [".lto", "CHANGELOG.md"]
     gs.auto_commit_lto(
         repo,
         f"lto: closeout {run_id[:8]}",
-        paths=[".lto"] if args.no_changelog else [".lto", "CHANGELOG.md"],
+        paths=closeout_paths,
         enabled=args.auto_commit,
     )
 
@@ -200,7 +205,7 @@ def add_parser(subparsers) -> None:
     p.add_argument("--no-changelog", action="store_true",
                    help="skip CHANGELOG.md update for post-commit/admin closeout")
     p.add_argument("--auto-commit", action="store_true",
-                   help="commit .lto + CHANGELOG.md (opt-in; default off, uses repo git identity)")
+                   help="commit generated closeout files (opt-in; default off, uses repo git identity)")
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=run)
 

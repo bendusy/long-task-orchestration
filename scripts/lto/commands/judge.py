@@ -94,10 +94,9 @@ def _build_verdict(tasks: list[dict], test_results: list[dict], head: str, args:
 
     # Determine overall verdict
     has_failures = any(r.get("result") != "pass" for r in test_results)
-    active_blockers_by_task = {t.get("id", "?"): _active_blockers(t) for t in tasks}
-    stale_blockers_by_task = {t.get("id", "?"): _superseded_blockers(t) for t in tasks}
+    blocker_state = {t.get("id", "?"): _classify_blockers(t) for t in tasks}
     has_blockers = any(
-        t.get("status") == "blocked" or active_blockers_by_task.get(t.get("id", "?"))
+        t.get("status") == "blocked" or blocker_state.get(t.get("id", "?"), {}).get("active")
         for t in tasks
     )
     verdict = "fail" if has_failures or has_blockers else "pass"
@@ -118,16 +117,18 @@ def _build_verdict(tasks: list[dict], test_results: list[dict], head: str, args:
 
     lines.extend(["", "## Must Fix"])
     for task in tasks:
-        for blocker in active_blockers_by_task.get(task.get("id", "?"), []):
-            lines.append(f"- task: {task['id']}")
+        task_id = task.get("id", "?")
+        for blocker in blocker_state.get(task_id, {}).get("active", []):
+            lines.append(f"- task: {task_id}")
             lines.append(f"  reason: {blocker.get('reason', 'unknown')}")
             if task.get("touched_files"):
                 lines.append(f"  files: {', '.join(task['touched_files'][:5])}")
 
     lines.extend(["", "## Superseded Blockers"])
     for task in tasks:
-        for blocker in stale_blockers_by_task.get(task.get("id", "?"), []):
-            lines.append(f"- task: {task['id']}")
+        task_id = task.get("id", "?")
+        for blocker in blocker_state.get(task_id, {}).get("superseded", []):
+            lines.append(f"- task: {task_id}")
             lines.append(f"  reason: {blocker.get('reason', 'unknown')}")
             lines.append("  status: superseded_by_later_success")
 
@@ -141,23 +142,16 @@ def _task_has_success(task: dict) -> bool:
     return any(ev.get("rc") == 0 for ev in task.get("evidence", []) or [])
 
 
-def _superseded_blockers(task: dict) -> list[dict]:
-    """Blockers on a done task with later passing evidence are stale brakes.
+def _classify_blockers(task: dict) -> dict[str, list[dict]]:
+    """Split blockers into active brakes vs superseded history.
 
     Judge remains read-only: runner clears blockers on new successes, but this
     classifier keeps old runs from requiring human state surgery.
     """
     blockers = list(task.get("blockers", []) or [])
     if task.get("status") == "done" and blockers and _task_has_success(task):
-        return blockers
-    return []
-
-
-def _active_blockers(task: dict) -> list[dict]:
-    blockers = list(task.get("blockers", []) or [])
-    if blockers and _superseded_blockers(task):
-        return []
-    return blockers
+        return {"active": [], "superseded": blockers}
+    return {"active": blockers, "superseded": []}
 
 
 def add_parser(subparsers) -> None:
