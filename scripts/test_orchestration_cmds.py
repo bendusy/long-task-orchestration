@@ -272,6 +272,101 @@ def test_recap(repo: Path) -> None:
        "recap: --artifacts includes manifest summary")
 
 
+def test_next_cross_run_friction(repo: Path) -> None:
+    """`lto next` surfaces recurring friction aggregated across runs.
+
+    Slice: next reads interventions.jsonl across all runs and prints a
+    cross-run advisory once a friction category recurs in >= 2 runs.
+    Threshold is by distinct run, so one run alone must NOT trigger it.
+    """
+    lto = _lto_factory(repo)
+
+    def _trigger_dirty_closeout(tag: str) -> str:
+        """Start a run, dirty the tree, attempt closeout (blocked → logs a
+        dirty_closeout_blocked candidate), then clean up. Returns run_id.
+
+        ``tag`` keeps run-ids distinct: the timestamp resolution is one second,
+        so two same-goal starts in the same second collide on run-id.
+        """
+        r = lto("start", "--goal", f"friction run {tag}", "--host", "codex", "--force")
+        ok(r.returncode == 0, f"friction: start rc=0 (got {r.returncode}; {r.stderr[:120]})")
+        run_id = r.stdout.strip().split("/")[-1]
+        (repo / "README.md").write_text("dirty-for-friction\n", encoding="utf-8")
+        r = lto("closeout", "--summary", "x", "--no-changelog")
+        ok(r.returncode != 0, "friction: dirty closeout blocked as expected")
+        subprocess.run(["git", "checkout", "--", "README.md"], cwd=repo, capture_output=True)
+        return run_id
+
+    # ── Run 1: one friction event. next must NOT yet show recurring advisory. ──
+    run1 = _trigger_dirty_closeout("alpha")
+    events = (repo / ".lto" / run1 / "interventions.jsonl").read_text(encoding="utf-8")
+    ok("dirty_closeout_blocked" in events, "friction: run1 logged candidate")
+
+    r = lto("next", "--run-id", run1)
+    ok(r.returncode == 0, f"friction: next rc=0 (got {r.returncode}; {r.stderr[:120]})")
+    ok("Recurring Friction" not in r.stdout,
+       "friction: single run does not trigger cross-run advisory (threshold>=2 runs)")
+
+    # ── Run 2: second distinct run with same friction → now it recurs. ──
+    run2 = _trigger_dirty_closeout("beta")
+    ok(run2 != run1, "friction: run2 is a distinct run")
+
+    r = lto("next", "--run-id", run2)
+    ok(r.returncode == 0, f"friction: next rc=0 after run2 (got {r.returncode})")
+    ok("Recurring Friction (cross-run)" in r.stdout,
+       f"friction: advisory appears after 2 runs (got tail: {r.stdout[-400:]})")
+    ok("dirty_closeout_blocked" in r.stdout and "seen in 2 runs" in r.stdout,
+       f"friction: advisory names category + run count (got tail: {r.stdout[-400:]})")
+    ok("Commit or stash code before closeout" in r.stdout,
+       "friction: advisory includes actionable hint")
+    ok("Advisory only" in r.stdout,
+       "friction: advisory explicitly marked non-authoritative")
+
+    # ── JSON surface carries the same structured signal. ──
+    r = lto("next", "--run-id", run2, "--json")
+    ok(r.returncode == 0, f"friction: next --json rc=0 (got {r.returncode})")
+    data = json.loads(r.stdout)
+    rf = data.get("recurring_friction", [])
+    ok(any(f.get("category") == "dirty_closeout_blocked" and f.get("runs") == 2 for f in rf),
+       f"friction: JSON recurring_friction carries category + runs (got {rf})")
+
+
+def test_next_cross_run_avoided_not_friction(repo: Path) -> None:
+    """avoided_intervention events (harness helping) must NOT trigger friction.
+
+    The harness silently cleaning stale blockers is help, not friction the
+    human should be nagged about. Even across many runs it stays out of the
+    Recurring Friction advisory.
+    """
+    lto = _lto_factory(repo)
+
+    def _trigger_superseded(tag: str) -> str:
+        r = lto("start", "--goal", f"avoided run {tag}", "--host", "codex", "--force")
+        ok(r.returncode == 0, f"avoided: start rc=0 (got {r.returncode})")
+        run_id = r.stdout.strip().split("/")[-1]
+        r = lto("task-add", "--task-id", "T1", "--title", "w", "--command", "echo hi")
+        ok(r.returncode == 0, f"avoided: task-add rc=0 (got {r.returncode})")
+        sp = repo / ".lto" / run_id / "state.json"
+        state = json.loads(sp.read_text(encoding="utf-8"))
+        state["tasks"][0]["status"] = "done"
+        state["tasks"][0]["blockers"] = [{"reason": "old fail", "at": "earlier"}]
+        state["tasks"][0]["evidence"] = [{"kind": "test", "rc": 0, "summary": "pass"}]
+        sp.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        r = lto("judge")  # logs avoided_intervention / superseded_blocker
+        ok(r.returncode == 0, f"avoided: judge rc=0 (got {r.returncode})")
+        return run_id
+
+    run1 = _trigger_superseded("alpha")
+    run2 = _trigger_superseded("beta")
+    events = (repo / ".lto" / run2 / "interventions.jsonl").read_text(encoding="utf-8")
+    ok("avoided_intervention" in events, "avoided: judge logged avoided_intervention")
+
+    r = lto("next", "--run-id", run2)
+    ok(r.returncode == 0, f"avoided: next rc=0 (got {r.returncode})")
+    ok("superseded_blocker" not in r.stdout,
+       "avoided: pure avoided_intervention does not surface as friction")
+
+
 def test_memory(repo: Path) -> None:
     """memory export/resume/publish 基本边界：redaction + degraded local-first + token error。"""
     lto = _lto_factory(repo)
@@ -326,6 +421,14 @@ def main() -> int:
         test_closeout_force_intervention(repo)
         test_recap(repo)
         test_memory(repo)
+
+    # Cross-run friction aggregation reads ALL runs in a repo's .lto/, so each
+    # of these gets a fresh isolated repo to avoid contamination from the
+    # interventions written by the tests above.
+    with tempfile.TemporaryDirectory() as tmp:
+        test_next_cross_run_friction(_make_repo(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_next_cross_run_avoided_not_friction(_make_repo(Path(tmp)))
 
     if FAIL:
         print(f"\n{len(FAIL)} FAILURES", file=sys.stderr)

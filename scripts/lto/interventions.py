@@ -119,6 +119,124 @@ def render_summary(repo: Path, run_id: str) -> str:
     )
 
 
+# ──────────────────── cross-run aggregation ────────────────────
+#
+# "越用越聪明" needs memory across runs, not just within one run.  A single
+# run's summary cannot answer "you have hit dirty-closeout 5 times".  These
+# helpers read every .lto/<run-id>/interventions.jsonl in the current repo
+# and aggregate by category.
+#
+# Privacy/scope: current repo only (no cross-repo aggregation).  Reads the
+# same already-redacted jsonl files; adds no new data surface.
+
+# Advice is keyed by category.  It is advisory text for the host agent, never
+# a command to obey.  Categories without advice still get counted.
+_FRICTION_ADVICE = {
+    "dirty_closeout_blocked": (
+        "Commit or stash code before closeout; use `--no-changelog` for "
+        "post-commit admin closeout."
+    ),
+    "force_closeout": (
+        "Repeated --force suggests a gate may be too strict, or these runs "
+        "are genuinely exceptional. Decide which; do not normalize --force."
+    ),
+    "superseded_blocker": (
+        "Stale blockers keep appearing on done tasks. This is the harness "
+        "auto-cleaning them — informational, no action needed."
+    ),
+}
+
+
+def aggregate_across_runs(repo: Path) -> dict[str, dict[str, Any]]:
+    """Aggregate intervention events across every run in this repo's .lto/.
+
+    Returns {category: {"runs": int, "events": int, "avoided": int,
+    "candidates": int, "human": int}} where ``runs`` counts distinct run-ids
+    that recorded at least one event in that category.
+    """
+    lto_root = repo / ".lto"
+    if not lto_root.is_dir():
+        return {}
+
+    by_cat: dict[str, dict[str, Any]] = {}
+    for run_dir in sorted(lto_root.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        try:
+            run_id = st.validate_run_id(run_dir.name)
+        except (ValueError, SystemExit):
+            continue  # skip "current" symlink target name / malformed dirs
+        seen_cats: set[str] = set()
+        for ev in read(repo, run_id):
+            cat = ev.get("category")
+            if not isinstance(cat, str):
+                continue
+            agg = by_cat.setdefault(
+                cat, {"runs": 0, "events": 0, "avoided": 0, "candidates": 0, "human": 0}
+            )
+            agg["events"] += 1
+            if cat not in seen_cats:
+                agg["runs"] += 1
+                seen_cats.add(cat)
+            etype = ev.get("type")
+            if etype == "avoided_intervention":
+                agg["avoided"] += 1
+            elif etype == "intervention_candidate":
+                agg["candidates"] += 1
+            elif etype == "human_intervention":
+                agg["human"] += 1
+    return by_cat
+
+
+def recurring_friction(repo: Path, *, min_runs: int = 2) -> list[dict[str, Any]]:
+    """Categories that caused friction across >= min_runs distinct runs.
+
+    Threshold is by distinct run count, not raw event count: repeated events
+    within one run are one recurring pattern, not many.  ``avoided`` events are
+    the harness helping (not friction the human should act on) and are excluded
+    from the friction trigger, though their count is still surfaced.
+    """
+    out: list[dict[str, Any]] = []
+    for cat, agg in aggregate_across_runs(repo).items():
+        # avoided_intervention means the harness silently helped — not friction
+        # the human needs to fix.  Only candidate/human events count toward the
+        # "you keep hitting this" trigger.
+        friction_runs = agg["candidates"] + agg["human"]
+        if agg["runs"] >= min_runs and friction_runs > 0:
+            out.append({
+                "category": cat,
+                "runs": agg["runs"],
+                "events": agg["events"],
+                "candidates": agg["candidates"],
+                "human": agg["human"],
+                "avoided": agg["avoided"],
+                "advice": _FRICTION_ADVICE.get(cat, ""),
+            })
+    out.sort(key=lambda x: (-x["runs"], -x["events"], x["category"]))
+    return out
+
+
+def render_cross_run_advisory(repo: Path, *, min_runs: int = 2) -> str:
+    """Markdown advisory for the host agent. Empty string if nothing recurs.
+
+    Advisory only: it reports evidence and a hint, it does not change routing.
+    """
+    friction = recurring_friction(repo, min_runs=min_runs)
+    if not friction:
+        return ""
+    lines = ["## Recurring Friction (cross-run)", ""]
+    lines.append(
+        "These intervention patterns recurred across multiple past runs in "
+        "this repo. Advisory only — evidence and a hint, not a routing order."
+    )
+    lines.append("")
+    for f in friction:
+        lines.append(f"- **{f['category']}** — seen in {f['runs']} runs ({f['events']} events)")
+        if f["advice"]:
+            lines.append(f"  - Hint: {f['advice']}")
+    return "\n".join(lines)
+
+
 def _next_event_id(path: Path) -> int:
     if not path.exists():
         return 1

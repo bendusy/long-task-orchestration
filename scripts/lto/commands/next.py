@@ -23,6 +23,7 @@ from typing import Any
 
 from .. import state as st
 from .. import git_state as gs
+from .. import interventions as iv
 from ..agent_job import Pattern
 from .audit import _is_high_risk
 
@@ -188,12 +189,16 @@ def _extract_failure_summary(task: dict, repo: Path) -> dict:
 
 # ──────────────────────── build_decision_brief ──────────────────────
 
-def build_decision_brief(facts: dict, state: dict) -> str:
+def build_decision_brief(facts: dict, state: dict, repo: Path | None = None) -> str:
     """Build structured Markdown decision brief for the host LLM.
 
     Lists current status, candidate actions (with pattern suggestions based on
     real failure information, not templates), and an explicit reminder that
     the host LLM must do the reasoning.
+
+    When ``repo`` is given, appends a cross-run "Recurring Friction" advisory
+    derived from interventions.jsonl across all runs in this repo.  Advisory
+    only — it never changes routing.
     """
     lines: list[str] = []
 
@@ -348,6 +353,13 @@ def build_decision_brief(facts: dict, state: dict) -> str:
             lines.append("   - Why: All tasks done, all gates clear, "
                           "worktree clean. Ready to close.")
         lines.append("")
+
+    # ── Recurring Friction (cross-run advisory) ──
+    if repo is not None:
+        advisory = iv.render_cross_run_advisory(repo)
+        if advisory:
+            lines.append(advisory)
+            lines.append("")
 
     # ── Footer ──
     lines.append("---")
@@ -511,11 +523,11 @@ def run(args: argparse.Namespace) -> int:
 
     # JSON output
     if args.json:
-        _print_json(facts, route_result, drift)
+        _print_json(facts, route_result, drift, iv.recurring_friction(repo))
         return 0
 
     # Print decision brief (always show facts to host LLM)
-    brief = build_decision_brief(facts, state)
+    brief = build_decision_brief(facts, state, repo)
     print(brief)
     print()
 
@@ -543,7 +555,8 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_json(facts: dict, route_result: dict, drift: str) -> None:
+def _print_json(facts: dict, route_result: dict, drift: str,
+                recurring_friction: list[dict] | None = None) -> None:
     output = {
         "drift": drift,
         "facts": {
@@ -551,6 +564,7 @@ def _print_json(facts: dict, route_result: dict, drift: str) -> None:
             # Omit large nested structures that would bloat JSON
         },
         "route": route_result,
+        "recurring_friction": recurring_friction or [],
     }
     print(json.dumps(output, indent=2, ensure_ascii=False))
 
