@@ -163,7 +163,7 @@ def main() -> int:
     for ref in [
         "audit-convergence.md", "codex-cli-control.md", "cross-runtime-host-notes.md",
         "decision-logging.md", "deploy-sequencing.md", "plugin-boundary.md",
-        "engineering-map.md", "long-loop-state.md",
+        "plugin-real-eval-runner.md", "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
         "validation-log.md", "workflow-playbook.md",
     ]:
@@ -176,7 +176,7 @@ def main() -> int:
     for ref in [
         "audit-convergence.md", "codex-cli-control.md", "cross-runtime-host-notes.md",
         "decision-logging.md", "deploy-sequencing.md", "plugin-boundary.md",
-        "engineering-map.md", "long-loop-state.md",
+        "plugin-real-eval-runner.md", "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
         "validation-log.md", "workflow-playbook.md",
     ]:

@@ -1,5 +1,24 @@
 # Changelog
 
+## Plugin real eval runner with real-world evidence
+
+- **Run ID**: `20260604-233201-plugin-real-eval-runner-with-real-world--ef2b67a1`
+- **Closed**: 2026-06-05T08:30:35+08:00
+- **Summary**: Optimized plugin real eval-run design as a sub-LTO-run compiler with critical source absorption, frozen evidence, metrics taxonomy, and promotion gates.
+
+### Tasks
+
+- ✅ **T1**: Design real eval contract (done)
+  - ❌ [manual] manual: FAIL
+  - ✅ [manual] manual: PASS
+- ✅ **T2**: Research triad design (done)
+  - ✅ [review] review: PASS
+- ✅ **T3**: Synthesize implementation plan (done)
+  - ✅ [manual] manual: PASS
+- ✅ **T4**: Validate design closeout (done)
+  - ✅ [test] test: PASS
+
+
 ## Plugin system phase 2 with render eval and triad audit
 
 - **Run ID**: `20260604-231007-plugin-system-phase-2-with-render-eval-a-7a1fa1c0`

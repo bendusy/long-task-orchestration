@@ -265,3 +265,15 @@ lto plugin mount plugins/deep-agent-profiles --approved-by host
 ```
 
 Current `eval` is deliberately static: it checks declared eval packs, profile references, metrics, and safety metadata. Real model A/B execution is a future layer and must run through normal LTO runner/audit primitives with evidence artifacts.
+
+## 12. Real eval runner boundary
+
+The future `plugin eval-run` must follow [`plugin-real-eval-runner.md`](./plugin-real-eval-runner.md): it is a **sub-LTO-run compiler**, not a new workflow engine.
+
+Design rules:
+
+- article/source claims stay `unverified` until turned into falsifiable hypotheses and frozen evidence cases;
+- live or historical evidence must be copied, hashed, and redacted before candidate jobs see it;
+- deterministic metrics and judged metrics must be separated;
+- parallel/swarm evaluation is opt-in, bounded, and only allowed for cases declaring `parallelizable=true`;
+- promotion remains human-gated and cannot be triggered by plugin metadata.
