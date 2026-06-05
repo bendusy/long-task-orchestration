@@ -107,6 +107,7 @@ $L audit --collect replies/
 - [SKILL.md](./SKILL.md) — 完整导航手册
 - [references/onboarding.md](./references/onboarding.md) — **给 agent 读一份就懂怎么装载 LTO**
 - [references/workflow-playbook.md](./references/workflow-playbook.md) — host agent 的 playbook 调度先验
+- [references/control-loop-harness.md](./references/control-loop-harness.md) — 控制论 harness：run logs / telemetry / 性能成本质量闭环
 - [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md) — plugin 真实世界 eval-run 设计边界（sub-LTO-run compiler）
 - [references/privacy-self-check.md](./references/privacy-self-check.md) — 本机 AI coding 隐私自检与逐项确认清理
 - [references/sharing-guide.md](./references/sharing-guide.md) — 怎么装依赖、怎么给朋友用、项目级注入

@@ -1,5 +1,24 @@
 # Changelog
 
+## Control-loop harness spec with run telemetry
+
+- **Run ID**: `20260605-145906-control-loop-harness-spec-with-run-telem-b783ec00`
+- **Closed**: 2026-06-05T15:12:31+08:00
+- **Summary**: Specified LTO control-loop harness principles, run logs, telemetry, privacy ingress, metric catalog, and Phase 1 passive logging plan after triad review.
+
+### Tasks
+
+- ✅ **T1**: Draft control harness spec (done)
+  - ✅ [manual] manual: PASS
+- ✅ **T2**: Run triad review (done)
+  - ✅ [review] review: PASS
+- ✅ **T3**: Synthesize review (done)
+  - ❌ [manual] manual: FAIL
+  - ✅ [manual] manual: PASS
+- ✅ **T4**: Validate and push (done)
+  - ✅ [test] test: PASS
+
+
 ## Privacy self-check script with confirmed cleanup
 
 - **Run ID**: `20260605-091834-privacy-self-check-script-with-confirmed-849b6fcd`

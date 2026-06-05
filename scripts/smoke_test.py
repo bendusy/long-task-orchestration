@@ -33,7 +33,16 @@ def check(condition: bool, msg: str) -> int:
 def main() -> int:
     errors = 0
 
-    # 1. SKILL.md parses
+    # 1. Project instructions and SKILL.md parse
+    claude_md = SKILL_DIR / "CLAUDE.md"
+    errors += check(claude_md.exists(), "CLAUDE.md exists")
+    if claude_md.exists():
+        claude_txt = claude_md.read_text(encoding="utf-8")
+        errors += check("control harness" in claude_txt, "CLAUDE.md states control harness identity")
+        errors += check("Host remains controller-in-chief" in claude_txt, "CLAUDE.md preserves host planner authority")
+        errors += check("Run logs are tuning fuel" in claude_txt, "CLAUDE.md covers run telemetry")
+        errors += check("Do not build a Cockpit UI" in claude_txt, "CLAUDE.md rejects UI-first drift")
+
     skill_md = SKILL_DIR / "SKILL.md"
     errors += check(skill_md.exists(), "SKILL.md exists")
 
@@ -162,9 +171,9 @@ def main() -> int:
 
     # 7. References exist
     for ref in [
-        "audit-convergence.md", "codex-cli-control.md", "cross-runtime-host-notes.md",
-        "decision-logging.md", "deploy-sequencing.md", "plugin-boundary.md",
-        "plugin-real-eval-runner.md", "privacy-self-check.md",
+        "audit-convergence.md", "codex-cli-control.md", "control-loop-harness.md",
+        "cross-runtime-host-notes.md", "decision-logging.md", "deploy-sequencing.md",
+        "plugin-boundary.md", "plugin-real-eval-runner.md", "privacy-self-check.md",
         "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
         "validation-log.md", "workflow-playbook.md",
@@ -176,9 +185,9 @@ def main() -> int:
     #    not via a filename checklist; deep-detail refs need not be named verbatim)
     min_lines = 20
     for ref in [
-        "audit-convergence.md", "codex-cli-control.md", "cross-runtime-host-notes.md",
-        "decision-logging.md", "deploy-sequencing.md", "plugin-boundary.md",
-        "plugin-real-eval-runner.md", "privacy-self-check.md",
+        "audit-convergence.md", "codex-cli-control.md", "control-loop-harness.md",
+        "cross-runtime-host-notes.md", "decision-logging.md", "deploy-sequencing.md",
+        "plugin-boundary.md", "plugin-real-eval-runner.md", "privacy-self-check.md",
         "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
         "validation-log.md", "workflow-playbook.md",

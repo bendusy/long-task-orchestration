@@ -43,7 +43,7 @@ A source note captures provenance and falsifiable hypotheses. It is inert.
   "id": "note.langchain.deepagents-profiles.2026-06-04",
   "url": "https://www.langchain.com/blog/tuning-deep-agents-different-models",
   "claims": [
-    {"id": "c1", "text": "Per-model harness profiles improve agent eval results", "status": "supported"}
+    {"id": "c1", "text": "Per-model harness profiles improve agent eval results", "status": "unverified"}
   ],
   "hypotheses": [
     {"id": "h1", "text": "Codex audit improves when prompts ask it to batch reads first"}
