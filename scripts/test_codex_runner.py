@@ -97,6 +97,33 @@ def main() -> int:
         errors += ok(args[-1] == "-", "uses '-' stdin prompt")
         errors += ok(data["stdin"] == "Goal:\nReview only.\n", "prompt piped on stdin")
 
+    # probe timeout: a codex whose `exec --help` hangs must be killed by the
+    # 10s probe bound, not run unbounded (regression for fix/codex-probe-timeout).
+    errors += ok("timeout 10s" in RUNNER.read_text(encoding="utf-8"),
+                 "probe exec --help is bounded by a timeout")
+    with tempfile.TemporaryDirectory(prefix="lto_codex_hang_") as td:
+        tmp = Path(td)
+        hang = tmp / "codex"
+        hang.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [[ "$1 $2" == "exec --help" ]]; then sleep 60; fi\n',
+            encoding="utf-8",
+        )
+        hang.chmod(0o755)
+        prompt = tmp / "p.txt"; prompt.write_text("x", encoding="utf-8")
+        reply = tmp / "r.txt"
+        env = dict(os.environ)
+        env["CODEX_BIN"] = str(hang)
+        import time as _t
+        t0 = _t.monotonic()
+        proc = subprocess.run(
+            ["bash", str(RUNNER), str(prompt), str(reply), "30"],
+            env=env, capture_output=True, text=True, timeout=40,
+        )
+        dt = _t.monotonic() - t0
+        errors += ok(proc.returncode == 127, f"hung probe -> exit 127 (got {proc.returncode})")
+        errors += ok(dt < 20, f"hung probe killed within ~10s, not 60s (took {dt:.1f}s)")
+
     if errors == 0:
         print("\nCODEX RUNNER TESTS OK")
         return 0

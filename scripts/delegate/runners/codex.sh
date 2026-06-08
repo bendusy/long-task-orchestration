@@ -30,8 +30,12 @@ if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
 fi
 
 # Codex CLI flags change over time; probe exec help before relying on -C/-s/-o.
-if ! "$CODEX_BIN" exec --help </dev/null >/dev/null 2>&1; then
-  echo "codex runner: 'codex exec --help' failed; CLI unavailable or unauthenticated" >&2
+# Bounded by its own 10s timeout: this probe runs BEFORE the main `timeout
+# ${TIMEOUT_SEC}s` guard, so without it a hung `codex exec --help` (e.g. auth
+# prompt waiting on stdin in an odd env) would only be caught by the scheduler's
+# outer subprocess timeout. timeout exit 124 still trips the `!` failure branch.
+if ! timeout 10s "$CODEX_BIN" exec --help </dev/null >/dev/null 2>&1; then
+  echo "codex runner: 'codex exec --help' failed or timed out; CLI unavailable or unauthenticated" >&2
   exit 127
 fi
 
