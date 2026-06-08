@@ -257,18 +257,22 @@ lto plugin render-profile plugins/deep-agent-profiles codex-audit-readonly-v1 \
   --output rendered-brief.md \
   --meta-output rendered-brief.meta.json
 
-# Static eval-pack validation (not a benchmark run yet)
+# Static eval-pack validation (metadata only, no model run)
 lto plugin eval plugins/deep-agent-profiles --json
 
 # Mount plugin provenance into the active run; does not auto-apply profiles
 lto plugin mount plugins/deep-agent-profiles --approved-by host
+
+# Real baseline-vs-candidate A/B run with deterministic metrics (v0)
+# Compiles each eval-pack case into two AgentJobs and runs them via the scheduler.
+lto plugin eval-run plugins/deep-agent-profiles --run-id <run-id> --json
 ```
 
-Current `eval` is deliberately static: it checks declared eval packs, profile references, metrics, and safety metadata. Real model A/B execution is a future layer and must run through normal LTO runner/audit primitives with evidence artifacts.
+`eval` stays deliberately static: it checks declared eval packs, profile references, metrics, and safety metadata. `eval-run` (v0) does the real model A/B: it compiles each case into a baseline (bare brief) and candidate (profile-injected) AgentJob, runs both through the normal scheduler/runner primitives, and records deterministic metrics + evidence under `.lto/<run-id>/plugin-eval/<case-id>/`. LLM-judged quality metrics and automatic promotion remain deferred (see §12).
 
 ## 12. Real eval runner boundary
 
-The future `plugin eval-run` must follow [`plugin-real-eval-runner.md`](./plugin-real-eval-runner.md): it is a **sub-LTO-run compiler**, not a new workflow engine.
+`plugin eval-run` (v0 implemented) follows [`plugin-real-eval-runner.md`](./plugin-real-eval-runner.md): it is a **sub-LTO-run compiler**, not a new workflow engine. The rules below are the boundary it stays inside; the deferred items (frozen-evidence hash/redact, LLM-judged metrics, swarm parallelism) are not yet built and are declared as such in each run report.
 
 Design rules:
 
