@@ -24,6 +24,8 @@ def run(args: argparse.Namespace) -> int:
         return _render_profile(args)
     if action == "eval":
         return _eval(args)
+    if action == "eval-run":
+        return _eval_run(args)
     if action == "source-note":
         return _source_note(args)
     raise SystemExit(f"unknown plugin action: {action}")
@@ -133,6 +135,33 @@ def _eval(args: argparse.Namespace) -> int:
     return 0 if report.get("ok") else 2
 
 
+def _eval_run(args: argparse.Namespace) -> int:
+    from .. import plugin_eval_run
+
+    repo = args.repo.resolve()
+    run_id = st.resolve_run_id(repo, args.run_id)
+    report = plugin_eval_run.eval_run(
+        repo,
+        run_id,
+        args.plugin_dir,
+        eval_id=args.eval_id,
+        only_case=args.only_case,
+        max_concurrency=args.max_concurrency,
+        persist=args.persist,
+        runners_dir=args.runners_dir,
+    )
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    if args.json or not args.output:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"plugin eval-run {'OK' if report.get('ok') else 'FAIL'} -> {args.output}")
+    return 0 if report.get("ok") else 2
+
+
 def _source_note(args: argparse.Namespace) -> int:
     try:
         path = plugins.create_source_note(
@@ -198,6 +227,26 @@ def add_parser(subparsers) -> None:
     eval_cmd.add_argument("--output", type=Path)
     eval_cmd.add_argument("--json", action="store_true")
     eval_cmd.set_defaults(func=run)
+
+    eval_run = plug.add_parser(
+        "eval-run",
+        help="compile an eval pack into a real baseline-vs-candidate A/B run (deterministic metrics)",
+    )
+    eval_run.add_argument("plugin_dir", type=Path)
+    eval_run.add_argument("--run-id", required=True, help="active LTO run id (.lto/<run-id>/)")
+    eval_run.add_argument("--eval-id", help="which eval pack (default: first declared)")
+    eval_run.add_argument("--case", dest="only_case", help="run a single case id only")
+    eval_run.add_argument("--max-concurrency", type=int, default=4)
+    eval_run.add_argument(
+        "--runners-dir",
+        type=Path,
+        default=None,
+        help="override runner scripts dir (test/headless without real CLI login)",
+    )
+    eval_run.add_argument("--no-persist", dest="persist", action="store_false", default=True)
+    eval_run.add_argument("--output", type=Path)
+    eval_run.add_argument("--json", action="store_true")
+    eval_run.set_defaults(func=run)
 
     source = plug.add_parser("source-note", help="create a data-only source note JSON")
     source.add_argument("plugin_dir", type=Path)

@@ -64,7 +64,7 @@ def spawn_agents(
     if not jobs:
         return []
 
-    sched = Scheduler(repo, max_concurrency=max_concurrency, runners_dir=runners_dir)
+    sched = Scheduler(repo, max_concurrency=max_concurrency, runners_dir=runners_dir, run_id=run_id)
     results = sched.submit(jobs)
 
     if persist:

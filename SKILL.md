@@ -10,7 +10,7 @@ description: >-
 metadata:
   tier: agent-driven
   domain: infra
-  optional_integrations: [agent-delegate, memory-flow]
+  optional_integrations: [memory-flow]
   status: active
 allowed-tools: [Bash, Read, Write, Edit, Task, AskUserQuestion]
 ---
@@ -28,6 +28,7 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 - **Primitive 优先于产品命令**：先组合 `runner`、`audit`、`judge`、`next`、`autopilot`、`recap`；只有真实重复路径自然沉淀，才抽最薄 CLI。
 - **外部观点先进插件，不进 core**：有趣文章先做 `source_note → experimental path plugin → eval → promote/reject`，详见 `references/plugin-boundary.md`。插件只编译到现有 primitive，不替 host 规划、不自带升权。
 - **自动化是梯度**：brief → supervised → sandboxed auto-exec → human gate。每一级都必须保留证据、可恢复状态和人工刹车。
+- **运行中可见、用量可查**：每个派工的输出边跑边写进 `.lto/<run-id>/live/<job-id>.log`，卡住时 `tail` 就能看（学 tmux-autopilot 可观测精髓但不用 tmux，scheduler 仍是确定性 subprocess）。token 用量按 runner 计量（codex/pi/claude 三家真实，agy 无 CLI 用量诚实标 unmetered），`recap`/`closeout` 汇总「这次 run 烧了多少 token」。
 
 ## 三个核心原则
 
@@ -87,18 +88,18 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 
 找个跟你不一样的 AI 来审——你用 DeepSeek 就让 GPT 和 Gemini 来审，反之亦然。同个模型审自己等于没审。
 
-**一键编排（推荐）**：LTO 扫高风险 task、写审计简报、给派工指令、收口判收敛。下面命令默认从 `agent-skills` 仓库根目录运行；装过 `scripts/install.sh` 且 `lto` 在 `PATH` 后，可把 `$LTO` 换成 `lto`。LTO 只编排不自审（harness 不是被审/写码方），派工交给 agent-delegate，强制「审者 ≠ 你这个 host」：
+**一键编排（推荐）**：LTO 扫高风险 task、写审计简报、给派工指令、收口判收敛。下面命令默认从仓库根目录运行；装过 `scripts/install.sh` 且 `lto` 在 `PATH` 后，可把 `$LTO` 换成 `lto`。LTO 只编排不自审（harness 不是被审/写码方），派工走自带的 `scripts/delegate/`（codex/pi/claude/agy runner），强制「审者 ≠ 你这个 host」：
 
 ```bash
 LTO="python3 scripts/lto_run.py"
 
-# 全自动（推荐，装了 agent-delegate）：扫高风险 task → 自动派异构三方 → 收口判收敛
+# 全自动（推荐）：扫高风险 task → 自动派异构三方 → 收口判收敛
 $LTO audit --auto-dispatch
 
 # 派 agent 主动找漏掉的风险点（对抗"自报完整性"，未审 risk 会被 closeout 闸门拦）
 $LTO audit --discover-risks
 
-# 半自动（没装 agent-delegate 或想手动控制）：
+# 半自动（想手动控制）：
 $LTO audit                                           # 写简报 + 打印派工指令
 #    （想强制审某些 task：--task-id T1 T2）
 $LTO audit --collect .lto/<run-id>/audit/replies     # 派完收口
@@ -107,9 +108,9 @@ $LTO audit --collect .lto/<run-id>/audit/replies     # 派完收口
 > 审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词）；`--collect`
 > 校验异构（审者家族 ≠ host）+ 抽 blocker 计数 + 判 ledger 收敛趋势。
 
-**手动派工（没装 agent-delegate 时）**：
+**手动派工**（直接用自带 runner）：
 ```bash
-AD="scripts/delegate/runners"  # standalone repo; use your agent-delegate install path if running elsewhere
+AD="scripts/delegate/runners"  # 本 repo 自带，无需外部依赖
 $AD/codex.sh  方案.md 回复-codex.md  300 &
 $AD/agy.sh    方案.md 回复-agy.md    300 &
 $AD/claude.sh 方案.md 回复-claude.md 300 &
@@ -186,7 +187,10 @@ $LTO start --goal "做用户登录" \
 # 续接（上次 compact 之后，或新 session 恢复）
 $LTO resume        # 给接手的 AI 拉上下文
 $LTO memory resume # 可选：先查 ANIMEM/memory-flow，失败则降级本地
-$LTO recap         # 给人看的回顾（隔了几天回来，人会忘）
+$LTO recap         # 给人看的回顾（含「花了多少 token」「当前在跑哪些 job」）
+
+# 看 job 实时进度（每个派工的输出边跑边写，卡住时主 agent 能直接看）
+tail -f .lto/<run-id>/live/<job-id>.log
 
 # 检查状态 / 问下一步
 $LTO check
@@ -219,7 +223,6 @@ $LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 t
 |---|---|
 | 修个报错 | diagnose |
 | 让人审代码 | review |
-| 让别人跑个任务 | agent-delegate |
 | 写新 skill | skill-creator |
 | 部署上线 | ship |
 

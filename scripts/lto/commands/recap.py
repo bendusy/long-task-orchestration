@@ -14,6 +14,7 @@ resume 的 git-head 快照救不了一个隔了 87 小时回来的人。
 from __future__ import annotations
 
 import argparse
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -73,13 +74,51 @@ def _render_recap(state: dict, run_id: str, *, repo: Path | None = None, include
     lines.append("│ 还剩什么 ──────── " + _remaining_summary(pending, blocked, done_when))
 
     # 现在轮到你（决策点）
+    # 花了多少 token（per-run 汇总，跨所有 agent_runs）
+    token_line = _token_summary(state)
+    if token_line:
+        lines.append("│ 花了多少 token ── " + token_line)
+
     lines.append("│ 现在轮到你 ────── " + _next_for_human(state, blocked, next_action, blocked_by))
     if include_artifacts and repo is not None:
         lines.append("│ 关键产物 ──────── " + _artifact_summary(repo, run_id))
 
+    # 当前在跑的 job（扫 live/ 目录，mtime 近 120s 内）
+    if repo is not None:
+        running = _running_jobs(repo, run_id, window_sec=120)
+        if running:
+            lines.append("│ 当前在跑 ──────── " + "；".join(running))
+
     lines.append("│")
     lines.append(f"╰─ run: {run_id}  phase: {phase}")
     return "\n".join(lines)
+
+
+def _token_summary(state: dict) -> str:
+    """One-line per-run token usage for humans. Empty string if nothing ran."""
+    roll = st.token_rollup(state)
+    if roll["runs_total"] == 0:
+        return ""
+    total = roll["total_tokens"]
+    wt, rt = roll["runs_with_tokens"], roll["runs_total"]
+    if total == 0:
+        return f"未计量（{rt} 次派工，无 runner 上报 token；agy 等 CLI 不暴露用量）"
+    # per-runner breakdown, biggest first
+    parts = []
+    for runner, s in sorted(roll["by_runner"].items(), key=lambda kv: -kv[1]["tokens"]):
+        if s["tokens"] > 0:
+            parts.append(f"{runner} {_fmt_tokens(s['tokens'])}")
+    by = "，".join(parts)
+    coverage = "" if wt == rt else f"（{wt}/{rt} 次派工有计量）"
+    return f"约 {_fmt_tokens(total)} tokens{coverage}：{by}"
+
+
+def _fmt_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
 
 
 def _artifact_summary(repo: Path, run_id: str) -> str:
@@ -178,6 +217,32 @@ def _next_for_human(state: dict, blocked: list[dict], next_action: str, blocked_
     if next_action:
         return st.single_line(next_action)
     return "跑 `lto next` 看系统建议的下一步，或继续推进待做项"
+
+
+def _running_jobs(repo: Path, run_id: str, window_sec: float = 120) -> list[str]:
+    """扫 .lto/<run-id>/live/*.log，返回 mtime 在 window_sec 内的描述列表。
+
+    格式："<job_id>（N 秒前有输出）"。无 live/ 目录时优雅降级返回空列表。
+    """
+    live_dir = repo / ".lto" / run_id / "live"
+    if not live_dir.exists():
+        return []
+    now = time.time()
+    results = []
+    try:
+        for log_file in sorted(live_dir.glob("*.log")):
+            try:
+                mtime = log_file.stat().st_mtime
+            except OSError:
+                continue
+            age = now - mtime
+            if age <= window_sec:
+                job_id = log_file.stem
+                age_str = f"{int(age)}秒前有输出" if age >= 1 else "刚有输出"
+                results.append(f"{job_id}（{age_str}）")
+    except OSError:
+        return []
+    return results
 
 
 def add_parser(subparsers) -> None:

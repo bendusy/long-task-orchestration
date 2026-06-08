@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import signal
 import subprocess
 import tempfile
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -67,12 +70,22 @@ class Scheduler:
         max_backoff_sec: float = 60,
         total_retry_wall_sec: float = 300,
         runners_dir: Path | None = None,
+        run_id: str | None = None,
+        stall_timeout: float = 0,
     ):
         self.repo = Path(repo).resolve()
         self.max_concurrency = max_concurrency
         self.max_total_agents = max_total_agents
         self.max_backoff_sec = max_backoff_sec
         self.total_retry_wall_sec = total_retry_wall_sec
+        # stall_timeout：stdout 字节连续 N 秒不增长则强杀（0 = 禁用，默认）。
+        # D 修复：默认禁用，因 thinking-heavy runner（pi/codex reasoning）可能
+        # 200s+ 只在最后输出，开 stall 会误杀。调用方按需 opt-in，且应设
+        # >= budget 的合理下界（live log 仍始终写，可观测不依赖 stall）。
+        self.stall_timeout = stall_timeout
+        # run_id：可选，用于定位 .lto/<run-id>/live/ 目录写实时日志
+        # 若不传，则在 _run_once 执行时尝试读 .lto/current
+        self._explicit_run_id = run_id
         if runners_dir is not None:
             self.runners_dir = Path(runners_dir).resolve()
         else:
@@ -282,29 +295,20 @@ class Scheduler:
             os.close(fd)
             reply_path = Path(tmp)
 
-            # --- run ---
+            # --- 确定 live log 路径 ---
+            live_log_path = _resolve_live_log(self.repo, self._explicit_run_id, job.job_id)
+
+            # --- run（Popen + 流式 tee，可观测）---
             exec_start = time.monotonic()
-            timeout_total = job.budget.timeout_sec + 10  # safety margin beyond runner's own timeout
-            try:
-                proc = subprocess.run(
-                    [
-                        "bash",
-                        str(runner_script),
-                        str(prompt_path),
-                        str(reply_path),
-                        str(job.budget.timeout_sec),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_total,
-                    cwd=str(self.repo),
-                    env=_effective_env(job),
-                )
-                exit_code = proc.returncode
-                stderr = proc.stderr
-            except subprocess.TimeoutExpired:
-                exit_code = 124
-                stderr = "subprocess timeout"
+            timeout_total = job.budget.timeout_sec + 10  # runner 自身 timeout 外的安全边距
+            exit_code, stderr = _run_popen(
+                cmd=["bash", str(runner_script), str(prompt_path), str(reply_path), str(job.budget.timeout_sec)],
+                cwd=str(self.repo),
+                env=_effective_env(job),
+                timeout_total=timeout_total,
+                stall_timeout=self.stall_timeout,
+                live_log_path=live_log_path,
+            )
             exec_elapsed = round(time.monotonic() - exec_start, 3)
 
             # --- read reply ---
@@ -312,6 +316,10 @@ class Scheduler:
                 reply_text = reply_path.read_text(encoding="utf-8").strip()
             except Exception:
                 reply_text = ""
+
+            # --- read optional token sidecar (<reply>.meta.json) ---
+            cost: dict[str, Any] = {"elapsed_sec": exec_elapsed}
+            cost.update(_read_token_sidecar(reply_path))
 
             # --- classify ---
             exit_code, status, error = _classify(exit_code, reply_text, stderr)
@@ -322,7 +330,7 @@ class Scheduler:
                 status=status,
                 exit_code=exit_code,
                 reply_text=reply_text,
-                cost={"elapsed_sec": exec_elapsed},
+                cost=cost,
                 permissions=_permission_snapshot(job),
                 attempts=attempt,
                 error=error,
@@ -334,6 +342,198 @@ class Scheduler:
                 _unlink_safe(prompt_path)
             if reply_path is not None:
                 _unlink_safe(reply_path)
+                _unlink_safe(_sidecar_path(reply_path))
+
+
+# ---------------------------------------------------------------------------
+# 可观测执行层：Popen + 双线程 drain + live log tee + stall 检测
+# ---------------------------------------------------------------------------
+
+# 路径安全白名单：run_id 必须整体匹配；job_id 把非法字符替成 _
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
+_SAFE_ID_RE_SUB = re.compile(r"[^A-Za-z0-9._\-]")
+
+
+def _resolve_live_log(repo: Path, explicit_run_id: str | None, job_id: str) -> Path | None:
+    """推导 live log 路径：.lto/<run-id>/live/<job_id>.log。
+
+    优先用 explicit_run_id；否则读 .lto/current；两者都没有则返回 None（优雅降级）。
+    """
+    run_id = explicit_run_id
+    if not run_id:
+        current_file = repo / ".lto" / "current"
+        try:
+            run_id = current_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+    if not run_id:
+        return None
+    # C 修复：run_id 来自外部文件 .lto/current，含 / 或 .. 可逃出仓库。
+    # 用白名单正则校验，不匹配直接降级返回 None（不写任何 live log）。
+    if not _SAFE_ID_RE.match(run_id):
+        return None
+    # job_id 同样白名单化（非法字符替 _，而非仅替 / 和 ..）
+    safe_job = _SAFE_ID_RE_SUB.sub("_", job_id) or "job"
+    live_dir = repo / ".lto" / run_id / "live"
+    try:
+        live_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return live_dir / f"{safe_job}.log"
+
+
+def _stream_to_buf_and_file(
+    stream,
+    buf: list[bytes],
+    log_file,  # 二进制文件句柄 or None
+) -> None:
+    """在 daemon 线程中流式读 stream，tee 到 log_file（若非 None）并收集到 buf。
+
+    使用 read1() 实现真正流式读取（不等缓冲区满）。
+    """
+    try:
+        for chunk in iter(lambda: stream.read1(4096), b""):
+            buf.append(chunk)
+            if log_file is not None:
+                log_file.write(chunk)
+                log_file.flush()
+    except Exception:
+        pass  # 流关闭或管道断裂，正常退出
+
+
+def _run_popen(
+    cmd: list[str],
+    cwd: str,
+    env: dict[str, str],
+    timeout_total: float,
+    stall_timeout: float,
+    live_log_path: Path | None,
+) -> tuple[int, str]:
+    """用 Popen 执行命令，双线程 drain stdout/stderr，支持 stall 检测。
+
+    返回 (exit_code, stderr_text)。
+    - stdout tee 到 live_log_path（若不为 None）
+    - stall_timeout > 0 时：live log size 连续 stall_timeout 秒不增长 → SIGKILL，exit_code=124
+    - timeout_total 超时 → SIGKILL，exit_code=124
+    - start_new_session=True 确保超时时能 killpg 杀净孙进程
+    """
+    stdout_buf: list[bytes] = []
+    stderr_buf: list[bytes] = []
+    log_fh = None
+    proc: subprocess.Popen | None = None
+    t_out = t_err = None
+
+    def _drain_size() -> int:
+        # 内存 buf 字节数判 stall：不依赖磁盘 flush/stat（B 修复——st_size 有 flush 延迟）
+        return sum(len(c) for c in stdout_buf)
+
+    def _finish(rc: int, stderr_override: str | None = None) -> tuple[int, str]:
+        # 统一收尾：先关管道让 read1 收到 EOF，drain 线程自然退出，再无超时 join，
+        # 最后才 close log_fh —— 消灭"线程仍在写 / close 后 write"竞态（A 修复）。
+        for s in (proc.stdout, proc.stderr) if proc else ():
+            try:
+                s.close()
+            except OSError:
+                pass
+        if t_out is not None:
+            t_out.join()
+        if t_err is not None:
+            t_err.join()
+        if log_fh is not None:
+            try:
+                log_fh.close()
+            except OSError:
+                pass
+        if stderr_override is not None:
+            return rc, stderr_override
+        return rc, b"".join(stderr_buf).decode("utf-8", errors="replace")
+
+    try:
+        if live_log_path is not None:
+            try:
+                log_fh = open(live_log_path, "wb")
+            except OSError:
+                log_fh = None  # 写 log 失败不影响主逻辑
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+            env=env,
+            start_new_session=True,  # 新进程组，killpg 能杀净孙进程
+        )
+
+        t_out = threading.Thread(
+            target=_stream_to_buf_and_file, args=(proc.stdout, stdout_buf, log_fh), daemon=True,
+        )
+        t_err = threading.Thread(
+            target=_stream_to_buf_and_file, args=(proc.stderr, stderr_buf, None), daemon=True,
+        )
+        t_out.start()
+        t_err.start()
+
+        deadline = time.monotonic() + timeout_total
+        prev_size = -1          # -1 避免首次 size=0 误报 stall
+        stall_since: float | None = None
+        poll_interval = 2.0
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _kill_proc_group(proc)
+                return _finish(124, "subprocess timeout")
+
+            try:
+                rc = proc.wait(timeout=min(poll_interval, remaining))
+                return _finish(rc)  # 正常退出
+            except subprocess.TimeoutExpired:
+                pass  # 还在跑，继续 stall 检测
+
+            now = time.monotonic()
+            if now >= deadline:
+                _kill_proc_group(proc)
+                return _finish(124, "subprocess timeout")
+
+            # stall 检测：用内存 buf 字节数，不依赖 live log 是否落盘
+            if stall_timeout > 0:
+                cur_size = _drain_size()
+                if cur_size > prev_size:
+                    prev_size = cur_size
+                    stall_since = None
+                elif prev_size >= 0:
+                    if stall_since is None:
+                        stall_since = now
+                    elif now - stall_since >= stall_timeout:
+                        _kill_proc_group(proc)
+                        return _finish(124, f"stall timeout ({stall_timeout}s no stdout growth)")
+                else:
+                    prev_size = cur_size  # 首次记下基线
+
+    finally:
+        # Popen 后但线程未起时若抛异常 → 兜底杀进程 + 关 log（D/孤儿修复）
+        if proc is not None and proc.poll() is None:
+            _kill_proc_group(proc)
+        if log_fh is not None and not log_fh.closed:
+            try:
+                log_fh.close()
+            except OSError:
+                pass
+
+
+def _kill_proc_group(proc: subprocess.Popen) -> None:
+    """向进程组发 SIGKILL，再 wait() 回收僵尸进程。"""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +621,43 @@ def _unlink_safe(p: Path) -> None:
         p.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+# Token sidecar protocol (v0, best-effort, fully optional):
+# A runner MAY write `<reply_file>.meta.json` with token usage. If present and
+# well-formed, scheduler merges {tokens_in, tokens_out, tokens} into cost.
+# Absent / malformed → silently ignored (back-compat: old runners don't write it).
+_SIDECAR_SUFFIX = ".meta.json"
+
+
+def _sidecar_path(reply_path: Path) -> Path:
+    return reply_path.with_name(reply_path.name + _SIDECAR_SUFFIX)
+
+
+def _read_token_sidecar(reply_path: Path) -> dict[str, Any]:
+    """Read optional <reply>.meta.json token usage; return {} if absent/bad.
+
+    Accepts keys: tokens_in / tokens_out / tokens (any subset). Non-negative
+    ints only; anything else is dropped. tokens defaults to in+out when both
+    present and total absent.
+    """
+    path = _sidecar_path(reply_path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("tokens_in", "tokens_out", "tokens"):
+        val = data.get(key)
+        if isinstance(val, bool):  # bool 是 int 子类，显式排除
+            continue
+        if isinstance(val, int) and val >= 0:
+            out[key] = val
+    if "tokens" not in out and "tokens_in" in out and "tokens_out" in out:
+        out["tokens"] = out["tokens_in"] + out["tokens_out"]
+    return out
 
 
 # ===========================================================================

@@ -30,8 +30,12 @@ if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
 fi
 
 # Codex CLI flags change over time; probe exec help before relying on -C/-s/-o.
-if ! "$CODEX_BIN" exec --help </dev/null >/dev/null 2>&1; then
-  echo "codex runner: 'codex exec --help' failed; CLI unavailable or unauthenticated" >&2
+# Bounded by its own 10s timeout: this probe runs BEFORE the main `timeout
+# ${TIMEOUT_SEC}s` guard, so without it a hung `codex exec --help` (e.g. auth
+# prompt waiting on stdin in an odd env) would only be caught by the scheduler's
+# outer subprocess timeout. timeout exit 124 still trips the `!` failure branch.
+if ! timeout 10s "$CODEX_BIN" exec --help </dev/null >/dev/null 2>&1; then
+  echo "codex runner: 'codex exec --help' failed or timed out; CLI unavailable or unauthenticated" >&2
   exit 127
 fi
 
@@ -69,14 +73,65 @@ fi
 args+=(-o "$REPLY_FILE" -)
 
 set +e
-timeout "${TIMEOUT_SEC}s" "$CODEX_BIN" "${args[@]}" < "$PROMPT_FILE" > "$OUT_FILE" 2> "$ERR_FILE"
-rc=$?
+# stdout 过 tee：既存进 OUT_FILE（供 reply/token 解析），又透传到本进程 stdout，
+# 让 LTO scheduler 的 Popen 能流式捕获进 live log（可观测）。PIPESTATUS[0]
+# 取 codex 的真实 rc，不被 tee 的退出码掩盖。
+timeout "${TIMEOUT_SEC}s" "$CODEX_BIN" "${args[@]}" < "$PROMPT_FILE" 2> "$ERR_FILE" | tee "$OUT_FILE"
+rc=${PIPESTATUS[0]}
 set -e 2>/dev/null || true
 
 # Fallback: if -o produced no final message but stdout has content, keep stdout
 # so scheduler can distinguish empty-output bugs from real Codex replies.
 if [[ ! -s "$REPLY_FILE" && -s "$OUT_FILE" ]]; then
   cp "$OUT_FILE" "$REPLY_FILE"
+fi
+
+# Token sidecar (best-effort): when --json is on, parse the last turn.completed
+# usage from stdout and write <reply>.meta.json. Scheduler reads it optionally;
+# absence/failure is non-fatal and never affects rc. Needs python3 + CODEX_JSON=1.
+if [[ "${CODEX_JSON:-0}" == "1" ]] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$OUT_FILE" "$REPLY_FILE.meta.json" <<'PYMETA' 2>/dev/null || true
+import json, sys
+out_file, meta_file = sys.argv[1], sys.argv[2]
+# codex exec 非交互模式实测为单 turn（1 个 turn.completed），usage 即该次完整值。
+# 为防御未来多 turn（若 codex 改成增量 usage），这里累加所有 turn 的 in/out。
+ti_sum = to_sum = 0
+seen = False
+try:
+    with open(out_file, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            u = ev.get("usage") if isinstance(ev, dict) else None
+            if not isinstance(u, dict):
+                continue
+            i, o = u.get("input_tokens"), u.get("output_tokens")
+            if isinstance(i, int) and i >= 0:
+                ti_sum += i; seen = True
+            if isinstance(o, int) and o >= 0:
+                to_sum += o; seen = True
+except Exception:
+    sys.exit(0)
+if not seen:
+    sys.exit(0)
+ti = ti_sum
+to = to_sum
+meta = {}
+if isinstance(ti, int) and ti >= 0:
+    meta["tokens_in"] = ti
+if isinstance(to, int) and to >= 0:
+    meta["tokens_out"] = to
+if "tokens_in" in meta and "tokens_out" in meta:
+    meta["tokens"] = meta["tokens_in"] + meta["tokens_out"]
+if meta:
+    with open(meta_file, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+PYMETA
 fi
 
 if [[ -s "$ERR_FILE" ]]; then

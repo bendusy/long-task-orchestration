@@ -1,6 +1,6 @@
 # Plugin real eval runner design
 
-> **STATUS: Future design — `lto plugin eval-run` is not implemented.** Current plugin runtime support stops at `plugin eval` (static validation), `render-profile`, `source-note`, and `mount`.
+> **STATUS: v0 implemented — `lto plugin eval-run` runs baseline-vs-candidate A/B with deterministic metrics** (parse_rate, timeout, permission_violations, private_path_leaks, elapsed/token deltas). Compiles each eval-pack case into two AgentJobs (baseline bare brief / candidate profile-injected), runs via the existing scheduler, writes evidence to `.lto/<run-id>/plugin-eval/<case-id>/`. **Deferred to a later layer** (declared in every report's `deferred` field, never silently skipped): LLM-judged `blocker_quality`/`false_positive_rate`, frozen-evidence hash/redact pipeline, and automatic promotion (promotion stays human-gated).
 
 > `plugin eval-run` is not a new workflow engine. It is a compiler from data-only plugin eval packs into normal LTO runs, evidence artifacts, runner jobs, judge reports, and human promotion decisions.
 
