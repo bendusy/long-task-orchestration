@@ -1,5 +1,18 @@
 # Changelog
 
+## Live log — see what a job is doing while it runs
+
+- **Commit**: `fdc5912`. Designed by a 3-runtime co-design pass, implemented by a sub-agent, then adversarially reviewed by 3 heterogeneous auditors whose findings were merged back in.
+- **Summary**: LTO jobs were a black box — `scheduler` ran each runner via `subprocess.run(capture_output=True)`, so while a job was running you saw nothing; a stuck job was invisible until its timeout fired. Now every job streams its output to `.lto/<run-id>/live/<job_id>.log` as it runs, so the host agent (or a human) can `tail` it live. This borrows tmux-autopilot's "observability is a feature" idea **without** using tmux — the scheduler stays on plain `subprocess` so it remains deterministic and CI-friendly (the 16-case self-test and fake-runner tests keep working unchanged).
+
+### Changes
+
+- `scheduler` now uses `Popen` + two drain threads (`read1` streaming) instead of `subprocess.run`; stdout is teed to the live log while still captured for the result. Process group via `start_new_session=True` + `os.killpg` so timeouts kill grandchild processes cleanly.
+- Runners (`codex`/`pi`/`claude`/`agy`) changed their stdout from `> tmpfile` to `| tee tmpfile` (keeping `PIPESTATUS[0]` for the real exit code), so the CLI's output reaches the scheduler's pipe **and** the temp file used for reply/token parsing. Verified end-to-end: a codex run with `CODEX_JSON=1` writes a 317-byte live log containing the real `turn.completed` NDJSON, with token metering unaffected.
+- Optional **stall detection** (`stall_timeout`, default `0` = off): when enabled, a job whose stdout stops growing for N seconds is killed early instead of waiting for the full timeout. Off by default because thinking-heavy runners (pi/codex reasoning) can be silent for a long time before emitting — opt in only with a sane lower bound.
+- `lto recap` shows a "currently running" line by scanning `live/*.log` mtimes; absent/old runs degrade gracefully (no line, no error).
+- Security: the `run_id` used to locate `live/` is now whitelist-validated, so a tampered `.lto/current` can't escape the repo directory.
+
 ## Token metering + codex probe hardening
 
 - **Commits**: `edeed19` (per-run token stats), `9816022` (codex probe timeout), plus runner token sidecars (`976f778` claude, earlier codex/pi).
