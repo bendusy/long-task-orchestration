@@ -79,6 +79,54 @@ if [[ ! -s "$REPLY_FILE" && -s "$OUT_FILE" ]]; then
   cp "$OUT_FILE" "$REPLY_FILE"
 fi
 
+# Token sidecar (best-effort): when --json is on, parse the last turn.completed
+# usage from stdout and write <reply>.meta.json. Scheduler reads it optionally;
+# absence/failure is non-fatal and never affects rc. Needs python3 + CODEX_JSON=1.
+if [[ "${CODEX_JSON:-0}" == "1" ]] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$OUT_FILE" "$REPLY_FILE.meta.json" <<'PYMETA' 2>/dev/null || true
+import json, sys
+out_file, meta_file = sys.argv[1], sys.argv[2]
+# codex exec 非交互模式实测为单 turn（1 个 turn.completed），usage 即该次完整值。
+# 为防御未来多 turn（若 codex 改成增量 usage），这里累加所有 turn 的 in/out。
+ti_sum = to_sum = 0
+seen = False
+try:
+    with open(out_file, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            u = ev.get("usage") if isinstance(ev, dict) else None
+            if not isinstance(u, dict):
+                continue
+            i, o = u.get("input_tokens"), u.get("output_tokens")
+            if isinstance(i, int) and i >= 0:
+                ti_sum += i; seen = True
+            if isinstance(o, int) and o >= 0:
+                to_sum += o; seen = True
+except Exception:
+    sys.exit(0)
+if not seen:
+    sys.exit(0)
+ti = ti_sum
+to = to_sum
+meta = {}
+if isinstance(ti, int) and ti >= 0:
+    meta["tokens_in"] = ti
+if isinstance(to, int) and to >= 0:
+    meta["tokens_out"] = to
+if "tokens_in" in meta and "tokens_out" in meta:
+    meta["tokens"] = meta["tokens_in"] + meta["tokens_out"]
+if meta:
+    with open(meta_file, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+PYMETA
+fi
+
 if [[ -s "$ERR_FILE" ]]; then
   cat "$ERR_FILE" >&2
 fi

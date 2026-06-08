@@ -313,6 +313,10 @@ class Scheduler:
             except Exception:
                 reply_text = ""
 
+            # --- read optional token sidecar (<reply>.meta.json) ---
+            cost: dict[str, Any] = {"elapsed_sec": exec_elapsed}
+            cost.update(_read_token_sidecar(reply_path))
+
             # --- classify ---
             exit_code, status, error = _classify(exit_code, reply_text, stderr)
 
@@ -322,7 +326,7 @@ class Scheduler:
                 status=status,
                 exit_code=exit_code,
                 reply_text=reply_text,
-                cost={"elapsed_sec": exec_elapsed},
+                cost=cost,
                 permissions=_permission_snapshot(job),
                 attempts=attempt,
                 error=error,
@@ -334,6 +338,7 @@ class Scheduler:
                 _unlink_safe(prompt_path)
             if reply_path is not None:
                 _unlink_safe(reply_path)
+                _unlink_safe(_sidecar_path(reply_path))
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +426,43 @@ def _unlink_safe(p: Path) -> None:
         p.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+# Token sidecar protocol (v0, best-effort, fully optional):
+# A runner MAY write `<reply_file>.meta.json` with token usage. If present and
+# well-formed, scheduler merges {tokens_in, tokens_out, tokens} into cost.
+# Absent / malformed → silently ignored (back-compat: old runners don't write it).
+_SIDECAR_SUFFIX = ".meta.json"
+
+
+def _sidecar_path(reply_path: Path) -> Path:
+    return reply_path.with_name(reply_path.name + _SIDECAR_SUFFIX)
+
+
+def _read_token_sidecar(reply_path: Path) -> dict[str, Any]:
+    """Read optional <reply>.meta.json token usage; return {} if absent/bad.
+
+    Accepts keys: tokens_in / tokens_out / tokens (any subset). Non-negative
+    ints only; anything else is dropped. tokens defaults to in+out when both
+    present and total absent.
+    """
+    path = _sidecar_path(reply_path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("tokens_in", "tokens_out", "tokens"):
+        val = data.get(key)
+        if isinstance(val, bool):  # bool 是 int 子类，显式排除
+            continue
+        if isinstance(val, int) and val >= 0:
+            out[key] = val
+    if "tokens" not in out and "tokens_in" in out and "tokens_out" in out:
+        out["tokens"] = out["tokens_in"] + out["tokens_out"]
+    return out
 
 
 # ===========================================================================

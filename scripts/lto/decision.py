@@ -11,9 +11,11 @@ Design contract:
   retrieve the actual command. Agent-returned command strings are NEVER executed.
 
 Budget:
-  Token counting NOT available (runner scripts return no token metadata).
-  Budget is approximate: rounds-remaining × estimated tokens-per-round.
-  Declared honestly in brief footer.
+  Real token counting is available when a runner writes a <reply>.meta.json
+  token sidecar (codex does so under CODEX_JSON=1; scheduler merges it into
+  AgentResult.cost.tokens). When absent, budget falls back to an estimate:
+  rounds-remaining × estimated tokens-per-round. Either way declared honestly
+  in the brief footer.
 
 Tracks:
   direction → spawn 3 heterogeneous agents → tally_votes (2/3 majority)
@@ -109,8 +111,8 @@ def run_decision(
     decision_kind:
         "direction" (vote), "review" (union merge), or "both" (run both tracks).
     budget_remaining:
-        Estimated tokens remaining in the autopilot budget.
-        This is approximate (runner scripts return no token metadata).
+        Estimated tokens remaining in the autopilot budget. Approximate unless
+        runners emit token sidecars (then cost.tokens carries real usage).
     runners_dir:
         Override runners directory (testing).
 

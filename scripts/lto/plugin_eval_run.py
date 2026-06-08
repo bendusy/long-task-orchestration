@@ -31,9 +31,6 @@ DEFERRED_V0 = [
     "llm_judge_false_positive_rate",
     "frozen_evidence_hash_redact",
     "automatic_promotion",
-    # K: scheduler 当前不返回 token 计数（runner 无 token metadata），
-    # 所以 token_delta 永远 None——明确声明，不让调用方误以为偶发缺失。
-    "token_cost_metering",
 ]
 
 # brief 来自插件数据，限大小防资源耗尽
@@ -86,6 +83,58 @@ def _is_pointer_only(reply: str, *, parsed_substantive: bool) -> bool:
     return False
 
 
+# 自动加给 codex 以拿 token sidecar 的 env（codex.sh 见 CODEX_JSON=1 才解析 usage）。
+_TOKEN_ENV_BY_RUNNER = {"codex": {"CODEX_JSON": "1"}}
+
+# 危险 env key 黑名单（纵深防御 P3）：即便被篡改的 manifest 把这些放进 env_allowlist，
+# _candidate_env 也绝不注入——这些 key 能动 loader/PATH/沙箱级别，是提权面。
+_ENV_KEY_BLOCKLIST = frozenset({
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
+    "PATH", "PYTHONPATH", "CODEX_SANDBOX", "IFS", "BASH_ENV", "ENV",
+})
+
+
+def _token_env(runner: str, env: dict[str, str]) -> dict[str, str]:
+    """合并拿 token 所需的 runner env（不覆盖已显式设置的同名 key）。"""
+    merged = dict(_TOKEN_ENV_BY_RUNNER.get(runner, {}))
+    merged.update(env)  # 用户/profile 显式值优先
+    return merged
+
+
+def _candidate_env(
+    plugin_dir: Path, profile_id: Any, env_allowlist: set[str], warnings: list[str]
+) -> dict[str, str]:
+    """取 profile 声明的 env，仅保留 env_allowlist 内的 key（权限只降不升）。
+
+    白名单外的 key 丢弃并记 warning——profile 不能靠声明 env 绕过 mount 批准的边界。
+    """
+    if not profile_id:
+        return {}
+    try:
+        profile = plugin_extra.load_profile(plugin_dir, str(profile_id))
+    except Exception:
+        return {}
+    raw = profile.get("env") or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, val in raw.items():
+        if not isinstance(key, str) or not isinstance(val, str):
+            continue
+        if key in _ENV_KEY_BLOCKLIST:
+            # P3: 即便 allowlist 含它也拒——危险 key 永不注入
+            warnings.append(f"profile env key {key!r} dropped (blocklisted privilege/loader key)")
+            continue
+        if key not in env_allowlist:
+            warnings.append(f"profile env key {key!r} dropped (not in plugin env_allowlist)")
+            continue
+        if key == "CODEX_JSON" and val.strip() == "0":
+            # P4: profile 显式关掉 token 计量——允许，但显式声明可观测性影响
+            warnings.append("profile sets CODEX_JSON=0; token metering disabled for candidate")
+        out[key] = val
+    return out
+
+
 def eval_run(
     repo: Path,
     run_id: str,
@@ -118,6 +167,11 @@ def eval_run(
 
     plugin_id = str(validation.manifest.get("id", plugin_dir.name))
     approved_sandbox, mount_present = _mounted_sandbox(repo, run_id, plugin_id)
+    # 只有 manifest security.env_allowlist 里的 key 才允许进 candidate job env，
+    # candidate 才能真正"应用 profile"。白名单外的 profile env 一律丢弃（记 warning）。
+    env_allowlist = set(
+        (validation.manifest.get("security", {}) or {}).get("env_allowlist", []) or []
+    )
 
     cases = pack.get("cases", []) or []
     if only_case:
@@ -136,6 +190,7 @@ def eval_run(
             case,
             out_root=out_root,
             approved_sandbox=approved_sandbox,
+            env_allowlist=env_allowlist,
             metrics=pack.get("metrics", []) or [],
             max_concurrency=max_concurrency,
             persist=persist,
@@ -179,6 +234,7 @@ def _run_case(
     *,
     out_root: Path,
     approved_sandbox: str,
+    env_allowlist: set[str],
     metrics: list[str],
     max_concurrency: int,
     persist: bool,
@@ -225,10 +281,18 @@ def _run_case(
         reason = "" if approved_sandbox == "read-only" else f"eval-run mount-approved sandbox for case {case_id}"
         return PermissionPolicy(sandbox=approved_sandbox, reason=reason)
 
+    # candidate 应用 profile 声明的 env（仅 env_allowlist 内的 key），baseline 不应用
+    # （它是对照组）。两腿对 codex 都自动加 CODEX_JSON=1 以拿 token sidecar。
+    case_warnings: list[str] = []
+    cand_env = _candidate_env(plugin_dir, profile_id, env_allowlist, case_warnings)
+    base_env = _token_env(runner, {})
+    cand_env = _token_env(runner, cand_env)
+
     baseline_job = AgentJob(
         job_id=f"eval-{case_id}-baseline",
         prompt_ref=str(baseline_brief),
         runner=runner,
+        env=base_env,
         permission_policy=_policy(),
         budget=Budget(),
         meta={"eval_case": case_id, "leg": "baseline"},
@@ -237,6 +301,7 @@ def _run_case(
         job_id=f"eval-{case_id}-candidate",
         prompt_ref=str(candidate_brief),
         runner=runner,
+        env=cand_env,
         permission_policy=_policy(),
         output_schema=output_schema,
         budget=Budget(),
@@ -267,6 +332,10 @@ def _run_case(
         and cand_res is not None and cand_res.status == "ok"
     )
 
+    # token 是否真到位（两腿都有才算可用，与 token_delta 的 and 条件对齐——
+    # 否则会出现"标可用但 token_delta=None"的语义矛盾，审计反馈 P1）
+    token_available = base_m.get("tokens") is not None and cand_m.get("tokens") is not None
+
     comparison = {
         "ok": case_ok,
         "case_id": case_id,
@@ -277,6 +346,8 @@ def _run_case(
         "candidate": cand_m,
         "deltas": _deltas(base_m, cand_m),
         "metrics_declared": metrics,
+        "token_metering_available": token_available,
+        "warnings": case_warnings,
         "deferred": DEFERRED_V0,
     }
     (case_dir / "comparison.json").write_text(

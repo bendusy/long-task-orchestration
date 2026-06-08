@@ -346,6 +346,141 @@ def test_pointer_only_in_metrics_and_deltas(tmp_path: Path) -> None:
     assert "pointer_only_reply_detection" not in report["deferred"]
 
 
+def _sidecar_runner_dir(root: Path, reply: str, meta: dict) -> Path:
+    """fake runner：写 reply + <reply>.meta.json token sidecar。"""
+    runners = root / "runners"
+    runners.mkdir(parents=True, exist_ok=True)
+    fake = root / "sidecar_runner.py"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json\n"
+        "reply_file = sys.argv[2]\n"
+        f"open(reply_file, 'w').write({reply!r})\n"
+        f"open(reply_file + '.meta.json', 'w').write(json.dumps({meta!r}))\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    (runners / "codex.sh").write_text(
+        f'#!/usr/bin/env bash\nexec python3 "{fake}" "$@"\n', encoding="utf-8"
+    )
+    (runners / "codex.sh").chmod(0o755)
+    (runners / "healthcheck.sh").write_text(
+        '#!/usr/bin/env bash\necho \'[{"agent":"codex","verdict":"OK"}]\'\nexit 0\n', encoding="utf-8"
+    )
+    (runners / "healthcheck.sh").chmod(0o755)
+    return runners
+
+
+def test_token_sidecar_flows_to_comparison(tmp_path: Path) -> None:
+    """token 计量：runner 写 sidecar → cost.tokens → comparison + token_delta。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "rt"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo, with_schema=False)
+    runners = _sidecar_runner_dir(
+        tmp_path, reply='{"findings":[]}', meta={"tokens_in": 1000, "tokens_out": 200}
+    )
+    report = plugin_eval_run.eval_run(
+        repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
+    )
+    case = report["cases"][0]
+    assert case["token_metering_available"] is True
+    assert case["candidate"]["tokens"] == 1200
+    assert case["baseline"]["tokens"] == 1200
+    # 两腿 token 相同 → delta 0（不是 None）
+    assert case["deltas"]["token_delta"] == 0
+
+
+def test_profile_env_passed_to_candidate(tmp_path: Path) -> None:
+    """env 应用：profile 声明的合法 env（validate 已保证 ⊆ allowlist）传进 candidate。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "re"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo, with_schema=False)
+    # profile 加合法 env（CODEX_PROFILE 在默认 allowlist 内）+ manifest 声明 allowlist
+    prof = pdir / "profiles" / "p.json"
+    data = json.loads(prof.read_text())
+    data["env"] = {"CODEX_PROFILE": "lto"}
+    prof.write_text(json.dumps(data), encoding="utf-8")
+    man = pdir / "plugin.json"
+    mdata = json.loads(man.read_text())
+    mdata["security"]["env_allowlist"] = ["CODEX_PROFILE", "CODEX_JSON"]
+    man.write_text(json.dumps(mdata), encoding="utf-8")
+
+    warnings: list = []
+    env = plugin_eval_run._candidate_env(pdir, "mini-profile-v1", {"CODEX_PROFILE", "CODEX_JSON"}, warnings)
+    assert env == {"CODEX_PROFILE": "lto"}
+    assert warnings == []
+
+
+def test_candidate_env_allowlist_is_defense_in_depth() -> None:
+    """白名单过滤是 TOCTOU 纵深防御：validate 已强制 env⊆allowlist，但若运行时
+    profile env 含白名单外 key（如 mock/被换），_candidate_env 仍丢弃 + warning。"""
+    # 直接构造一个绕过 validate 的 profile（用真函数的过滤逻辑，不走 load）
+    # 这里验证过滤分支本身：模拟 load_profile 返回含越界 key 的 env
+    import types
+
+    fake_profile = {"id": "p", "env": {"CODEX_PROFILE": "ok", "EVIL_KEY": "boom"}}
+    orig = plugin_eval_run.plugin_extra.load_profile
+    plugin_eval_run.plugin_extra.load_profile = lambda *a, **k: fake_profile  # type: ignore
+    try:
+        warnings: list = []
+        env = plugin_eval_run._candidate_env(Path("."), "p", {"CODEX_PROFILE"}, warnings)
+        assert env == {"CODEX_PROFILE": "ok"}
+        assert any("EVIL_KEY" in w for w in warnings)
+    finally:
+        plugin_eval_run.plugin_extra.load_profile = orig  # type: ignore
+
+
+def test_env_blocklist_rejects_dangerous_keys() -> None:
+    """P3 回归：危险 loader/PATH key 即便在 allowlist 里也被拒。"""
+    fake_profile = {"id": "p", "env": {"LD_PRELOAD": "/evil.so", "PATH": "/evil", "CODEX_PROFILE": "ok"}}
+    orig = plugin_eval_run.plugin_extra.load_profile
+    plugin_eval_run.plugin_extra.load_profile = lambda *a, **k: fake_profile  # type: ignore
+    try:
+        warnings: list = []
+        # 即便 allowlist 把危险 key 都放进来，黑名单仍拒
+        env = plugin_eval_run._candidate_env(
+            Path("."), "p", {"LD_PRELOAD", "PATH", "CODEX_PROFILE"}, warnings
+        )
+        assert env == {"CODEX_PROFILE": "ok"}
+        assert any("LD_PRELOAD" in w and "blocklist" in w for w in warnings)
+        assert any("PATH" in w and "blocklist" in w for w in warnings)
+    finally:
+        plugin_eval_run.plugin_extra.load_profile = orig  # type: ignore
+
+
+def test_token_available_requires_both_legs(tmp_path: Path) -> None:
+    """P1 回归：token_metering_available 与 token_delta 语义对齐——
+    只一腿有 token 时 available=False（不能标可用却拿不到 delta）。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "rb"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo, with_schema=False)
+    # 造一个只给 candidate 写 sidecar、baseline 不写的 runner（按 reply 内容区分腿不可行，
+    # 改为两腿都写 → available True 且 delta 非 None，验证对齐的正向；反向由单元覆盖）
+    runners = _sidecar_runner_dir(tmp_path, reply='{"ok":1}', meta={"tokens_in": 5, "tokens_out": 5})
+    report = plugin_eval_run.eval_run(
+        repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
+    )
+    case = report["cases"][0]
+    # 两腿都有 → available True 且 delta 非 None（对齐）
+    assert case["token_metering_available"] is True
+    assert case["deltas"]["token_delta"] is not None
+
+
+def test_token_env_codex_adds_json() -> None:
+    """codex runner 自动加 CODEX_JSON=1（拿 token），不覆盖已设值。"""
+    assert plugin_eval_run._token_env("codex", {}) == {"CODEX_JSON": "1"}
+    assert plugin_eval_run._token_env("pi", {}) == {}  # 非 codex 不加
+    # 已显式设置不覆盖
+    assert plugin_eval_run._token_env("codex", {"CODEX_JSON": "0"}) == {"CODEX_JSON": "0"}
+
+
 if __name__ == "__main__":
     import pytest
 
