@@ -126,6 +126,7 @@ def main() -> int:
         ("plugins",       [sys.executable, str(SCRIPTS_DIR / "test_plugins.py")],           False),
         ("privacy",       [sys.executable, str(SCRIPTS_DIR / "test_privacy_self_check.py")], False),
         ("worktree",      [sys.executable, str(SCRIPTS_DIR / "test_worktree_sandbox.py")],  False),
+        ("live_log",      [sys.executable, str(SCRIPTS_DIR / "test_live_log.py")],          False),
     ]
     for name, argv, needs_pp in module_tests:
         proc = subprocess.run(
@@ -233,9 +234,9 @@ def main() -> int:
         [sys.executable, str(SCRIPTS_DIR / "lto_run.py"), "plugin", "--help"],
         capture_output=True, text=True, timeout=10,
     ).stdout
-    errors += check("eval-run" not in plugin_help, "plugin eval-run is not advertised as implemented")
+    errors += check("eval-run" in plugin_help, "plugin eval-run is advertised (v0 implemented)")
     real_eval_doc = (SKILL_DIR / "references" / "plugin-real-eval-runner.md").read_text(encoding="utf-8")
-    errors += check("Future design" in real_eval_doc and "not implemented" in real_eval_doc, "plugin eval-run doc is marked future")
+    errors += check("v0 implemented" in real_eval_doc, "plugin eval-run doc marks v0 implemented")
 
     control_doc = (SKILL_DIR / "references" / "control-loop-harness.md").read_text(encoding="utf-8")
     errors += check("Design spec" in control_doc and "not implemented" in control_doc, "control-loop harness doc is marked future spec")

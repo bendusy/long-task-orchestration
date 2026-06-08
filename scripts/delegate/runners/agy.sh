@@ -13,7 +13,14 @@ PROMPT_FILE="$1"
 REPLY_FILE="$2"
 TIMEOUT_SEC="${3:-900}"
 
+# stdout via tee: written to REPLY_FILE (agy's reply is plain stdout) AND
+# streamed so LTO scheduler's Popen captures it into the live log.
+# PIPESTATUS[0] keeps agy's real rc (not tee's).
+set +o pipefail
 timeout "${TIMEOUT_SEC}s" agy \
   --dangerously-skip-permissions \
   --print-timeout "${TIMEOUT_SEC}s" \
-  -p "$(cat "$PROMPT_FILE")" > "$REPLY_FILE"
+  -p "$(cat "$PROMPT_FILE")" | tee "$REPLY_FILE"
+rc=${PIPESTATUS[0]}
+set -o pipefail
+exit "$rc"

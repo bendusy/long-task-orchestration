@@ -17,12 +17,14 @@ RAW_FILE="$(mktemp)"
 cleanup() { rm -f "$RAW_FILE" "$RAW_FILE.parsed"; }
 trap cleanup EXIT
 
-# pipefail off for this call so a downstream tool in a pipe can't mask pi's rc.
+# pipefail off so the tee in the pipe can't mask pi's rc; PIPESTATUS[0] keeps it.
+# stdout via tee: stored in RAW_FILE (for reply/token parse) AND streamed to this
+# process's stdout so LTO scheduler's Popen captures it into the live log.
 set +o pipefail
 timeout "${TIMEOUT_SEC}s" pi -p --mode json \
   --provider deepseek --model deepseek-v4-pro \
-  "$(cat "$PROMPT_FILE")" > "$RAW_FILE" 2>/dev/null
-rc=$?
+  "$(cat "$PROMPT_FILE")" 2>/dev/null | tee "$RAW_FILE"
+rc=${PIPESTATUS[0]}
 set -o pipefail
 
 # Parse NDJSON: reply = text blocks of the LAST assistant message_end; sidecar =

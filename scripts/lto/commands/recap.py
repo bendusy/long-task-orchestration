@@ -14,6 +14,7 @@ resume 的 git-head 快照救不了一个隔了 87 小时回来的人。
 from __future__ import annotations
 
 import argparse
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -81,6 +82,12 @@ def _render_recap(state: dict, run_id: str, *, repo: Path | None = None, include
     lines.append("│ 现在轮到你 ────── " + _next_for_human(state, blocked, next_action, blocked_by))
     if include_artifacts and repo is not None:
         lines.append("│ 关键产物 ──────── " + _artifact_summary(repo, run_id))
+
+    # 当前在跑的 job（扫 live/ 目录，mtime 近 120s 内）
+    if repo is not None:
+        running = _running_jobs(repo, run_id, window_sec=120)
+        if running:
+            lines.append("│ 当前在跑 ──────── " + "；".join(running))
 
     lines.append("│")
     lines.append(f"╰─ run: {run_id}  phase: {phase}")
@@ -210,6 +217,32 @@ def _next_for_human(state: dict, blocked: list[dict], next_action: str, blocked_
     if next_action:
         return st.single_line(next_action)
     return "跑 `lto next` 看系统建议的下一步，或继续推进待做项"
+
+
+def _running_jobs(repo: Path, run_id: str, window_sec: float = 120) -> list[str]:
+    """扫 .lto/<run-id>/live/*.log，返回 mtime 在 window_sec 内的描述列表。
+
+    格式："<job_id>（N 秒前有输出）"。无 live/ 目录时优雅降级返回空列表。
+    """
+    live_dir = repo / ".lto" / run_id / "live"
+    if not live_dir.exists():
+        return []
+    now = time.time()
+    results = []
+    try:
+        for log_file in sorted(live_dir.glob("*.log")):
+            try:
+                mtime = log_file.stat().st_mtime
+            except OSError:
+                continue
+            age = now - mtime
+            if age <= window_sec:
+                job_id = log_file.stem
+                age_str = f"{int(age)}秒前有输出" if age >= 1 else "刚有输出"
+                results.append(f"{job_id}（{age_str}）")
+    except OSError:
+        return []
+    return results
 
 
 def add_parser(subparsers) -> None:

@@ -18,11 +18,14 @@ PARSED_FLAG="$RAW_FILE.parsed"
 cleanup() { rm -f "$RAW_FILE" "$PARSED_FLAG"; }
 trap cleanup EXIT
 
+# stdout via tee: stored in RAW_FILE (for reply/token parse) AND streamed to
+# this process's stdout so LTO scheduler's Popen captures it into the live log.
+# PIPESTATUS[0] keeps claude's real rc (not tee's).
 set +o pipefail
 timeout "${TIMEOUT_SEC}s" claude -p --output-format json \
   --dangerously-skip-permissions \
-  "$(cat "$PROMPT_FILE")" > "$RAW_FILE" 2>/dev/null
-rc=$?
+  "$(cat "$PROMPT_FILE")" 2>/dev/null | tee "$RAW_FILE"
+rc=${PIPESTATUS[0]}
 set -o pipefail
 
 if command -v python3 >/dev/null 2>&1; then

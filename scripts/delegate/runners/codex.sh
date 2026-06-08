@@ -73,8 +73,11 @@ fi
 args+=(-o "$REPLY_FILE" -)
 
 set +e
-timeout "${TIMEOUT_SEC}s" "$CODEX_BIN" "${args[@]}" < "$PROMPT_FILE" > "$OUT_FILE" 2> "$ERR_FILE"
-rc=$?
+# stdout 过 tee：既存进 OUT_FILE（供 reply/token 解析），又透传到本进程 stdout，
+# 让 LTO scheduler 的 Popen 能流式捕获进 live log（可观测）。PIPESTATUS[0]
+# 取 codex 的真实 rc，不被 tee 的退出码掩盖。
+timeout "${TIMEOUT_SEC}s" "$CODEX_BIN" "${args[@]}" < "$PROMPT_FILE" 2> "$ERR_FILE" | tee "$OUT_FILE"
+rc=${PIPESTATUS[0]}
 set -e 2>/dev/null || true
 
 # Fallback: if -o produced no final message but stdout has content, keep stdout
