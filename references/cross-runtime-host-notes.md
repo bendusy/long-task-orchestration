@@ -171,3 +171,16 @@ claude   1      1s       35       ERROR     ← 35字节1秒=未登录，别派�
 
 **第 3 步：宣称范围 = 实测范围（诚实护栏）**
 异构审计结论里显式写「实际用了 N 家异构」——healthcheck 挑出几家 OK 就是几家，不把"理论三家"当"实测三家"。这条直接治这次「单轮当多轮」「沙箱一刀切」式的过度宣称。
+
+## 七、token 计量：各家 runner 的 sidecar 支持（2026-06-08 实测）
+
+token sidecar 协议：runner 可选写 `<reply>.meta.json`（`{tokens_in, tokens_out, tokens}`），scheduler 跑完读它 merge 进 `AgentResult.cost`。不写就退化（向后兼容）。各家 CLI 暴露 token 的能力不同，**宣称范围 = 实测范围**：
+
+| runner | token 可用 | 来源（实测） |
+|--------|-----------|-------------|
+| **codex** | ✅ 真实 | `codex exec --json` 的 `turn.completed.usage.input_tokens/output_tokens`（`CODEX_JSON=1` 触发）。实测单 turn，usage 即完整值 |
+| **pi** | ✅ 真实 | `pi -p --mode json` 末个 assistant `message_end` 的 `usage.input/output/totalTokens`（实测 tokens_in=38695/out=36/total=40651）。reply 同时从该事件 content 的 text 块抽，json 解析失败回退 raw |
+| **agy** | ❌ 不可用 | agy CLI `--print` 只出纯文本，无 `--json`/usage flag，`--log-file` 只有 OAuth 报错。**且本机实测 agy 未登录**（`not logged into Antigravity`）。等未来版本暴露 usage 再补 |
+| **claude / gemini** | ⏳ 未实现 | sidecar 协议对其开放，runner 写即生效；本机未实测格式 |
+
+`eval-run` 的 `comparison.token_metering_available` 按两腿是否都拿到 token 标注（与 `token_delta` 的 and 条件对齐），不可用时为 False，不静默假装有。
