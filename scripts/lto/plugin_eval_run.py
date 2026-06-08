@@ -23,7 +23,7 @@ from typing import Any
 from . import agent_exec
 from . import plugin_extra
 from . import plugins as core
-from .agent_job import AgentJob, AgentResult, Budget, PermissionPolicy
+from .agent_job import KNOWN_RUNNERS, AgentJob, AgentResult, Budget, PermissionPolicy
 
 # v0 故意不实现的能力——写进证据，避免"看起来覆盖全了"
 DEFERRED_V0 = [
@@ -31,10 +31,23 @@ DEFERRED_V0 = [
     "llm_judge_false_positive_rate",
     "frozen_evidence_hash_redact",
     "automatic_promotion",
+    # K: scheduler 当前不返回 token 计数（runner 无 token metadata），
+    # 所以 token_delta 永远 None——明确声明，不让调用方误以为偶发缺失。
+    "token_cost_metering",
+    # post-exec 闸只补了 schema-parse + private-path 扫描；pointer-only 检测未做。
+    "pointer_only_reply_detection",
 ]
 
-# 私有路径泄露扫描：本机绝对路径前缀（candidate reply 不该把这些带进公开产物）
-_PRIVATE_PATH_RE = re.compile(r"(?:/Users/[^/\s]+|/home/[^/\s]+|/private/(?:tmp|var)|/Volumes/)")
+# brief 来自插件数据，限大小防资源耗尽
+_MAX_BRIEF_BYTES = 512 * 1024
+
+# 私有路径泄露扫描：本机绝对路径前缀（candidate reply 不该把这些带进公开产物）。
+# J: 补 /root、Linux /tmp、macOS /var/folders、Windows C:\Users。
+_PRIVATE_PATH_RE = re.compile(
+    r"(?:/Users/[^/\s]+|/home/[^/\s]+|/root/|"
+    r"/private/(?:tmp|var)|/tmp/|/var/folders/|/Volumes/|"
+    r"[A-Za-z]:\\Users\\[^\\\s]+)"
+)
 
 
 def eval_run(
@@ -67,7 +80,8 @@ def eval_run(
     if pack is None:
         return {"ok": False, "error": f"eval pack not found (eval_id={eval_id})", "plugin": str(plugin_dir)}
 
-    approved_sandbox = _mounted_sandbox(repo, run_id, plugin_dir)
+    plugin_id = str(validation.manifest.get("id", plugin_dir.name))
+    approved_sandbox, mount_present = _mounted_sandbox(repo, run_id, plugin_id)
 
     cases = pack.get("cases", []) or []
     if only_case:
@@ -94,13 +108,24 @@ def eval_run(
         case_reports.append(rep)
         all_ok = all_ok and rep.get("ok", False)
 
+    warnings: list[str] = []
+    if not mount_present:
+        # 没 mount 就跑 = 绕过取证链；不阻断（v0），但必须显式声明，不静默
+        warnings.append(
+            "plugin not mounted for this run — ran at default read-only sandbox without a mount-lock "
+            "provenance record; run `lto plugin mount` first for an auditable approval trail"
+        )
     report = {
         "ok": all_ok,
         "run_id": run_id,
         "plugin": plugin_dir.name,
+        "plugin_id": plugin_id,
         "eval_id": pack.get("id"),
+        "mount_present": mount_present,
+        "approved_sandbox": approved_sandbox,
         "metrics_declared": pack.get("metrics", []),
         "cases": case_reports,
+        "warnings": warnings,
         "deferred": DEFERRED_V0,
     }
     out_root.mkdir(parents=True, exist_ok=True)
@@ -128,6 +153,15 @@ def _run_case(
     profile_id = case.get("profile")
     brief = str(case.get("brief", ""))
 
+    # C: runner 来自插件数据，先校验在 KNOWN_RUNNERS 内——否则 AgentJob.validate()
+    # 会抛 ValueError 崩掉整个 run（违背 case 级失败隔离），这里降级为 case 失败。
+    if runner not in KNOWN_RUNNERS:
+        return {"ok": False, "case_id": case_id, "error": f"unknown runner: {runner!r}"}
+
+    # M: brief 来自插件数据，限大小防资源耗尽（写临时文件 + 喂 runner）
+    if len(brief.encode("utf-8")) > _MAX_BRIEF_BYTES:
+        return {"ok": False, "case_id": case_id, "error": f"brief exceeds {_MAX_BRIEF_BYTES} bytes"}
+
     case_dir = out_root / case_id
     case_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,12 +183,17 @@ def _run_case(
             "error": f"render_profile failed: {exc}",
         }
 
-    # 编译两条腿为 AgentJob
+    # 编译两条腿为 AgentJob。D: 非 read-only sandbox 需要 reason，否则
+    # PermissionPolicy.validate_for_runner 抛 ValueError 崩 run。
+    def _policy() -> PermissionPolicy:
+        reason = "" if approved_sandbox == "read-only" else f"eval-run mount-approved sandbox for case {case_id}"
+        return PermissionPolicy(sandbox=approved_sandbox, reason=reason)
+
     baseline_job = AgentJob(
         job_id=f"eval-{case_id}-baseline",
         prompt_ref=str(baseline_brief),
         runner=runner,
-        permission_policy=PermissionPolicy(sandbox=approved_sandbox),
+        permission_policy=_policy(),
         budget=Budget(),
         meta={"eval_case": case_id, "leg": "baseline"},
     )
@@ -162,7 +201,7 @@ def _run_case(
         job_id=f"eval-{case_id}-candidate",
         prompt_ref=str(candidate_brief),
         runner=runner,
-        permission_policy=PermissionPolicy(sandbox=approved_sandbox),
+        permission_policy=_policy(),
         output_schema=output_schema,
         budget=Budget(),
         meta={"eval_case": case_id, "leg": "candidate", "profile": profile_id},
@@ -185,8 +224,15 @@ def _run_case(
     base_m = _deterministic_metrics(base_res, approved_sandbox, has_schema=False)
     cand_m = _deterministic_metrics(cand_res, approved_sandbox, has_schema=output_schema is not None)
 
+    # B: ok 反映两腿是否真跑成功，不硬编码——否则 runner 失败的 case 被算成成功，
+    # 污染上层 report.ok（A/B 结果可信度的核心承诺）。
+    case_ok = (
+        base_res is not None and base_res.status == "ok"
+        and cand_res is not None and cand_res.status == "ok"
+    )
+
     comparison = {
-        "ok": True,
+        "ok": case_ok,
         "case_id": case_id,
         "runner": runner,
         "profile": profile_id,
@@ -208,12 +254,14 @@ def _run_case(
 def _deterministic_metrics(res: AgentResult | None, approved_sandbox: str, *, has_schema: bool) -> dict[str, Any]:
     """从 AgentResult 算确定性指标（零 LLM）。res 为 None 视为彻底失败。"""
     if res is None:
+        # H: job 根本没返回结果（missing）≠ 越权。permission_violation 标 None
+        # （不适用/未知），避免 _deltas 把"没跑"误判成 candidate 新增越权。
         return {
             "ran": False,
             "status": "missing",
-            "parse_ok": False,
+            "parse_ok": None,
             "timeout": False,
-            "permission_violation": True,
+            "permission_violation": None,
             "private_path_leak": False,
             "elapsed_sec": None,
             "tokens": None,
@@ -261,7 +309,16 @@ def _deltas(base: dict[str, Any], cand: dict[str, Any]) -> dict[str, Any]:
 
 def _load_eval_pack(plugin_dir: Path, manifest: dict[str, Any], eval_id: str | None) -> dict[str, Any] | None:
     for rel in (manifest.get("provides", {}) or {}).get("evals", []) or []:
-        data = json.loads((plugin_dir / rel).read_text(encoding="utf-8"))
+        if not isinstance(rel, str):
+            continue
+        # 防 TOCTOU 路径穿越：validate 与 eval-run 之间 manifest 可能被换，重新校验
+        plugin_extra._ensure_rel_path(rel)
+        path = (plugin_dir / rel).resolve()
+        plugin_extra._ensure_inside(plugin_dir, path)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            continue
         if not isinstance(data, dict):
             continue
         if eval_id is None or data.get("id") == eval_id:
@@ -280,43 +337,56 @@ def _load_output_schema(plugin_dir: Path, schema_ref: Any) -> dict[str, Any] | N
     return data if isinstance(data, dict) else None
 
 
-def _mounted_sandbox(repo: Path, run_id: str, plugin_dir: Path) -> str:
-    """读 mount lock 拿本插件被批准的 max_sandbox；未 mount 默认 read-only。"""
+def _mounted_sandbox(repo: Path, run_id: str, plugin_id: str) -> tuple[str, bool]:
+    """读 mount lock 拿本插件被批准的 max_sandbox。
+
+    返回 (approved_sandbox, mount_present)。未 mount → ("read-only", False)，
+    让调用者能区分"批准了 read-only"和"完全没 mount"（mount 是取证链，
+    见 plugin-boundary.md §6）。lock 顶层 key 是 "mounts"，每条 entry 的
+    sandbox 在 entry["approved_permissions"]["max_sandbox"]，用 plugin_id 精确匹配。
+    """
     lock_path = core.mount_lock_path(repo, run_id)
     if not lock_path.exists():
-        return "read-only"
+        return "read-only", False
     try:
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    except Exception:
-        return "read-only"
-    for entry in lock.get("plugins", []) or []:
-        if entry.get("plugin_path", "").endswith(plugin_dir.name):
-            return str(entry.get("approved_max_sandbox", "read-only"))
-    return "read-only"
+    except (json.JSONDecodeError, ValueError):
+        return "read-only", False
+    for entry in lock.get("mounts", []) or []:
+        if entry.get("plugin_id") == plugin_id:
+            approved = (entry.get("approved_permissions") or {}).get("max_sandbox", "read-only")
+            return str(approved), True
+    return "read-only", False
 
 
 _SANDBOX_RANK = {"read-only": 0, "workspace-write": 1, "danger-full-access": 2}
 
 
 def _sandbox_exceeds(used: str, approved: str) -> bool:
+    """I: 未知 sandbox 值保守判违规——不认识的等级不能当成"没超"放过。
+    used 为空（runner 没报）也保守视为违规（缺 permission snapshot）。"""
     if not used:
-        return False
-    return _SANDBOX_RANK.get(used, 99) > _SANDBOX_RANK.get(approved, 0)
+        return True
+    if used not in _SANDBOX_RANK or approved not in _SANDBOX_RANK:
+        return True
+    return _SANDBOX_RANK[used] > _SANDBOX_RANK[approved]
+
+
+_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
 
 
 def _json_parses(text: str) -> bool:
+    """G: 用正则精确提取 ```json fence 内容，而非 strip('`')（会从两端剥所有反引号）。"""
     text = text.strip()
     if not text:
         return False
-    # 容忍 ```json fenced block
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
+    m = _FENCE_RE.match(text)
+    if m:
+        text = m.group(1).strip()
     try:
-        json.loads(text.strip())
+        json.loads(text)
         return True
-    except Exception:
+    except (json.JSONDecodeError, ValueError):
         return False
 
 

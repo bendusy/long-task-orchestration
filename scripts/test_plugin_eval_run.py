@@ -195,6 +195,114 @@ def test_eval_pack_not_found(tmp_path: Path) -> None:
     assert "eval pack not found" in report["error"]
 
 
+def test_unknown_runner_fails_case_not_crash(tmp_path: Path) -> None:
+    """C 回归：case.runner 不在 KNOWN_RUNNERS 时降级为 case 失败，不崩整个 run。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "r6"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo)
+    pack = pdir / "evals" / "cases.json"
+    data = json.loads(pack.read_text())
+    data["cases"][0]["runner"] = "totally-fake-runner"
+    pack.write_text(json.dumps(data), encoding="utf-8")
+    runners = _fake_runner_dir(tmp_path, reply="{}")
+
+    report = plugin_eval_run.eval_run(
+        repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
+    )
+    assert report["ok"] is False
+    assert "unknown runner" in report["cases"][0]["error"]
+
+
+def test_mount_lock_key_parsed(tmp_path: Path) -> None:
+    """A 回归：mount lock 顶层 key 是 'mounts'，sandbox 在 approved_permissions.max_sandbox。
+    未 mount 时 report.mount_present=False 且有 warning（取证链声明）。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "r7"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo)
+    runners = _fake_runner_dir(tmp_path, reply='{"findings":[]}')
+    report = plugin_eval_run.eval_run(
+        repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
+    )
+    # 没 mount → present False + warning + 默认 read-only
+    assert report["mount_present"] is False
+    assert report["approved_sandbox"] == "read-only"
+    assert any("not mounted" in w for w in report["warnings"])
+
+    # 手写一个 mounts-key lock，确认 _mounted_sandbox 能读到（不再永远 read-only）
+    lock = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "mounts": [
+            {"plugin_id": "mini", "approved_permissions": {"max_sandbox": "read-only"}}
+        ],
+    }
+    from lto import plugins as core
+
+    core.mount_lock_path(repo, run_id).write_text(json.dumps(lock), encoding="utf-8")
+    sandbox, present = plugin_eval_run._mounted_sandbox(repo, run_id, "mini")
+    assert present is True
+    assert sandbox == "read-only"
+    # plugin_id 精确匹配：别的 id 不命中
+    _, present2 = plugin_eval_run._mounted_sandbox(repo, run_id, "ximini")
+    assert present2 is False
+
+
+def test_comparison_ok_reflects_runner_failure(tmp_path: Path) -> None:
+    """B 回归：runner 非零退出 → comparison.ok=False，污染不到的 report.ok 也 False。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "r8"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo, with_schema=False)
+    # fake runner 写 reply 但 exit 1 → status 非 ok
+    runners = tmp_path / "runners"
+    runners.mkdir()
+    fake = tmp_path / "fail_runner.py"
+    fake.write_text(
+        "#!/usr/bin/env python3\nimport sys\nopen(sys.argv[2],'w').write('partial')\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    (runners / "codex.sh").write_text(
+        f'#!/usr/bin/env bash\nexec python3 "{fake}" "$@"\n', encoding="utf-8"
+    )
+    (runners / "codex.sh").chmod(0o755)
+    (runners / "healthcheck.sh").write_text(
+        '#!/usr/bin/env bash\necho \'[{"agent":"codex","verdict":"OK"}]\'\nexit 0\n', encoding="utf-8"
+    )
+    (runners / "healthcheck.sh").chmod(0o755)
+
+    report = plugin_eval_run.eval_run(
+        repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
+    )
+    assert report["ok"] is False
+    assert report["cases"][0]["ok"] is False
+
+
+def test_json_parses_fenced_and_garbage() -> None:
+    """G 回归：fence 提取精确，尾随垃圾不被误判为合法 JSON。"""
+    assert plugin_eval_run._json_parses('{"a":1}') is True
+    assert plugin_eval_run._json_parses('```json\n{"a":1}\n```') is True
+    assert plugin_eval_run._json_parses('```\n{"a":1}\n```') is True
+    assert plugin_eval_run._json_parses('{"a":1}\ntrailing garbage') is False
+    assert plugin_eval_run._json_parses("not json at all") is False
+    assert plugin_eval_run._json_parses("") is False
+
+
+def test_private_path_regex_covers_linux_and_windows() -> None:
+    """J 回归：补的路径前缀真命中。"""
+    rx = plugin_eval_run._PRIVATE_PATH_RE
+    assert rx.search("token at /root/.ssh/id_rsa")
+    assert rx.search("tmp /tmp/lto_reply_xyz")
+    assert rx.search("/var/folders/ab/cd/T/x")
+    assert rx.search(r"C:\Users\ben\secret.txt")
+    assert not rx.search("just a relative ./path/file")
+
+
 if __name__ == "__main__":
     import pytest
 
