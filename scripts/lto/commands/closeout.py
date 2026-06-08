@@ -228,10 +228,30 @@ def _build_handoff(
         f"- summary: {st.single_line(args.summary)}",
         f"- next_action: {st.single_line(args.next_action)}",
         f"- intervention_summary: {intervention_summary}",
+        f"- token_usage: {_token_usage_line(state)}",
         "",
     ])
     ordered = sorted(entries, key=lambda e: (e.get("kind", ""), e.get("relative_path", "")))
     return header + af.render_markdown(ordered, title="Artifacts") + "\n"
+
+
+def _token_usage_line(state: dict) -> str:
+    """Compact per-run token rollup for the handoff header (machine-friendly)."""
+    roll = st.token_rollup(state)
+    if roll["runs_total"] == 0:
+        return "no agent runs"
+    if roll["total_tokens"] == 0:
+        return f"unmetered ({roll['runs_total']} runs, no runner reported tokens)"
+    by = ", ".join(
+        f"{r}={s['tokens']}"
+        for r, s in sorted(roll["by_runner"].items(), key=lambda kv: -kv[1]["tokens"])
+        if s["tokens"] > 0
+    )
+    return (
+        f"{roll['total_tokens']} total "
+        f"(in={roll['tokens_in']}, out={roll['tokens_out']}; "
+        f"{roll['runs_with_tokens']}/{roll['runs_total']} runs metered; {by})"
+    )
 
 
 def add_parser(subparsers) -> None:

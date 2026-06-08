@@ -73,6 +73,11 @@ def _render_recap(state: dict, run_id: str, *, repo: Path | None = None, include
     lines.append("│ 还剩什么 ──────── " + _remaining_summary(pending, blocked, done_when))
 
     # 现在轮到你（决策点）
+    # 花了多少 token（per-run 汇总，跨所有 agent_runs）
+    token_line = _token_summary(state)
+    if token_line:
+        lines.append("│ 花了多少 token ── " + token_line)
+
     lines.append("│ 现在轮到你 ────── " + _next_for_human(state, blocked, next_action, blocked_by))
     if include_artifacts and repo is not None:
         lines.append("│ 关键产物 ──────── " + _artifact_summary(repo, run_id))
@@ -80,6 +85,33 @@ def _render_recap(state: dict, run_id: str, *, repo: Path | None = None, include
     lines.append("│")
     lines.append(f"╰─ run: {run_id}  phase: {phase}")
     return "\n".join(lines)
+
+
+def _token_summary(state: dict) -> str:
+    """One-line per-run token usage for humans. Empty string if nothing ran."""
+    roll = st.token_rollup(state)
+    if roll["runs_total"] == 0:
+        return ""
+    total = roll["total_tokens"]
+    wt, rt = roll["runs_with_tokens"], roll["runs_total"]
+    if total == 0:
+        return f"未计量（{rt} 次派工，无 runner 上报 token；agy 等 CLI 不暴露用量）"
+    # per-runner breakdown, biggest first
+    parts = []
+    for runner, s in sorted(roll["by_runner"].items(), key=lambda kv: -kv[1]["tokens"]):
+        if s["tokens"] > 0:
+            parts.append(f"{runner} {_fmt_tokens(s['tokens'])}")
+    by = "，".join(parts)
+    coverage = "" if wt == rt else f"（{wt}/{rt} 次派工有计量）"
+    return f"约 {_fmt_tokens(total)} tokens{coverage}：{by}"
+
+
+def _fmt_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
 
 
 def _artifact_summary(repo: Path, run_id: str) -> str:

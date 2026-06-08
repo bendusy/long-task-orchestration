@@ -282,3 +282,63 @@ def mark_risk_verified(
             rp["disposition"] = "verified"
             return state
     raise KeyError(f"risk point not found: {rp_id!r}")
+
+
+def token_rollup(state: dict[str, Any]) -> dict[str, Any]:
+    """Aggregate per-run token usage across all persisted agent_runs.
+
+    Each agent_runs[job_id] is a list of AgentResult dicts; each may carry
+    cost.tokens / cost.tokens_in / cost.tokens_out (written by a runner token
+    sidecar — codex/pi/claude provide it, agy does not). Returns:
+
+        {
+          "total_tokens": int, "tokens_in": int, "tokens_out": int,
+          "runs_with_tokens": int,   # runner results that reported tokens
+          "runs_total": int,         # total runner results seen
+          "by_runner": {runner: {tokens, runs_with_tokens, runs_total}},
+        }
+
+    Token-less results (agy, or runs before sidecar support) count toward
+    runs_total but not runs_with_tokens — so the consumer can honestly say
+    "N of M runs reported tokens" instead of pretending coverage is complete.
+    """
+    total = tin = tout = 0
+    with_tokens = total_runs = 0
+    by_runner: dict[str, dict[str, int]] = {}
+
+    def _int(val: Any) -> int:
+        return val if isinstance(val, int) and not isinstance(val, bool) and val >= 0 else 0
+
+    for results in (state.get("agent_runs") or {}).values():
+        if not isinstance(results, list):
+            continue
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            total_runs += 1
+            runner = str(r.get("runner", "?"))
+            slot = by_runner.setdefault(runner, {"tokens": 0, "runs_with_tokens": 0, "runs_total": 0})
+            slot["runs_total"] += 1
+            cost = r.get("cost") or {}
+            tok = _int(cost.get("tokens"))
+            ti = _int(cost.get("tokens_in"))
+            to = _int(cost.get("tokens_out"))
+            # tokens may be absent while in/out present → fall back to their sum
+            if tok == 0 and (ti or to):
+                tok = ti + to
+            if tok > 0:
+                total += tok
+                tin += ti
+                tout += to
+                with_tokens += 1
+                slot["tokens"] += tok
+                slot["runs_with_tokens"] += 1
+
+    return {
+        "total_tokens": total,
+        "tokens_in": tin,
+        "tokens_out": tout,
+        "runs_with_tokens": with_tokens,
+        "runs_total": total_runs,
+        "by_runner": by_runner,
+    }
