@@ -168,12 +168,12 @@ A plugin can lower permission ceilings. It cannot raise them.
 
 ### Post-exec gate
 
-For plugin-influenced jobs, host should verify:
+For plugin-influenced jobs, host should verify (✅ = checked by `eval-run` deterministic metrics):
 
-- reply is not pointer-only;
-- output schema parse succeeded;
-- no local private paths in public artifacts;
-- permission snapshot matches mount approval.
+- reply is not pointer-only ✅ (`pointer_only` metric);
+- output schema parse succeeded ✅ (`parse_ok` metric);
+- no local private paths in public artifacts ✅ (`private_path_leak` metric);
+- permission snapshot matches mount approval ✅ (`permission_violation` metric, sandbox-rank based).
 
 ## 8. Runtime profile strategy
 

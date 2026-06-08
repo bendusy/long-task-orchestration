@@ -303,6 +303,49 @@ def test_private_path_regex_covers_linux_and_windows() -> None:
     assert not rx.search("just a relative ./path/file")
 
 
+def test_pointer_only_detection() -> None:
+    """post-exec 闸补全：pointer-only reply 检测（agy/gemini 已知会只回指针）。"""
+    f = plugin_eval_run._is_pointer_only
+    # 真 pointer-only：短 + 文件指针/引用短语
+    assert f("see file:///tmp/result.txt", parsed_substantive=False) is True
+    assert f("done, see the artifact", parsed_substantive=False) is True
+    assert f("结果在 /tmp/lto_reply_x 见文件", parsed_substantive=False) is True
+    assert f("/Users/ben/out.json", parsed_substantive=False) is True
+    # 有实质 JSON 内容 → 不算 pointer-only（即便含路径）
+    assert f('{"findings":[{"t":"x"}]} written to /tmp/x', parsed_substantive=True) is False
+    # 长实质回复 → 不算，即便提到路径
+    long_reply = "The audit found 3 issues. " * 20 + "details saved to /tmp/x"
+    assert f(long_reply, parsed_substantive=False) is False
+    # 空回复 → 不混进 pointer-only（另算 empty failure）
+    assert f("", parsed_substantive=False) is False
+    # 正常短实质回复（无路径无指针短语）→ 不算
+    assert f("No issues found in the spec.", parsed_substantive=False) is False
+    # 审计反馈补的漏判案例：agy 中文输出风格 + 多行 "Result saved.\nFile: /path"
+    assert f("输出到 /tmp/x", parsed_substantive=False) is True
+    assert f("保存在 /tmp/result.json", parsed_substantive=False) is True
+    assert f("Result saved.\nFile: /tmp/lto-dev/.lto/r1/candidate-result.json", parsed_substantive=False) is True
+    # 空 findings 的合法 JSON → 不算 pointer-only（属另一类"没干活"，见 DEFERRED quality）
+    assert f('{"findings":[]}', parsed_substantive=True) is False
+
+
+def test_pointer_only_in_metrics_and_deltas(tmp_path: Path) -> None:
+    """pointer-only 进 metrics + deltas，且 deferred 不再列它。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "rp"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo, with_schema=False)
+    runners = _fake_runner_dir(tmp_path, reply="see /tmp/result.txt")
+    report = plugin_eval_run.eval_run(
+        repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
+    )
+    case = report["cases"][0]
+    assert case["candidate"]["pointer_only"] is True
+    assert "candidate_new_pointer_only" in case["deltas"]
+    # 已实现 → 不再挂在 deferred
+    assert "pointer_only_reply_detection" not in report["deferred"]
+
+
 if __name__ == "__main__":
     import pytest
 

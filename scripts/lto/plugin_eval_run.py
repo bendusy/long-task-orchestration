@@ -34,8 +34,6 @@ DEFERRED_V0 = [
     # K: scheduler 当前不返回 token 计数（runner 无 token metadata），
     # 所以 token_delta 永远 None——明确声明，不让调用方误以为偶发缺失。
     "token_cost_metering",
-    # post-exec 闸只补了 schema-parse + private-path 扫描；pointer-only 检测未做。
-    "pointer_only_reply_detection",
 ]
 
 # brief 来自插件数据，限大小防资源耗尽
@@ -48,6 +46,44 @@ _PRIVATE_PATH_RE = re.compile(
     r"/private/(?:tmp|var)|/tmp/|/var/folders/|/Volumes/|"
     r"[A-Za-z]:\\Users\\[^\\\s]+)"
 )
+
+# pointer-only 检测：某些 runner（agy/gemini 已知）只回个文件指针/路径引用而非实质
+# 内容，如 "见 /tmp/result.txt" / "done, see artifact" / "output written to ..."。
+# agy-audit-contract 的 failure.pointer_only_reply_is_failure 把它定为失败。
+_POINTER_SHORT_LEN = 200  # 超过此长度的回复大概率带实质内容，不判 pointer-only
+_PATH_ONLY_MAX_LEN = 110  # 回复整体基本就是路径本身（含少量前后缀/换行）的上限
+_FILE_URI_RE = re.compile(r"file://|\bsee\s+(?:the\s+)?(?:file|artifact|attachment|output|reply)\b", re.IGNORECASE)
+# 指针引用短语：英文 + agy 已知的中文输出风格（见审计反馈，补 输出到/保存在/见/写到/保存至）
+_POINTER_PHRASE_RE = re.compile(
+    r"(?:written to|saved to|output to|results? (?:are )?(?:in|at)"
+    r"|见附件|见文件|详见|结果在|已写入|输出到|保存在|保存至|写到|写入了?|见\s*/)",
+    re.IGNORECASE,
+)
+
+
+def _is_pointer_only(reply: str, *, parsed_substantive: bool) -> bool:
+    """确定性判断 reply 是否只是指针/引用而无实质内容（零 LLM）。
+
+    parsed_substantive=True（reply 是合法 JSON）时一律不算 pointer-only：有结构化内容
+    就不是裸指针。（注意：空 findings 的 JSON 不算 pointer-only，那是另一类"没干活"，
+    属 DEFERRED_V0 的 quality 检测范畴。）否则：短回复 + 指针特征即判 pointer-only。
+    """
+    if parsed_substantive:
+        return False
+    stripped = reply.strip()
+    if not stripped:
+        return False  # 空回复是 empty failure，另算，不混进 pointer-only
+    # 只在"短"回复上判——长回复即便含路径短语，也大概率带了实质内容
+    if len(stripped) > _POINTER_SHORT_LEN:
+        return False
+    if _FILE_URI_RE.search(stripped):
+        return True
+    if _POINTER_PHRASE_RE.search(stripped) and _PRIVATE_PATH_RE.search(stripped):
+        return True
+    # 短回复且整体基本就是一个绝对路径（允许少量前后缀/换行，如 "Result saved.\nFile: /path"）
+    if _PRIVATE_PATH_RE.search(stripped) and len(stripped) < _PATH_ONLY_MAX_LEN:
+        return True
+    return False
 
 
 def eval_run(
@@ -263,15 +299,18 @@ def _deterministic_metrics(res: AgentResult | None, approved_sandbox: str, *, ha
             "timeout": False,
             "permission_violation": None,
             "private_path_leak": False,
+            "pointer_only": None,
             "elapsed_sec": None,
             "tokens": None,
         }
     reply = res.reply_text or ""
     parse_ok = True
+    parsed_substantive = _json_parses(reply)
     if has_schema:
         # candidate 声明了 output_schema → reply 必须能 JSON parse 才算 parse_ok
-        parse_ok = _json_parses(reply)
+        parse_ok = parsed_substantive
     leak = bool(_PRIVATE_PATH_RE.search(reply))
+    pointer_only = _is_pointer_only(reply, parsed_substantive=parsed_substantive)
     sandbox_used = str(res.permissions.get("sandbox", "")) if res.permissions else ""
     violation = _sandbox_exceeds(sandbox_used, approved_sandbox)
     return {
@@ -282,6 +321,7 @@ def _deterministic_metrics(res: AgentResult | None, approved_sandbox: str, *, ha
         "timeout": res.exit_code == 124 or res.status == "timeout",
         "permission_violation": violation,
         "private_path_leak": leak,
+        "pointer_only": pointer_only,
         "elapsed_sec": res.cost.get("elapsed_sec") if res.cost else None,
         "tokens": res.cost.get("tokens") if res.cost else None,
     }
@@ -302,6 +342,8 @@ def _deltas(base: dict[str, Any], cand: dict[str, Any]) -> dict[str, Any]:
         and not bool(base.get("permission_violation")),
         "candidate_new_private_path_leak": bool(cand.get("private_path_leak"))
         and not bool(base.get("private_path_leak")),
+        "candidate_new_pointer_only": bool(cand.get("pointer_only"))
+        and not bool(base.get("pointer_only")),
     }
 
 
