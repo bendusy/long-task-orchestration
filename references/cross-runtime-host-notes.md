@@ -180,7 +180,8 @@ token sidecar 协议：runner 可选写 `<reply>.meta.json`（`{tokens_in, token
 |--------|-----------|-------------|
 | **codex** | ✅ 真实 | `codex exec --json` 的 `turn.completed.usage.input_tokens/output_tokens`（`CODEX_JSON=1` 触发）。实测单 turn，usage 即完整值 |
 | **pi** | ✅ 真实 | `pi -p --mode json` 末个 assistant `message_end` 的 `usage.input/output/totalTokens`（实测 tokens_in=38695/out=36/total=40651）。reply 同时从该事件 content 的 text 块抽，json 解析失败回退 raw |
+| **claude** | ✅ 真实 | `claude -p --output-format json` 输出单 JSON 对象：`result` 是 reply，`usage.input_tokens/output_tokens` + cache 字段。tokens rollup 含 cache（实测 in=16916/out=5/total=44112，total 远大于 in+out 因含 cache_creation）。reply 从 result 抽，解析失败回退 raw |
 | **agy** | ❌ 不可用 | agy CLI `--print` 只出纯文本，无 `--json`/usage flag，`--log-file` 只有 OAuth 报错。**且本机实测 agy 未登录**（`not logged into Antigravity`）。等未来版本暴露 usage 再补 |
-| **claude / gemini** | ⏳ 未实现 | sidecar 协议对其开放，runner 写即生效；本机未实测格式 |
+| **gemini** | ⏳ 未实现 | sidecar 协议对其开放，runner 写即生效；gemini-cli 已停服（继任 agy），未实测 |
 
 `eval-run` 的 `comparison.token_metering_available` 按两腿是否都拿到 token 标注（与 `token_delta` 的 and 条件对齐），不可用时为 False，不静默假装有。

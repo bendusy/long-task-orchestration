@@ -121,6 +121,7 @@ def main() -> int:
         ("next",          [sys.executable, str(SCRIPTS_DIR / "test_next.py")],              False),
         ("codex_runner",  [sys.executable, str(SCRIPTS_DIR / "test_codex_runner.py")],      False),
         ("pi_runner",     [sys.executable, str(SCRIPTS_DIR / "test_pi_runner.py")],         False),
+        ("claude_runner", [sys.executable, str(SCRIPTS_DIR / "test_claude_runner.py")],     False),
         ("plugins",       [sys.executable, str(SCRIPTS_DIR / "test_plugins.py")],           False),
         ("privacy",       [sys.executable, str(SCRIPTS_DIR / "test_privacy_self_check.py")], False),
         ("worktree",      [sys.executable, str(SCRIPTS_DIR / "test_worktree_sandbox.py")],  False),
