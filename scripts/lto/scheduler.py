@@ -206,6 +206,15 @@ class Scheduler:
                         error=f"unhandled exception: {exc}",
                     )
 
+        # Stamp the job's model onto its result (single point — covers every
+        # construction path above: skip/normal/exception fallback). AgentResult
+        # carries runner but not model; cross-run mining groups by model when
+        # present, so backfill it here from the originating job.
+        for j in jobs:
+            res = results_map.get(j.job_id)
+            if res is not None and res.model is None:
+                res.model = j.model
+
         # Preserve input order
         return [results_map[j.job_id] for j in jobs]
 

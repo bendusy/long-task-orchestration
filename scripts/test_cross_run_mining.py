@@ -46,7 +46,7 @@ def _write_run(repo: Path, run_id: str, *, agent_runs=None, events=None) -> None
         ev.append(repo, run_id, **e)
 
 
-def _result(runner, status, *, tokens=None, tokens_in=None, tokens_out=None):
+def _result(runner, status, *, tokens=None, tokens_in=None, tokens_out=None, model=None):
     cost = {}
     if tokens is not None:
         cost["tokens"] = tokens
@@ -54,7 +54,10 @@ def _result(runner, status, *, tokens=None, tokens_in=None, tokens_out=None):
         cost["tokens_in"] = tokens_in
     if tokens_out is not None:
         cost["tokens_out"] = tokens_out
-    return {"job_id": "j", "runner": runner, "status": status, "cost": cost}
+    r = {"job_id": "j", "runner": runner, "status": status, "cost": cost}
+    if model is not None:
+        r["model"] = model
+    return r
 
 
 def build_fixture(repo: Path) -> None:
@@ -311,6 +314,32 @@ def test_honest_degradation() -> None:
               "thin sample → hint refuses to crown a winner")
 
 
+def test_model_subgrouping() -> None:
+    """⑦: agent_runs 落 model 字段时，brief 按 runner 下的 model 分组显示；
+    旧 run 无 model 字段时不崩、不显示 model 分布（向后兼容）。"""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td)
+        # 同 runner(pi) 不同 model(deepseek vs glm) → 应能区分
+        _write_run(repo, "20260101-000000-mdl-a",
+                   agent_runs={"j": [_result("pi", "ok", tokens=100, model="deepseek-v4-pro")]})
+        _write_run(repo, "20260102-000000-mdl-b",
+                   agent_runs={"j": [_result("pi", "failed", model="glm-4.6")]})
+        brief = crm.render_mining_brief(repo)
+        check("model 分布" in brief, "model present → brief shows model distribution")
+        check("deepseek-v4-pro" in brief and "glm-4.6" in brief,
+              "same runner different models are distinguished")
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td)
+        # 旧 run：无 model 字段 → 不崩，不显示 model 分布
+        _write_run(repo, "20260101-000000-old-a",
+                   agent_runs={"j": [_result("codex", "ok", tokens=100)]})
+        _write_run(repo, "20260102-000000-old-b",
+                   agent_runs={"j": [_result("codex", "ok", tokens=100)]})
+        brief = crm.render_mining_brief(repo)
+        check("model 分布" not in brief, "no model field → no model section (backward compatible)")
+
+
 def main() -> int:
     test_model_effectiveness()
     test_skipped_status_transparent()
@@ -321,6 +350,7 @@ def main() -> int:
     test_phase_friction()
     test_brief_wording()
     test_honest_degradation()
+    test_model_subgrouping()
     if _FAILS:
         print(f"\n{_FAILS} FAILURES", file=sys.stderr)
         return 1

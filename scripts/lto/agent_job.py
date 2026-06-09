@@ -158,6 +158,7 @@ class AgentResult:
     """一个 agent 任务的执行结果。"""
     job_id: str
     runner: str
+    model: str | None = None                       # 具体模型型号（runner 是家族，model 是型号；跨 run 挖掘按 model 子分组用）
     status: str = JobStatus.PENDING.value
     exit_code: int | None = None                   # 区分 124 timeout / 0 空返回 / 非零失败
     findings: list[dict[str, Any]] = field(default_factory=list)  # 结构化（非 regex 扫文本）

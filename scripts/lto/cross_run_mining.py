@@ -146,7 +146,7 @@ def mine_model_effectiveness(repo: Path) -> dict[str, Any]:
 
     def _new_slot() -> dict[str, Any]:
         slot = {"runs": 0, "distinct_runs": 0, "other": 0,
-                "total_tokens": 0, "tokens_runs": 0}
+                "total_tokens": 0, "tokens_runs": 0, "models": {}}
         for k in _STATUS_KEYS:
             slot[k] = 0
         return slot
@@ -175,9 +175,15 @@ def mine_model_effectiveness(repo: Path) -> dict[str, Any]:
                 total_results += 1
                 runner = str(r.get("runner", "?"))
                 status = str(r.get("status", "")).lower()
+                # model 是 runner 下的具体型号（如 pi 跑 deepseek vs glm）。旧
+                # agent_runs 无此字段 → None，按 runner 聚合不细分（向后兼容）。
+                model = r.get("model")
+                model = str(model) if isinstance(model, str) and model else None
 
                 slot = by_runner.setdefault(runner, _new_slot())
                 slot["runs"] += 1
+                if model:
+                    slot["models"][model] = slot["models"].get(model, 0) + 1
                 if status in _STATUS_KEYS:
                     slot[status] += 1
                 else:
@@ -364,6 +370,20 @@ def render_mining_brief(repo: Path, *, min_runs: int = 2) -> str:
             "> 成功率分母 = 派工数（含 skipped/other），两列已列出便于核对低成功率的成因。"
         )
         lines.append("")
+        # model 分布（runner 下的具体型号）——仅当 agent_runs 落了 model 字段才显示。
+        # 旧 run 无 model → 不显示，按 runner 聚合（向后兼容）。
+        model_lines = []
+        for runner, s in sorted(by_runner.items(), key=lambda kv: -kv[1]["runs"]):
+            models = s.get("models") or {}
+            if models:
+                dist = "，".join(
+                    f"{mdl} {cnt}" for mdl, cnt in sorted(models.items(), key=lambda kv: -kv[1])
+                )
+                model_lines.append(f"- {runner}：{dist}")
+        if model_lines:
+            lines.append("**model 分布**（runner 下的具体型号）：")
+            lines.extend(model_lines)
+            lines.append("")
         # derived signal — hypothesis only, cross-run + low-N gated, host decides
         hint = _effectiveness_hint(by_runner, min_runs=min_runs)
         if hint:
