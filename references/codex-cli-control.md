@@ -46,6 +46,17 @@ CODEX_SANDBOX=workspace-write scripts/delegate/runners/codex.sh prompt.md reply.
 
 Avoid `danger-full-access` unless user explicitly approved and the outer environment is already controlled. LTO must never equate "long task" with "full disk permission".
 
+**Prefer the explicit `delegate.sh --sandbox` flag** over setting `CODEX_SANDBOX` by hand — it validates the value and is visible at the dispatch call site (an env var is easy to forget, which silently leaves codex read-only):
+
+```bash
+# write task: codex needs to edit files
+scripts/delegate/delegate.sh -a codex -p prompt.md -o reply.md --sandbox workspace-write -t 900
+# review/research task: default read-only, no flag needed
+scripts/delegate/delegate.sh -a codex -p prompt.md -o reply.md -t 300
+```
+
+`--sandbox` only applies to codex (other agents have no sandbox concept and get a stderr notice). A read-only codex asked to write will honestly report it cannot — that is the sandbox working, not a codex regression; pass `--sandbox workspace-write` for write tasks.
+
 ## 4. Prompt shape for delegated Codex work
 
 For non-trivial jobs, shape prompt as:

@@ -1,6 +1,6 @@
 # LTO control-loop harness spec
 
-> **STATUS: Design spec — not yet implemented.** Phase 0/0.5 is this reviewed specification. Phase 1 passive `events.jsonl` / `telemetry.json` logging is not implemented yet. Sections defining Issue/Finding/Claim/Decision/Barrier describe future typed workspace targets, not current CLI behavior.
+> **STATUS: Phase 1 passive logging implemented (2026-06-09); later phases still spec.** The Phase 1 sensor layer — append-only `events.jsonl` (8 event types) + derived `telemetry.json` — is implemented (`scripts/lto/events.py`, `scripts/lto/telemetry.py`). Phase 0/0.5 remains this reviewed specification. Sections defining Issue/Finding/Claim/Decision/Barrier and the deferred event types describe future typed workspace targets, not current CLI behavior.
 
 > LTO is not an agent UI, not a PM replacement, and not a marketplace of workflows. LTO is a control harness for long AI-agent work: observe state, detect drift, limit unsafe actions, improve flow, reduce waste, and preserve evidence for future tuning.
 

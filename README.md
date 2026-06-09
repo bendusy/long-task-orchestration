@@ -2,6 +2,18 @@
 
 > 做一个大功能要几十轮对话。LTO 给主 agent 一套可恢复、可审计、可自动化推进的任务操作系统：状态、证据、审计、沙箱、恢复、回顾和人工闸门。
 
+## 最新更新（v0.2.0，2026-06-09）
+
+一是修复了 codex 调用会假死的问题——派 codex 写文件时它默认只读、会报写不了，其实不是 codex 坏了，是派工没把沙箱开关给它；现在加了 `--sandbox` 参数显式放开写权限。
+
+二是增加了 token 计量——每次 lto 跑下来烧了多少 token 现在能统计出来（codex/pi/claude 真实计量，agy 无接口诚实标 unmetered），`recap`/`closeout` 直接告诉你这次花了多少。
+
+三是强化了运行 subagent 和调用其他 cli 的可观测性——每个派工边跑边把输出写进 `live/<job-id>.log`，卡住时直接 `tail` 就能看，不用干等 timeout。
+
+四是新增了运行留痕——每次 run 自动记一份 `events.jsonl`（开始、阶段、任务、派工、产物都留时间线）和派生的 `telemetry.json`，落盘前自动抹掉敏感信息；这是给"以后让 lto 越用越聪明"攒的第一手证据。
+
+完整技术条目见 [CHANGELOG.md](CHANGELOG.md)。
+
 LTO 不替你写代码，也不替你选完整路径。host agent 仍然是 planner；LTO 提供可组合的 harness primitive：
 1. **该不该做**——缺的东西现在真需要吗？答不上就停
 2. **写方案**——把可能出问题的地方标出来
@@ -10,7 +22,7 @@ LTO 不替你写代码，也不替你选完整路径。host agent 仍然是 plan
 5. **运行中可见 + 用量可查**——每个派工边跑边写 `.lto/<run-id>/live/<job-id>.log`（卡住直接 `tail` 看，不用等 timeout）；token 按 runner 计量（codex/pi/claude 真实，agy 无 CLI 用量诚实标 unmetered）
 6. **动态决策支持**——`next`/`autopilot` 整理事实、提供 safe action、必要时升级，最终路径由 host agent 判断
 7. **跨 session 回顾**——`recap` 用人话告诉你：做什么/为什么/跑多久/做到哪/还剩啥/现在轮到你/花了多少 token
-8. **少打扰人**——`interventions.jsonl` 记录 force、被拦 closeout、已避免的人手清理
+8. **留痕可审计**——append-only `events.jsonl`（run/phase/task/runner/artifact 起止）+ 派生 `telemetry.json` + `interventions.jsonl`（force、被拦 closeout、已避免的人手清理）；纯传感器、落盘前 redact，是调优证据地基
 9. **越用越聪明**——先稳定 `.lto` 协议，再把真实 run 信号喂给 host agent 调优；Go shadow CLI 要等协议稳定
 10. **部署 + 收尾**——pre-deploy hook 闸门 + `closeout` 自动生成 CHANGELOG.md
 

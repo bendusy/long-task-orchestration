@@ -241,8 +241,9 @@ def main() -> int:
     errors += check("v0 implemented" in real_eval_doc, "plugin eval-run doc marks v0 implemented")
 
     control_doc = (SKILL_DIR / "references" / "control-loop-harness.md").read_text(encoding="utf-8")
-    errors += check("Design spec" in control_doc and "not implemented" in control_doc, "control-loop harness doc is marked future spec")
-    errors += check("planned Phase 1 capability" in claude_txt, "CLAUDE.md qualifies events/telemetry as planned")
+    # Phase 1 sensor layer is implemented (2026-06-09); later phases stay spec.
+    errors += check("Phase 1 passive logging implemented" in control_doc, "control-loop harness doc marks Phase 1 implemented")
+    errors += check("Phase 1 sensor layer is implemented" in claude_txt, "CLAUDE.md marks events/telemetry Phase 1 implemented")
 
     # Summary
     if errors == 0:

@@ -76,8 +76,8 @@ Current and near-term protocol surfaces:
 | `handoff.md` | closeout transfer capsule | implemented |
 | `plugin-mounts.json` | mounted data-only plugin provenance | implemented |
 | `interventions.jsonl` | low-sensitivity human-intervention log | v0 implemented |
-| `events.jsonl` | broader append-only run events | planned, not implemented |
-| `telemetry.json` | derived run signals | planned, not implemented |
+| `events.jsonl` | broader append-only run events | implemented (Phase 1, 8 event types) |
+| `telemetry.json` | derived run signals | implemented (Phase 1) |
 
 Protocol rules:
 

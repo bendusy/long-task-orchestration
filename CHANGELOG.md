@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.0 — 2026-06-09
+
+Passive sensor layer (events.jsonl + telemetry.json), per-run token metering, live job logs, and the delegate `--sandbox` fix. Entries below.
+
 ## delegate: explicit `--sandbox` flag (codex was silently read-only)
 
 - **Commit**: this commit.

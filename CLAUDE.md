@@ -92,13 +92,13 @@ Current posture:
 
 ### 8. Run logs are tuning fuel
 
-LTO should preserve structured run telemetry for future tuning; event/telemetry files are a planned Phase 1 capability, not current implementation yet:
+LTO preserves structured run telemetry for future tuning. The Phase 1 sensor layer is implemented (2026-06-09); deeper signals remain future work:
 
-- append-only `events.jsonl` style run log;
-- derived `telemetry.json` snapshots;
-- worker observations;
-- finding/issue/decision provenance;
-- budget/time/quality signals.
+- append-only `events.jsonl` run log (8 Phase 1 event types) — **implemented**;
+- derived `telemetry.json` snapshots — **implemented**;
+- worker observations — future;
+- finding/issue/decision provenance — future (deferred event types);
+- budget/time/quality signals — partial (budget + event-log counters in telemetry).
 
 When implemented, logs must pass ingress redaction before write. They reference artifacts, not inline raw transcripts, secrets, private source contents, or absolute private paths. `telemetry.json` persists derived signals only; route-like recommendations belong in ephemeral `next` briefs, not persistent telemetry.
 
