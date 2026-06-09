@@ -179,8 +179,11 @@ def test_deferred_v0_declared(tmp_path: Path) -> None:
     report = plugin_eval_run.eval_run(
         repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
     )
-    # v0 诚实声明未做的能力，不静默截断
-    assert "llm_judge_blocker_quality" in report["deferred"]
+    # llm_judge + frozen evidence hash 已兑现 → 从 deferred 移除；
+    # automatic_promotion 仍 deferred（promote 保持 human-gated）。
+    assert "llm_judge_blocker_quality" not in report["deferred"]
+    assert "llm_judge_false_positive_rate" not in report["deferred"]
+    assert "frozen_evidence_hash_redact" not in report["deferred"]
     assert "automatic_promotion" in report["deferred"]
 
 

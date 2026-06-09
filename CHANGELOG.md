@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### eval-run llm_judge — subjective quality layer, frozen and isolated
+
+- **Summary**: `plugin eval-run` could only compare **deterministic** metrics (parse rate, timeout, permission violations, pointer-only). This adds the deferred LLM-judged quality pass — a heterogeneous runner reads each case's evidence and judges blocker quality / false-positive suspicion. Designed by the standing co-design pass, implemented by a sub-agent, then adversarially reviewed by codex (3 BLOCKER + 3 MEDIUM, all fixed before merge). User-chosen scope: **judge reads and is frozen, but never touches promotion** — deterministic metrics still own the promote gate.
+- **Three invariants (test-pinned)**:
+  - **Heterogeneous**: the judge runner is never the same family as the runner that produced the candidate reply (reuses `_same_family`); same-family → skipped, never silent self-judging. Unhealthy/missing judge runners fall through to the next heterogeneous candidate.
+  - **Reproducible**: the judge's *redacted* input evidence and its *verdict* are hashed separately (`evidence_hash` + `judgment_hash`) and frozen to `frozen-evidence.json` / `judge-verdict.json`. Same evidence + a re-run/edited verdict → `judgment_hash` changes. Redaction eats whole private paths (dir + filename, POSIX/Windows/JSON-escaped) and full PEM blocks + key-value secrets — a judge prompt must never carry a secret.
+  - **No promotion power**: the judge result is a separate `comparison["judge"]` layer marked `kind: "subjective_judgment"`; it never mixes into deterministic metrics, `case_ok`, deltas, or the promote path. `automatic_promotion` stays the only remaining `DEFERRED_V0` item (promotion stays human-gated).
+- **Changes**: new `scripts/lto/llm_judge.py` (redact / `freeze_evidence` / `_freeze_verdict` / heterogeneous-healthy judge dispatch); `plugin_eval_run` freezes evidence + runs judge before writing `comparison.json`; judge input capped at 256KB (oversized → skipped, not dispatched). `DEFERRED_V0` shrinks to `["automatic_promotion"]`.
+
 ## v0.2.0 — 2026-06-09
 
 Passive sensor layer (events.jsonl + telemetry.json), per-run token metering, live job logs, and the delegate `--sandbox` fix. Entries below.

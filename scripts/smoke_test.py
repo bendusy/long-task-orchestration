@@ -239,6 +239,12 @@ def main() -> int:
     errors += check("eval-run" in plugin_help, "plugin eval-run is advertised (v0 implemented)")
     real_eval_doc = (SKILL_DIR / "references" / "plugin-real-eval-runner.md").read_text(encoding="utf-8")
     errors += check("v0 implemented" in real_eval_doc, "plugin eval-run doc marks v0 implemented")
+    errors += check("judge layer implemented" in real_eval_doc, "plugin eval-run doc marks judge layer implemented")
+    # judge + frozen evidence hash 已兑现 → DEFERRED_V0 只剩 automatic_promotion
+    if str(SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+    from lto.plugin_eval_run import DEFERRED_V0
+    errors += check(DEFERRED_V0 == ["automatic_promotion"], "eval-run deferred only automatic_promotion remains")
 
     control_doc = (SKILL_DIR / "references" / "control-loop-harness.md").read_text(encoding="utf-8")
     # Phase 1 sensor layer is implemented (2026-06-09); later phases stay spec.

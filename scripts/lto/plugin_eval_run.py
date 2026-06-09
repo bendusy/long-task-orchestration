@@ -25,11 +25,11 @@ from . import plugin_extra
 from . import plugins as core
 from .agent_job import KNOWN_RUNNERS, AgentJob, AgentResult, Budget, PermissionPolicy
 
-# v0 故意不实现的能力——写进证据，避免"看起来覆盖全了"
+# 仍故意不实现的能力——写进证据，避免"看起来覆盖全了"。
+# llm_judge_blocker_quality / llm_judge_false_positive_rate / frozen_evidence_hash_redact
+# 已在 llm_judge.py 兑现（判读 + 冻结层），从 deferred 移除。
+# automatic_promotion 保留 deferred：judge 不进 promote，promotion 仍 human-gated。
 DEFERRED_V0 = [
-    "llm_judge_blocker_quality",
-    "llm_judge_false_positive_rate",
-    "frozen_evidence_hash_redact",
     "automatic_promotion",
 ]
 
@@ -336,6 +336,21 @@ def _run_case(
     # 否则会出现"标可用但 token_delta=None"的语义矛盾，审计反馈 P1）
     token_available = base_m.get("tokens") is not None and cand_m.get("tokens") is not None
 
+    # ---- 冻结 judge 输入证据（redacted）+ 异构 judge 判读（主观层，不进 promote）----
+    # 铁律：judge 单独成层，绝不混进上面的确定性 base_m/cand_m，绝不参与 case_ok。
+    from . import llm_judge
+
+    base_reply = (base_res.reply_text if base_res else "") or ""
+    cand_reply = (cand_res.reply_text if cand_res else "") or ""
+    frozen = llm_judge.freeze_evidence(case_dir, brief, base_reply, cand_reply)
+    judge_layer = llm_judge.judge_case(
+        repo, run_id, case_dir,
+        candidate_runner=runner,
+        frozen=frozen,
+        persist=persist,
+        runners_dir=runners_dir,
+    )
+
     comparison = {
         "ok": case_ok,
         "case_id": case_id,
@@ -347,6 +362,8 @@ def _run_case(
         "deltas": _deltas(base_m, cand_m),
         "metrics_declared": metrics,
         "token_metering_available": token_available,
+        "evidence_hash": frozen["evidence_hash"],
+        "judge": judge_layer,
         "warnings": case_warnings,
         "deferred": DEFERRED_V0,
     }

@@ -1,6 +1,10 @@
 # Plugin real eval runner design
 
-> **STATUS: v0 implemented — `lto plugin eval-run` runs baseline-vs-candidate A/B with deterministic metrics** (parse_rate, timeout, permission_violations, private_path_leaks, elapsed/token deltas). Compiles each eval-pack case into two AgentJobs (baseline bare brief / candidate profile-injected), runs via the existing scheduler, writes evidence to `.lto/<run-id>/plugin-eval/<case-id>/`. **Deferred to a later layer** (declared in every report's `deferred` field, never silently skipped): LLM-judged `blocker_quality`/`false_positive_rate`, frozen-evidence hash/redact pipeline, and automatic promotion (promotion stays human-gated).
+> **STATUS: v0 implemented — `lto plugin eval-run` runs baseline-vs-candidate A/B with deterministic metrics** (parse_rate, timeout, permission_violations, private_path_leaks, elapsed/token deltas). Compiles each eval-pack case into two AgentJobs (baseline bare brief / candidate profile-injected), runs via the existing scheduler, writes evidence to `.lto/<run-id>/plugin-eval/<case-id>/`.
+>
+> **judge layer implemented (2026-06-09)** — a subjective judgment layer now runs alongside the deterministic metrics: each case freezes a redacted evidence bundle (`frozen-evidence.json` with a reproducible `evidence_hash`) and dispatches a **heterogeneous** judge runner (≠ the runner that produced the candidate reply; same-family or unavailable → judge skipped, not errored). The judge sees only the redacted frozen evidence and emits structured `{blocker_quality, false_positive_suspected, rationale}`. It is written under `comparison.json["judge"]` tagged `"kind": "subjective_judgment"` and **never** mixes into deterministic metrics or promotion. See `scripts/lto/llm_judge.py`.
+>
+> **Still deferred** (declared in every report's `deferred` field, never silently skipped): **automatic promotion only** — promotion stays human-gated and the judge layer does not feed it.
 
 > `plugin eval-run` is not a new workflow engine. It is a compiler from data-only plugin eval packs into normal LTO runs, evidence artifacts, runner jobs, judge reports, and human promotion decisions.
 
