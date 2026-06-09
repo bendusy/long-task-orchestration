@@ -8,7 +8,7 @@
 
 | # | 项 | LLM 友好度 | 优先级 | 状态 | 阻塞 / 解锁关系 |
 |---|---|---|---|---|---|
-| ① | `events.jsonl` / `telemetry.json` 被动事件流 | ★★★ 最高 | **P0** | 待实现 | **地基**：解锁 ②③ |
+| ① | `events.jsonl` / `telemetry.json` 被动事件流 | ★★★ 最高 | **P0** | ✅ 已实现 | **地基**：解锁 ②③ |
 | ② | `DEFERRED_V0` llm_judge 质量评分 + 假阳率 | ★★ 高 | P1 | 待实现 | 需 ① 的可复现事件证据；须配 `frozen_evidence_hash` |
 | ③ | `autopilot --autonomous` 全自动回路 | ★ 中 | P2 | 待实现 | 被 ① 解锁（spec：先攒 supervised 真实 escalate 数据） |
 | ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | 外部阻塞 | 等 am（animem）下游接口稳定 |
@@ -33,8 +33,8 @@
 - **为何最高**：`control-loop-harness.md` 把它定为 Phase 1「传感器层」。没它，`next`/`recap`/未来 eval 都缺一手证据，宿主只能靠状态快照猜，漂移检测与未来 tuning 失去地基。
 - **LLM 友好点**：零 LLM、零决策、append-only——纯传感器，不引入主观判断。宿主读结构化事件比读散落 stdout 省 token。
 - **落地约束**：append-only 不可改写；事件 schema 稳定可被 `next`/eval 消费；不替宿主决策（只记录）。
-- **现状锚点**：`references/protocol-and-language-strategy.md` 标 "planned, not implemented"；`control-loop-harness.md` STATUS 标 Phase 1 未实现。
-- **下一步**：独立 LTO run 实现，子代理写码 + 三方异构审 + 红线验收。
+- **现状**：✅ 已实现（2026-06-09）。`scripts/lto/events.py`（8 类型 append-only + fcntl 锁 + 递归 redact）+ `scripts/lto/telemetry.py`（派生信号，无 recommendations）+ 5 处 emit 接入（safe_emit fail-safe）。codex+pi 两路异构审 union 修 7 条（3 BLOCKER：并发锁/lazy import/嵌套漏键），五验收 + 并发测试全绿。free-text cap 240（spec §5.0）。
+- **解锁**：②③ 现可启动（有了可复现事件证据 + 真实 escalate 数据来源）。
 
 ## ② DEFERRED_V0 llm_judge（P1，被 ① 喂证据）
 

@@ -9,6 +9,7 @@ from .. import state as st
 from .. import git_state as gs
 from .. import artifacts as af
 from .. import interventions as iv
+from .. import safe_emit
 
 from .audit import _is_high_risk
 
@@ -138,7 +139,15 @@ def run(args: argparse.Namespace) -> int:
     # Update state
     head = gs.git_head(repo)
     branch = gs.git_branch(repo)
+    prev_phase = state.get("current_phase")
     st.transition_phase(state, "closed", head)
+    if prev_phase != "closed":
+        safe_emit(
+            repo, run_id, type="phase.changed", actor_kind="host",
+            phase="closed", object_id=run_id, object_type="run",
+            summary=f"phase {prev_phase} -> closed",
+            fields={"from_phase": prev_phase, "to_phase": "closed"},
+        )
     state["workspace"]["head"] = head
     state["workspace"]["branch"] = branch
     state["blocked_by"] = args.blocked_by
@@ -198,6 +207,15 @@ def run(args: argparse.Namespace) -> int:
         repo, run_id, handoff_path, kind="handoff",
         producer="lto.commands.closeout", state=state,
         summary="closeout handoff", tags=["closeout", "handoff"],
+    )
+
+    # Emit run.closed BEFORE auto-commit (review #6) so the event line is part
+    # of the committed .lto snapshot when --auto-commit is on, leaving no
+    # post-commit dirt — preserving Phase 1 "no behavior change".
+    safe_emit(
+        repo, run_id, type="run.closed", actor_kind="host",
+        phase="closed", object_id=run_id, object_type="run",
+        summary=st.single_line(args.summary),
     )
 
     # Optionally commit produced artifacts (opt-in; default off — closeout writes

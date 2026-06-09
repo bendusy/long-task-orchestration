@@ -9,6 +9,7 @@ from pathlib import Path
 from .. import state as st
 from .. import git_state as gs
 from .. import artifacts as af
+from .. import safe_emit
 
 
 def slugify(text: str) -> str:
@@ -115,6 +116,13 @@ def run(args: argparse.Namespace) -> int:
     # silently mutating the user's .git/hooks and clashing with husky/pre-commit)
     if args.install_hooks:
         _maybe_install_hooks(repo)
+
+    # Phase 1 passive event: run created. Fail-safe — never breaks start.
+    safe_emit(
+        repo, run_id, type="run.started", actor_kind="host", actor_id=args.host,
+        phase=args.phase, object_id=run_id, object_type="run",
+        summary=f"run started: {args.goal}",
+    )
 
     print(target_dir)
     return 0

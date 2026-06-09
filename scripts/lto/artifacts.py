@@ -118,7 +118,30 @@ def register_path(
         _upsert(manifest, entry)
         manifest["updated_at"] = st.iso_now()
         _atomic_write_json(mpath, manifest)
-        return entry
+    # Phase 1 passive event — emitted AFTER the manifest lock is released to
+    # avoid any chance of deadlock (events uses its own append discipline,
+    # never re-enters this lock). Fail-safe: never breaks registration.
+    _emit_artifact_registered(repo, run_id, entry, phase=phase, task_id=task_id)
+    return entry
+
+
+def _emit_artifact_registered(
+    repo: Path, run_id: str, entry: dict[str, Any], *, phase: str | None, task_id: str | None
+) -> None:
+    # safe_emit lazy-imports events internally and swallows any failure, so a
+    # broken events module can never break artifact registration (review #2).
+    from . import safe_emit
+    safe_emit(
+        repo, run_id, type="artifact.registered", actor_kind="lto",
+        phase=phase, task_id=task_id,
+        object_id=entry.get("id"), object_type="artifact",
+        summary=f"{entry.get('kind')} {entry.get('run_relative_path', '')}",
+        artifact_refs=[entry.get("id")] if entry.get("id") else None,
+        fields={
+            "kind": entry.get("kind"),
+            "run_relative_path": entry.get("run_relative_path"),
+        },
+    )
 
 
 def write_text(

@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 
 from .. import state as st
+from .. import safe_emit
 
 
 def run(args: argparse.Namespace) -> int:
@@ -37,6 +38,11 @@ def run(args: argparse.Namespace) -> int:
                 break
 
     st.save_state(state_path, state)
+    safe_emit(
+        repo, run_id, type="task.created", actor_kind="host",
+        phase=phase, task_id=args.task_id, object_id=args.task_id,
+        object_type="task", summary=args.title,
+    )
     print(f"task {args.task_id} added to phase '{phase}': {args.title}")
     if args.command:
         print(f"  planned command: {args.command}")

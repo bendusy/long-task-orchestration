@@ -127,6 +127,8 @@ def main() -> int:
         ("privacy",       [sys.executable, str(SCRIPTS_DIR / "test_privacy_self_check.py")], False),
         ("worktree",      [sys.executable, str(SCRIPTS_DIR / "test_worktree_sandbox.py")],  False),
         ("live_log",      [sys.executable, str(SCRIPTS_DIR / "test_live_log.py")],          False),
+        ("events",        [sys.executable, str(SCRIPTS_DIR / "test_events.py")],            False),
+        ("telemetry",     [sys.executable, str(SCRIPTS_DIR / "test_telemetry.py")],         False),
     ]
     for name, argv, needs_pp in module_tests:
         proc = subprocess.run(

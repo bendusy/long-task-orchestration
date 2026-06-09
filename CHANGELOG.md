@@ -1,5 +1,20 @@
 # Changelog
 
+## Events log + telemetry — the passive sensor layer (control-loop Phase 1)
+
+- **Commit**: this commit. Designed against the reviewed `control-loop-harness.md` Phase 1 spec, implemented by a sub-agent, then adversarially reviewed by 2 heterogeneous auditors (codex + pi) whose findings were union-merged (no voting) and fixed before merge.
+- **Summary**: LTO could observe a run's *current* state (`state.json`) but kept no first-class record of *what happened over time* — so `next`/`recap` and any future eval had to guess from snapshots. This adds the spec's Phase 1 sensor layer: an append-only `.lto/<run-id>/events.jsonl` event stream and a derived `.lto/<run-id>/telemetry.json`. It is **pure sensor**: zero LLM, zero decisions, append-only. It records what occurred; it never routes, promotes, or decides. This is the foundation the deferred items (`autopilot --autonomous`, eval `llm_judge`) were waiting on — see `references/backlog.md`.
+
+### Changes
+
+- New `scripts/lto/events.py`: append-only writer for the **8 Phase 1 event types** (`run.started` / `run.closed` / `phase.changed` / `task.created` / `task.status_changed` / `runner.started` / `runner.finished` / `artifact.registered`); deferred types are rejected. Reuses `interventions.py`'s redaction model.
+- New `scripts/lto/telemetry.py`: derives `telemetry.json` (run/task metrics, budget, redaction summary, event-log counters) from `state.json` + `events.jsonl`. It is rebuildable and **never** persists `control_recommendations` / route / promote advice (test-pinned).
+- Emit is wired into `start` / `closeout` / `runner` / `task-add` / `artifacts` — only **added** calls, no behavior change to the existing commands.
+- **Privacy is enforced before append, not at export**: event lines never inline stdout/stderr/transcripts/secrets/private paths. Redaction is recursive (nested `details.stderr`, `*_excerpt`/`*_tail` suffix keys are stripped), and an event flagged `contains_raw_output` is rejected outright. `telemetry.json` redacts all string fields (e.g. `goal_label`) and keeps `touched_files` repo-relative.
+- **Concurrency-safe**: append takes an `fcntl.flock` (mirroring `artifacts._manifest_lock`) over the read-count→assign-id→write window, so parallel runners can't produce duplicate `event_id`s or interleave bytes. Verified by a multiprocess test (6 workers × 40 appends → 240 contiguous ids, 0 dups, every line valid JSON).
+- **Fail-safe by design**: emit goes through a single `safe_emit()` helper with a lazy `events` import wrapped in `try/except` — a broken/missing events module can never crash a core command (a sensor must not take down the system it observes).
+- Free-text fields are capped at 240 chars per spec §5.0.
+
 ## Live log — see what a job is doing while it runs
 
 - **Commit**: `fdc5912`. Designed by a 3-runtime co-design pass, implemented by a sub-agent, then adversarially reviewed by 3 heterogeneous auditors whose findings were merged back in.

@@ -9,6 +9,7 @@ from .. import state as st
 from .. import git_state as gs
 from .. import evidence as ev
 from .. import exec as lto_exec
+from .. import safe_emit
 
 
 def run(args: argparse.Namespace) -> int:
@@ -31,6 +32,16 @@ def run(args: argparse.Namespace) -> int:
         raise SystemExit(f"task {args.task_id} not found in state")
 
     cwd = Path(args.cwd) if args.cwd else repo
+
+    prev_status = task.get("status")
+    started_at = st.iso_now()
+    safe_emit(
+        repo, run_id, type="runner.started", actor_kind="runner", actor_id="lto-runner",
+        phase=state.get("current_phase"), task_id=args.task_id,
+        object_id=args.task_id, object_type="task",
+        summary=f"{args.kind} runner started",
+        fields={"kind": args.kind, "timeout": args.timeout},
+    )
 
     # Execute via shared kernel (handles artifact + evidence + timeout)
     rc, evidence = lto_exec.run_command(
@@ -93,6 +104,35 @@ def run(args: argparse.Namespace) -> int:
     task["last_update"] = ended_at
     st.save_state(state_path, state)
 
+    # Phase 1 events: runner finished (metadata only, NO stdout/stderr) +
+    # task status change if it moved. Fail-safe.
+    elapsed = _elapsed_seconds(started_at, ended_at)
+    safe_emit(
+        repo, run_id, type="runner.finished", actor_kind="runner", actor_id="lto-runner",
+        phase=state.get("current_phase"), task_id=args.task_id,
+        object_id=args.task_id, object_type="task",
+        summary=f"{args.kind} runner finished rc={rc}",
+        artifact_refs=[
+            r for r in (evidence.get("stdout_artifact"), evidence.get("stderr_artifact")) if r
+        ],
+        fields={
+            "kind": args.kind,
+            "rc": rc,
+            "elapsed_seconds": elapsed,
+            "timeout": rc == 124,
+            "touched_files": list(task.get("touched_files", []) or []),
+        },
+    )
+    new_status = task.get("status")
+    if new_status != prev_status:
+        safe_emit(
+            repo, run_id, type="task.status_changed", actor_kind="runner", actor_id="lto-runner",
+            phase=state.get("current_phase"), task_id=args.task_id,
+            object_id=args.task_id, object_type="task",
+            summary=f"{args.task_id} {prev_status} -> {new_status}",
+            fields={"from_status": prev_status, "to_status": new_status},
+        )
+
     # Optionally commit .lto state changes (opt-in; default off)
     gs.auto_commit_lto(
         repo,
@@ -102,6 +142,14 @@ def run(args: argparse.Namespace) -> int:
 
     print(ev.evidence_summary(evidence))
     return rc
+
+
+def _elapsed_seconds(start: str, end: str) -> int | None:
+    from datetime import datetime
+    try:
+        return int((datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds())
+    except (ValueError, TypeError):
+        return None
 
 
 def _command_fingerprint(command: str) -> str:
