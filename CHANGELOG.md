@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Cross-run mining — "which model is actually effective, over time" (evolution mainline v1)
+
+- **Summary**: The first piece of "LTO gets smarter the more you use it". A cross-run scanner walks every `.lto/<run-id>` once and mines two signals into one host-facing brief: **model effectiveness** (from `state.json` `agent_runs`, grouped by runner × status — success rate, cost, failure/timeout counts) and **recurring phase friction** (from `events.jsonl`, by event type across runs). Designed by the standing co-design pass, implemented by a sub-agent, reviewed by codex (0 BLOCKER, 6 findings, all fixed).
+- **Hard line — the brief is evidence, never a command**: it surfaces hypotheses ("codex succeeded 80% across 3 runs vs pi 17% — whether to prefer codex next is *yours* to decide; not a routing instruction"), never routes, promotes, or auto-selects. Banned command-phrasing is test-scanned across the empty / thin-sample / normal branches.
+- **Cross-run means cross-run**: the effectiveness comparison only fires when both compared runners appear across `>= min_runs` *distinct* runs — repeated dispatches within a single run no longer crown a winner. A corrupt `state.json` from one historical run is isolated (counted as `skipped_bad_runs`), never crashes the whole mining pass. Status accounting is transparent (`skipped`/`other` shown so the success-rate denominator is explainable). `events` is explicitly *not* a model source (its `runner.finished` is the local shell executor).
+- **Changes**: new `scripts/lto/cross_run_mining.py` (`mine` + `render_mining_brief`); `recap --mine` opt-in surfaces it (no new top-level command). Known limit (next): `agent_runs` records `runner` but not `model`, so mining groups by runner — distinguishing same-runner different-model needs the model field on `AgentResult` (tracked).
+
 ### eval-run llm_judge — subjective quality layer, frozen and isolated
 
 - **Summary**: `plugin eval-run` could only compare **deterministic** metrics (parse rate, timeout, permission violations, pointer-only). This adds the deferred LLM-judged quality pass — a heterogeneous runner reads each case's evidence and judges blocker quality / false-positive suspicion. Designed by the standing co-design pass, implemented by a sub-agent, then adversarially reviewed by codex (3 BLOCKER + 3 MEDIUM, all fixed before merge). User-chosen scope: **judge reads and is frozen, but never touches promotion** — deterministic metrics still own the promote gate.

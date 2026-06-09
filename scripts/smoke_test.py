@@ -123,6 +123,7 @@ def main() -> int:
         ("pi_runner",     [sys.executable, str(SCRIPTS_DIR / "test_pi_runner.py")],         False),
         ("claude_runner", [sys.executable, str(SCRIPTS_DIR / "test_claude_runner.py")],     False),
         ("token_rollup",  [sys.executable, str(SCRIPTS_DIR / "test_token_rollup.py")],      False),
+        ("cross_run_mining", [sys.executable, str(SCRIPTS_DIR / "test_cross_run_mining.py")], False),
         ("plugins",       [sys.executable, str(SCRIPTS_DIR / "test_plugins.py")],           False),
         ("privacy",       [sys.executable, str(SCRIPTS_DIR / "test_privacy_self_check.py")], False),
         ("worktree",      [sys.executable, str(SCRIPTS_DIR / "test_worktree_sandbox.py")],  False),

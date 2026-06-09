@@ -31,6 +31,13 @@ def run(args: argparse.Namespace) -> int:
         raise SystemExit(f"no state.json for {run_id}")
 
     print(_render_recap(state, run_id, repo=repo, include_artifacts=args.artifacts))
+
+    # opt-in 跨 run 挖掘（默认关）：给 host 一份「越用越聪明」的证据 brief。
+    # 默认不打扰人类回顾；只有显式 --mine 才附。仍是证据+假设，绝不路由。
+    if getattr(args, "mine", False):
+        from .. import cross_run_mining as crm
+        print()
+        print(crm.render_mining_brief(repo))
     return 0
 
 
@@ -252,4 +259,6 @@ def add_parser(subparsers) -> None:
     )
     p.add_argument("--run-id")
     p.add_argument("--artifacts", action="store_true", help="include recent artifact paths")
+    p.add_argument("--mine", action="store_true",
+                   help="append cross-run mining brief (model effectiveness + phase friction; evidence only)")
     p.set_defaults(func=run)
