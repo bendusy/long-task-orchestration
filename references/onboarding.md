@@ -9,6 +9,30 @@
 
 它不复制 Claude Code 原生任务 harness 的实现——它是给**任意 runtime**用的版本，只依赖 Python + bash。
 
+## 术语表（读正文前先扫一遍）
+
+LTO 文档里反复出现这些词。第一次见不用全记，卡住了回这里查。
+
+| 术语 | 一句话解释 |
+|---|---|
+| **harness** | 框架本身。把状态、证据、审计、沙箱、恢复、人工闸门串成一条「跑道」，让你（agent）在上面跑长任务不迷路、不丢进度。 |
+| **host agent（宿主）** | **就是你**——正在用 LTO 的这个 LLM（claude / codex / pi / agy …）。LTO 不替你做决策，你才是 planner。 |
+| **primitive** | LTO 提供的可组合基础动作：`runner` / `judge` / `audit` / `next` / `recap` 等。你把它们拼起来，而不是选一个预设流程。 |
+| **run** | 一次长任务。`start` 创建一个 run，数据存在 `.lto/<run-id>/`。 |
+| **task** | run 里一个可独立执行的单元（如「给 login 加判空」），有命令、有产出、有证据。`runner` 不会自动建 task，你得先 `task-add`。 |
+| **phase（阶段）** | 任务的逻辑阶段：spec → 审计 → 开发 → 部署 → 实测 → 收尾。`--phase` 参数按阶段批量操作 task。 |
+| **artifact** | task 产出的证据：日志、代码 diff、审计报告。「说做完了」得拿得出 artifact。 |
+| **runner** | LTO 派出去执行一个 task 的角色（可以是 codex/pi/agy/claude，或就跑一条 shell 命令）。 |
+| **异构（heterogeneous）** | 审你的 agent 来自**不同厂商家族**（你是 claude，就派 codex/pi/agy）。目的：避免「自己审自己」的偏袒。 |
+| **fan-out** | 一次派多个独立 agent 并行干（如三家同时审）。区别于 `runner` 串行跑一条命令。 |
+| **audit / 对抗审计** | 派异构 agent 来挑你产出的毛病，输出结构化 findings（带 severity 字段），再判是否「收敛」。 |
+| **收敛 / ledger** | 把每个发现（blocker）登记进 ledger，逐轮追踪 open→fixed。「收敛」= 高危发现单调下降且没新引入的同级问题。**计数由脚本算，你不手填。** |
+| **closeout（收尾）** | 任务闭环：写 handoff、生成 CHANGELOG。有未审风险会被 closeout 闸门拦住。 |
+| **闸门（gate）** | 关键路口的硬检查（commit/deploy/closeout 前）。没过就停，可能回吐给人。 |
+| **worktree 沙箱** | 一份独立的 git worktree 副本。autopilot 自动执行的命令都在这里跑——`rm -rf` 再狠也只炸可弃副本，主工作树毫发无损。 |
+| **autopilot 档** | 自动化的梯度：`--supervised`（只出建议）→ `--auto-exec`（沙箱跑 safe 子步骤）→ `--decide`（派三方收敛）→ `--autonomous`（攒够证据后机械推进）。越往后放权越多，但每升一级都要更多证据。 |
+| **resume vs recap** | `resume` 给 **AI** 拉上下文（git head / task 状态）；`recap` 给 **人** 看的人话回顾（当初要做啥、做到哪、还剩啥）。 |
+
 ## 它解决什么（你为什么要装它）
 
 单 context window 跑长任务有三个通病，LTO 各有一道防线：
