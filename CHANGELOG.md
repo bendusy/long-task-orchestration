@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### autopilot --autonomous — mechanical evidence gate + execution (LTO never reflects)
+
+- **Summary**: Implements the last autopilot tier, but deliberately **narrowed** to LTO's boundary: LTO does not process data with an LLM and never reflects — reflection always belongs to the host agent. So `--autonomous` is **not** a self-deciding loop. It does two mechanical things: (1) reads ⑥ cross-run mining facts as an **evidence gate** (only unlocks once enough real dispatch data has accumulated; otherwise honestly falls back to supervised and says how much data is missing); (2) once the gate passes, mechanically runs safe/reversible substeps in the auto-exec worktree sandbox. It never spawns a decision agent. Reviewed by codex (2 BLOCKER + 3 HIGH, all fixed).
+- **Hard boundary — never spawn a decision agent**: `--autonomous` is mutually exclusive with `--decide`; passing both clears `--decide` (otherwise escalate would spawn the convergence agents — exactly the "LTO reflects for you" the boundary forbids).
+- **Gate is strict and fail-closed**: counts only contract-shaped `AgentResult`s (`job_id` + known runner + terminal status) — empty `{}` dicts can no longer pad past the 5-run / 10-result threshold. A malformed `mine()` return (None, non-dict, string-number counts) is rejected, never opened.
+- **Safety arguments now actually hold**: the `git push` interceptor was widened to catch flag-injected variants (`git -C . push`, `git -c k=v push`, `git --git-dir=… push`) — the literal-only pattern was bypassable. autonomous also runs with `allow_network=False` (curl/wget/nc/ssh/scp are HELD), since network side effects aren't reversible. escalate / dangerous / push / network always return to the human.
+- **Changes**: `autopilot.py` `_autonomous_gate` + autonomous branch; `cross_run_mining.py` strict `gate_runs`/`gate_results` counts; `worktree_exec.py` git-variant interception; `test_autonomous_gate.py` + worktree push-variant cases. Docs (SKILL/README/4 references) realigned from "not implemented / spawns decision agent" to the mechanical-gate reality.
+
 ### Cross-run mining — "which model is actually effective, over time" (evolution mainline v1)
 
 - **Summary**: The first piece of "LTO gets smarter the more you use it". A cross-run scanner walks every `.lto/<run-id>` once and mines two signals into one host-facing brief: **model effectiveness** (from `state.json` `agent_runs`, grouped by runner × status — success rate, cost, failure/timeout counts) and **recurring phase friction** (from `events.jsonl`, by event type across runs). Designed by the standing co-design pass, implemented by a sub-agent, reviewed by codex (0 BLOCKER, 6 findings, all fixed).

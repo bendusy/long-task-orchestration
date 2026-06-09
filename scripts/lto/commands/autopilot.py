@@ -24,6 +24,7 @@ from .. import worktree_exec as wx
 from .. import evidence as ev
 from .. import decision as dec
 from .. import artifacts as af
+from .. import cross_run_mining as crm
 from ..autopilot_status import (
     AutopilotStatus,
     EXIT_CODES,
@@ -32,6 +33,62 @@ from ..autopilot_status import (
     stronger_status,
 )
 from . import next as next_cmd
+
+
+# ── autonomous 证据闸门 ──
+# autonomous 让 LTO 在 escalate 点自动推进，比 supervised/auto-exec 多放一档权。
+# 按 LTO 哲学「自动化是梯度，每升一级必须增加证据」——autonomous 不是裸 loop，
+# 是一道数据驱动的闸门：只有跨 run 攒够真实派工样本后才解锁，否则诚实拒绝、
+# 退回 supervised，并明示「还差多少数据」。判据来自 ⑥ 的 cross_run_mining：
+#   - 真实派工样本（runs_with_agent_runs）：autonomous 要学的是真实运行模式，
+#     零真实 run 谈不上自动化，等于凭空拍。
+#   - 阈值保守，宁可继续要人类确认，也不在无证据时放权。
+# git push / escalate / dangerous 子步骤永远停人类——闸门过了也不放开任何安全红线。
+_AUTONOMOUS_MIN_RUNS = 5          # 至少 5 个有真实派工的 run 才谈自动化
+_AUTONOMOUS_MIN_RESULTS = 10      # 且累计 >= 10 条真实派工结果
+
+
+def _autonomous_gate(repo: Path) -> tuple[bool, str]:
+    """autonomous 证据闸门：跨 run 攒够真实派工样本才放行。
+
+    返回 (passed, reason)。不过则 reason 说明还差多少数据。零 LLM、纯事实。
+    """
+    try:
+        mined = crm.mine(repo)
+    except Exception as exc:  # 挖掘失败绝不放行（fail-closed）
+        return False, f"挖掘跨 run 数据失败，fail-closed 拒绝 autonomous: {exc}"
+    # 严格 schema fail-closed：任何畸形返回都拒绝，绝不放行。mined / model_effectiveness
+    # 必须是 dict；计数必须是非 bool 的 int >= 0（拒绝 "5" 字符串、None、bool、NaN）。
+    if not isinstance(mined, dict):
+        return False, "fail-closed：mine() 返回非 dict，拒绝 autonomous"
+    me = mined.get("model_effectiveness")
+    if not isinstance(me, dict):
+        return False, "fail-closed：model_effectiveness 缺失或非 dict，拒绝 autonomous"
+
+    def _strict_count(v: object) -> int | None:
+        return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+    # 优先用严格计数（只数合规 AgentResult）；mine 的宽松 brief 计数不可信（空 {} 也算）。
+    runs = _strict_count(me.get("gate_runs"))
+    results = _strict_count(me.get("gate_results"))
+    if runs is None:
+        runs = _strict_count(me.get("runs_with_agent_runs"))
+    if results is None:
+        results = _strict_count(me.get("total_runner_results"))
+    if runs is None or results is None:
+        return False, "fail-closed：闸门计数字段缺失或类型非法，拒绝 autonomous"
+    if runs < _AUTONOMOUS_MIN_RUNS or results < _AUTONOMOUS_MIN_RESULTS:
+        return False, (
+            f"证据不足：autonomous 需要跨 >= {_AUTONOMOUS_MIN_RUNS} 个真实派工 run "
+            f"且 >= {_AUTONOMOUS_MIN_RESULTS} 条派工结果，当前只有 {runs} run / "
+            f"{results} 结果。先用 --supervised [--auto-exec] 在真实任务里攒数据，"
+            f"⑥ 跨 run 挖掘会随数据积累自动满足此闸门。"
+        )
+    return True, (
+        f"证据闸门通过：{runs} run / {results} 派工结果（>= {_AUTONOMOUS_MIN_RUNS}/"
+        f"{_AUTONOMOUS_MIN_RESULTS}）。autonomous 在 auto-exec 沙箱基础上受闸推进；"
+        f"git push / escalate / dangerous 仍停人类。"
+    )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -44,16 +101,36 @@ def run(args: argparse.Namespace) -> int:
 
     mode = "autonomous" if args.autonomous else "supervised"
 
-    # --autonomous 未实现（spec 阶段 6，下一期）
+    # ── autonomous：机械证据闸门 + 机械执行，绝不 spawn 决策 agent ──
+    # 设计边界（用户 2026-06-09 定）：LTO 不接 LLM 处理数据，产出全是机械的事实+
+    # 派生信号；反思/决策永远归主 agent。所以 autonomous **不是** LTO 自主决策回路，
+    # 它只做两件机械的事：(1) 读 ⑥ 跨 run 事实判证据闸门；(2) 过闸后在 worktree 沙箱
+    # 机械执行 safe/reversible 子步骤（与 auto-exec 同一套，只是允许连续推进）。
+    # escalate / dangerous / git push 一律回吐主 agent，LTO 不替它反思、不 spawn
+    # 决策 agent。闸门不过 → 诚实退回 supervised，明示还差多少真实数据。
     if mode == "autonomous":
-        print(
-            "[lto autopilot] --autonomous 档未实现（spec 阶段 6，下一期）。\n"
-            "  它需要 spawn 决策 agent（G3/G5）+ worktree 沙箱，且要先攒\n"
-            "  supervised 的真实 escalate 数据判断是否值得。当前请用 --supervised。",
-            file=sys.stderr,
-        )
-        emit_terminal_status(AutopilotStatus.ERROR, "--autonomous is not implemented")
-        return EXIT_CODES[AutopilotStatus.ERROR]
+        passed, gate_reason = _autonomous_gate(repo)
+        print(f"# LTO Autopilot — autonomous（机械闸门 + 机械执行，不替你决策）")
+        print(f"  evidence gate: {'PASS' if passed else 'BLOCKED'}")
+        print(f"  reason: {gate_reason}")
+        if not passed:
+            print(
+                "\n  → autonomous 未解锁：这是数据驱动的闸门，不是硬编码禁用。\n"
+                "     用 --supervised [--auto-exec] 在真实任务里攒派工数据，够了自动解锁。"
+            )
+            emit_terminal_status(AutopilotStatus.NEEDS_CONFIRM, "autonomous evidence gate not met")
+            return EXIT_CODES[AutopilotStatus.NEEDS_CONFIRM]
+        # 闸门过：强制走 auto-exec 机械执行路径（下方共用 supervised 主体 + auto_exec）。
+        # autonomous 不引入新的执行/决策逻辑，只是「过闸后默认开 auto-exec 连续推进」。
+        args.auto_exec = True
+        # 硬边界：autonomous **绝不** spawn 决策 agent。--autonomous --decide 组合时
+        # 强制清掉 decide——否则 escalate 会进 _run_decide() 派三方异构 agent 替你
+        # 反思，正是用户边界禁止的「LTO 替主 agent 决策」。autonomous 只机械执行 +
+        # 机械闸门，反思永远归你。
+        if getattr(args, "decide", False):
+            print("  ⚠️ --autonomous 与 --decide 互斥：autonomous 不 spawn 决策 agent，已忽略 --decide。")
+            args.decide = False
+        print("  → 闸门通过：在 auto-exec 沙箱里机械推进 safe 子步骤（escalate 仍回吐你）。\n")
 
     # ── supervised：仅 brief 形态 ──
     facts = next_cmd.analyze(state, repo)
@@ -190,7 +267,13 @@ def _auto_exec_tasks(repo: Path, run_id: str, state: dict, state_path: Path, arg
             retry_blocked_count += 1
             continue
 
-        result = wx.run_in_sandbox(repo, command, timeout=getattr(args, "timeout", 300))
+        # autonomous（最自动的档）默认禁网：curl/wget/nc/ssh/scp 有外部副作用，
+        # 不属 safe/reversible，沙箱挡不住——codex 审 ③ HIGH。supervised --auto-exec
+        # 是人在场的半自动，保留默认放网。
+        allow_net = not getattr(args, "autonomous", False)
+        result = wx.run_in_sandbox(
+            repo, command, timeout=getattr(args, "timeout", 300), allow_network=allow_net
+        )
 
         if not result.executed:
             print(f"    [{tid}] HELD — {result.effect.level}: {result.effect.reason}")

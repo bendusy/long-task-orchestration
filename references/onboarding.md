@@ -97,14 +97,14 @@ LTO 现在不只是"告诉你做什么"，它把长任务拆成可组合 primiti
 
 - **`--supervised`（默认）**：出富决策简报 + 路由建议，escalate（多 blocked / 方案分歧 / 高风险）回吐你这个宿主 LLM 推理。集成 stall 检测（同失败指纹反复 = 停滞，提示别空转）。
 - **`--supervised --auto-exec`（opt-in）**：对 pending task 的 **safe/reversible** 命令，在 **worktree 沙箱**里自动跑 + 落证据。
-- **`--decide`（opt-in，已实现）**：escalate 时 **opt-in** spawn 三方异构 agent 跑双轨收敛（direction 投票 / review union 合并），出一份收敛 brief 给你读——**决策权仍归你这个宿主**，工具只整理三方结论不替你拍板。配 `--decide-kind`（direction|review|both，默认从状态推断）选收敛轨、`--decide-budget` 给 token 预算上限（默认 50000；传 0 强制 needs_human 不 spawn）。`--autonomous`（escalate 自动 spawn 决策 + 自动执行回路）是下一期，当前**未实现**。
+- **`--decide`（opt-in，已实现）**：escalate 时 **opt-in** spawn 三方异构 agent 跑双轨收敛（direction 投票 / review union 合并），出一份收敛 brief 给你读——**决策权仍归你这个宿主**，工具只整理三方结论不替你拍板。配 `--decide-kind`（direction|review|both，默认从状态推断）选收敛轨、`--decide-budget` 给 token 预算上限（默认 50000；传 0 强制 needs_human 不 spawn）。`--autonomous`（机械证据闸门 + 机械执行，已实现）**不 spawn 决策 agent、不替你反思**——读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够诚实退回 supervised），过闸后机械推进 safe 子步骤；与 `--decide` 互斥（autonomous 绝不派决策 agent）。反思永远归你这个宿主。
 
 安全是硬底线（autopilot 自动执行的命令全经 `worktree_exec` 沙箱）：
 - 每条自动执行的命令在**独立 git worktree 副本**里跑——`rm -rf` 再狠也只炸可弃的 worktree，主工作树/系统/家目录毫发无损。
 - 执行环境隔离 HOME + 剥离 git 凭据——读不到 `~/.ssh`，`git push` 无凭据推不动。
 - 危险命令（`rm -rf` / `git push` / `DROP` / `sudo` / `curl|sh` / 绝对路径逃逸 / 解释器 `-c -e` / 执行脚本文件）一律 **HELD = 不执行，回吐人确认**。
 - 同命令失败 ≥3 次自动跳过（不空转烧额度）；无推进则退回只出简报。
-- `--autonomous`（escalate 时 spawn 决策 agent 真全自动）是**下一期**，当前未实现。
+- `--autonomous`（机械证据闸门 + 机械执行 safe 子步骤，已实现）：autonomous 默认禁网（`curl/wget/nc/ssh/scp` 一律 HELD），git push 含 `git -C . push`/`git -c k=v push` 变体全拦；不 spawn 决策 agent。
 
 ```bash
 $L autopilot --supervised               # 只出决策简报，回吐你判断（最安全）

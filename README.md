@@ -102,7 +102,7 @@ $L audit --collect replies/
 - **Preset 是 playbook，不是菜单**：`review/debug/migration/claim-verify/research` 是 host agent 的调度先验，先读 playbook 再组合 primitive，不先做硬路由。
 - **git push 永不自动**：任何 autopilot 档位，push / 部署 / 删库等不可逆操作都停下来等人确认。
 - **hook 默认不装**：`lto start --install-hooks` 才装（opt-in，撞 husky/pre-commit 会跳过）；auto-commit 也默认关。
-- **autopilot 当前只到 supervised**：`--supervised`（出 brief）和 `--auto-exec`（worktree 沙箱跑 safe 子步骤）已实现；`--autonomous`（spawn 决策 agent 全自动）是下一期，未实现。
+- **autopilot 四档全实现**：`--supervised`（出 brief）、`--auto-exec`（worktree 沙箱跑 safe 子步骤）、`--decide`（escalate 时 opt-in 派三方收敛）、`--autonomous`（机械证据闸门 + 机械执行 safe 子步骤）。autonomous **不 spawn 决策 agent、不替你反思**——LTO 机械产出事实，反思归主 agent；证据不足时诚实退回 supervised，escalate/dangerous/push/网络一律停人类。
 - **自动执行有沙箱**：`--auto-exec` 的命令在独立 git worktree 副本和隔离 HOME 中跑，可保护主工作树和常规凭据；这不是 OS chroot，仍靠危险命令拦截、路径校验和人工闸门兜底。
 - **外部观点先进插件**：文章/方法论先收录为 source note，再做 experimental path plugin + eval；验证前不进 core。
 

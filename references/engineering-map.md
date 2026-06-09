@@ -66,7 +66,7 @@
 | `lto_run.py pipeline` | 每 task 串行过多 stage（item 并发） | `--stages "..." [--phase] [--concurrency]` | evidence + state.json | `python3 scripts/lto_run.py pipeline --stages "lint {task_id}" "test {task_id}"` |
 | `lto_run.py audit` | 对抗审计编排+收口判收敛 | `[--auto-dispatch\|--discover-risks\|--collect <dir>]` | 审计简报 + audit-ledger.md | `python3 scripts/lto_run.py audit --auto-dispatch` |
 | `lto_run.py next` | 事实简报器（零 LLM，不接管路径选择） | `[--exec] [--json]` | 决策简报 / argv 命令 | `python3 scripts/lto_run.py next` |
-| `lto_run.py autopilot` | 受约束推进 harness | `--supervised [--auto-exec] [--decide [--decide-kind] [--decide-budget]]`；`--autonomous` 未实现 | 决策简报 / 沙箱执行 + evidence / 三方收敛 brief | `python3 scripts/lto_run.py autopilot --supervised --decide` |
+| `lto_run.py autopilot` | 受约束推进 harness | `--supervised [--auto-exec] [--decide [--decide-kind] [--decide-budget]]` / `--autonomous`（机械证据闸门+机械执行，不 spawn 决策 agent，与 --decide 互斥）| 决策简报 / 沙箱执行 + evidence / 三方收敛 brief / 闸门简报 | `python3 scripts/lto_run.py autopilot --supervised --decide` |
 | `lto_run.py recap` | 面向人类的回顾视图 | `[--run-id]` | 人话回顾（六问） | `python3 scripts/lto_run.py recap` |
 | `smoke_test.py` | skill 自检（结构+脚本+模板+eval+ref） | — | `SMOKE OK`；rc 0/1 | `python3 scripts/smoke_test.py` |
 | `scripts/install.sh` | 安装 skill 软链，并生成/检查全局 `lto` wrapper | `[--check] [target]` + `LTO_BIN_DIR` | skill links + sentinel-managed wrapper；冲突 rc 2 | `bash scripts/install.sh --check` |

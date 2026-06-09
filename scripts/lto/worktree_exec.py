@@ -36,10 +36,15 @@ _DANGEROUS_PATTERNS = [
     r"\brm\s+-[a-z]*[rf]",             # rm -rf / rm -fr / rm -r 等
     r"\bfind\b.*-delete",             # find . -delete（codex Medium）
     r"\bshred\b",                     # shred（codex Medium）
-    r"\bgit\s+push\b",                # 推远程（永远 NEEDS_CONFIRM）
-    r"\bgit\s+remote\s+(add|set-url|remove)",  # 改 remote
-    r"\bgit\s+reset\s+--hard\b",      # codex Medium
-    r"\bgit\s+clean\s+-[a-z]*[fdx]",  # codex Medium
+    # 推远程 / 改 remote / 危险 reset/clean（永远 NEEDS_CONFIRM）。
+    # `(\s+\S+)*?` 非贪婪吃掉 git 与子命令间的任意全局 flag 及其值（含
+    # `-C .` 这种 flag+空格+值的两 token 形式），堵 `git -C . push` /
+    # `git -c k=v push` / `git --git-dir=… push`——codex 审 ③ BLOCKER：
+    # 只匹配字面 `git push` 或只吃单 token flag 都会被绕过。
+    r"\bgit\b(\s+\S+)*?\s+push\b",
+    r"\bgit\b(\s+\S+)*?\s+remote\s+(add|set-url|remove)",
+    r"\bgit\b(\s+\S+)*?\s+reset\s+--hard\b",
+    r"\bgit\b(\s+\S+)*?\s+clean\s+-[a-z]*[fdx]",
     r"\bdrop\s+(database|table)\b",   # SQL DROP
     r"\bdelete\s+from\b",             # SQL DELETE
     r"\btruncate\b",

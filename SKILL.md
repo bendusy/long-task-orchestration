@@ -215,7 +215,7 @@ $LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 t
 > 不自动切阶段、不替人批准。`--strict` 才把缺失的 required evidence 变成非零退出；
 > `--json` 输出单个 JSON 对象给其他 host 接手读取。
 >
-> **autopilot 档位**：`--supervised`（出 brief，默认）、`--auto-exec`（worktree 沙箱跑 safe 子步骤）、`--decide`（escalate 时 opt-in 派三方异构 agent 收敛，决策权仍归你）已实现；`--autonomous`（零人工全自动循环）是下一期，未实现——按 spec「先攒 supervised 真实 escalate 数据再决定值不值」。git push 永远停下等人确认，不随档位放开。
+> **autopilot 档位**：`--supervised`（出 brief，默认）、`--auto-exec`（worktree 沙箱跑 safe 子步骤）、`--decide`（escalate 时 opt-in 派三方异构 agent 收敛，决策权仍归你）、`--autonomous`（机械证据闸门 + 机械执行）均已实现。**autonomous 不 spawn 决策 agent、不替你反思**——它只做两件机械的事：读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够诚实退回 supervised），过闸后在 worktree 沙箱机械推进 safe 子步骤。escalate / dangerous / git push（含 `git -C . push` 等变体）/ 网络副作用一律停人类，反思永远归你。与 `--decide` 互斥（autonomous 不派决策 agent）。
 
 ## 什么情况下不要用 LTO
 

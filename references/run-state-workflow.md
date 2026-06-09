@@ -303,8 +303,12 @@ $L autopilot --supervised --auto-exec    # auto-run safe/reversible task command
 worktree; env-isolated HOME/credentials). Dangerous ops (rm -rf / git push /
 DROP / sudo / curl|sh / escape paths) are HELD for human confirm. Retry≥3 skips,
 stall detection reverts to brief-only. Autopilot can run safe substeps and collect
-decision evidence, but the host agent remains planner. `--autonomous` is next-phase
-(not implemented).
+decision evidence, but the host agent remains planner. `--autonomous` is implemented
+as a **mechanical evidence gate + mechanical execution** — it never spawns a decision
+agent and never reflects (LTO emits facts; the host reflects). It reads cross-run
+mining to gate on accumulated real dispatch data (falls back to supervised when
+insufficient), then mechanically runs safe substeps; escalate/dangerous/push/network
+stay with the human. Mutually exclusive with `--decide`.
 
 ## Recap (human-facing review)
 

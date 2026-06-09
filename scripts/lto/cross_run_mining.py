@@ -91,11 +91,28 @@ def _result_tokens(result: dict[str, Any]) -> int:
 # status not in this set lands in "other" (shown in the table so the success
 # denominator is transparent: ok / runs where runs includes other).
 from .agent_job import JobStatus as _JobStatus  # noqa: E402
+from .agent_job import KNOWN_RUNNERS as _KNOWN_RUNNERS  # noqa: E402
 
 _STATUS_KEYS = tuple(
     s.value for s in _JobStatus
     if s.value not in ("pending", "running")  # transient, not a terminal outcome
 )  # → ok, failed, timeout, rate_limited, skipped
+
+
+def _is_contract_result(r: dict[str, Any]) -> bool:
+    """是否符合 AgentResult 合同——给 autonomous 闸门用的**严格**计数判据。
+
+    宽松的 brief 计数把任何 dict（含空 {}）都算一条结果，可被构造数据刷过闸门
+    （codex 审 ③ HIGH）。闸门要的是可信的真实派工：job_id 非空 + runner 是已知
+    runtime + status 是终态（非 pending/running/other）。
+    """
+    if not isinstance(r, dict):
+        return False
+    if not str(r.get("job_id", "")).strip():
+        return False
+    if r.get("runner") not in _KNOWN_RUNNERS:
+        return False
+    return str(r.get("status", "")).lower() in _STATUS_KEYS
 
 
 def _load_state_safe(path: Path) -> dict[str, Any] | None | str:
@@ -143,6 +160,8 @@ def mine_model_effectiveness(repo: Path) -> dict[str, Any]:
     total_results = 0
     runs_with_agent_runs = 0
     skipped_bad_runs = 0
+    gate_runs = 0        # 严格：有 >=1 条合规 AgentResult 的 run 数（autonomous 闸门用）
+    gate_results = 0     # 严格：合规 AgentResult 总条数（防空 {} 刷闸门）
 
     def _new_slot() -> dict[str, Any]:
         slot = {"runs": 0, "distinct_runs": 0, "other": 0,
@@ -163,6 +182,7 @@ def mine_model_effectiveness(repo: Path) -> dict[str, Any]:
             continue
 
         run_has_result = False
+        run_has_contract_result = False
         per_run: dict[str, dict[str, int]] = {}
 
         for results in agent_runs.values():
@@ -173,6 +193,10 @@ def mine_model_effectiveness(repo: Path) -> dict[str, Any]:
                     continue
                 run_has_result = True
                 total_results += 1
+                # 严格闸门计数：只数符合 AgentResult 合同的真实派工（防空 {} 刷闸门）。
+                if _is_contract_result(r):
+                    gate_results += 1
+                    run_has_contract_result = True
                 runner = str(r.get("runner", "?"))
                 status = str(r.get("status", "")).lower()
                 # model 是 runner 下的具体型号（如 pi 跑 deepseek vs glm）。旧
@@ -201,6 +225,8 @@ def mine_model_effectiveness(repo: Path) -> dict[str, Any]:
         if run_has_result:
             runs_with_agent_runs += 1
             timeline.append({"run_id": run_id, "runners": per_run})
+        if run_has_contract_result:
+            gate_runs += 1
 
     # derive rates / averages / distinct-run counts
     for runner, slot in by_runner.items():
@@ -216,6 +242,8 @@ def mine_model_effectiveness(repo: Path) -> dict[str, Any]:
         "timeline": timeline,
         "total_runner_results": total_results,
         "runs_with_agent_runs": runs_with_agent_runs,
+        "gate_runs": gate_runs,          # 严格计数（autonomous 闸门用，防空 dict 刷过）
+        "gate_results": gate_results,
         "skipped_bad_runs": skipped_bad_runs,
     }
 

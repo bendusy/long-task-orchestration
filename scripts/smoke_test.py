@@ -130,6 +130,7 @@ def main() -> int:
         ("live_log",      [sys.executable, str(SCRIPTS_DIR / "test_live_log.py")],          False),
         ("events",        [sys.executable, str(SCRIPTS_DIR / "test_events.py")],            False),
         ("telemetry",     [sys.executable, str(SCRIPTS_DIR / "test_telemetry.py")],         False),
+        ("autonomous_gate", [sys.executable, str(SCRIPTS_DIR / "test_autonomous_gate.py")], False),
     ]
     for name, argv, needs_pp in module_tests:
         proc = subprocess.run(

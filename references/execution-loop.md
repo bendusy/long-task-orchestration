@@ -164,5 +164,5 @@ shell 层（上面）编排 shell 命令；agent 层编排带独立 context 的�
 - **`next.py`** — 事实简报器（零 LLM）：`analyze` 状态 → 无歧义给 argv 命令 / escalate 给宿主 LLM 富决策简报。它不选完整路径；host agent 读 brief 后决定下一段 pattern。`--exec` 走 shell=False（无注入面）。
 - **`progress.py`** — 推进检测 + stall 闸门：`progress_digest`/`has_progressed`。推进 = done↑/ledger↓/risk verified/blocked↓(带新成功证据)；同失败指纹 = 停滞。单向棘轮防伪推进博弈。
 - **`worktree_exec.py`** — autopilot 自动执行沙箱：`run_in_sandbox` 在独立 worktree 跑命令 + env 隔离 HOME/凭据 + 17 类危险操作（rm -rf/git push/curl|sh/绝对路径逃逸…）HELD 不执行。
-- **`autopilot.py`** — 受约束推进 harness，三档：`--supervised`（出 brief 回吐宿主）/ `--auto-exec`（沙箱跑 safe 子步骤，retry/stall 刹车）/ `--decide`（escalate 时 opt-in spawn 三方异构 agent 跑双轨收敛，出 brief 给宿主读，决策权仍归宿主；配 `--decide-kind direction|review|both` + `--decide-budget`，已实现）。`--autonomous` 下一期未实现。
+- **`autopilot.py`** — 受约束推进 harness，三档：`--supervised`（出 brief 回吐宿主）/ `--auto-exec`（沙箱跑 safe 子步骤，retry/stall 刹车）/ `--decide`（escalate 时 opt-in spawn 三方异构 agent 跑双轨收敛，出 brief 给宿主读，决策权仍归宿主；配 `--decide-kind direction|review|both` + `--decide-budget`，已实现）/ `--autonomous`（机械证据闸门 + 机械执行，已实现）。**autonomous 不 spawn 决策 agent、不替宿主反思**——读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够退回 supervised），过闸后机械推进 safe 子步骤；escalate/dangerous/push（含 `git -C . push` 变体）/网络停人类，与 `--decide` 互斥。
 - **`recap.py`** — 面向人类的回顾（与 resume 正交：resume 喂 AI，recap 给人）。

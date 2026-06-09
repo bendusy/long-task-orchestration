@@ -31,6 +31,11 @@ def adv1_classify_dangerous():
     cases = [
         ("rm -rf foo", "needs_semantic_judgement"),
         ("git push origin main", "needs_semantic_judgement"),
+        # codex ③ BLOCKER: git push 变体（中间夹全局 flag）不能绕过拦截
+        ("git -C . push", "needs_semantic_judgement"),
+        ("git -c user.x=y push origin main", "needs_semantic_judgement"),
+        ("git --git-dir=.git push", "needs_semantic_judgement"),
+        ("git -C /repo -c k=v push", "needs_semantic_judgement"),
         ("DROP TABLE users", "needs_semantic_judgement"),
         ("sudo rm foo", "needs_semantic_judgement"),
         ("cat ~/.ssh/id_rsa", "needs_semantic_judgement"),   # 逃逸路径
