@@ -1,8 +1,15 @@
 # Changelog
 
+## delegate: explicit `--sandbox` flag (codex was silently read-only)
+
+- **Commit**: this commit.
+- **Summary**: Delegating a *write* task to codex failed confusingly: `codex.sh` defaults to `CODEX_SANDBOX=read-only` (a sound safety default), but `delegate.sh` exposed no way to override it except an undocumented env var — so a caller asking codex to edit files would get an honest "I can't write" back, and mistake it for a codex regression. It is not a codex bug; codex correctly obeyed the read-only sandbox it was handed. The gap was a missing explicit dispatch-side control.
+- **Fix**: `delegate.sh` now takes `--sandbox <read-only|workspace-write|danger-full-access>`, validates it, and maps it to `CODEX_SANDBOX` for the codex runner (subprocess and tmux paths). It is ignored with a stderr notice for non-codex agents (only codex has a sandbox concept). Default stays read-only — write access is opt-in.
+- **Verified**: env passthrough tested for all four cases (workspace-write passes through, no-flag leaves it unset, invalid value rejected, non-codex ignored+warned); then a real codex run with `--sandbox workspace-write` wrote and read back a probe file, confirming the same codex that previously reported `WORKTREE_NOT_WRITABLE` can now write.
+
 ## Events log + telemetry — the passive sensor layer (control-loop Phase 1)
 
-- **Commit**: this commit. Designed against the reviewed `control-loop-harness.md` Phase 1 spec, implemented by a sub-agent, then adversarially reviewed by 2 heterogeneous auditors (codex + pi) whose findings were union-merged (no voting) and fixed before merge.
+- **Commit**: `765e4eb`. Designed against the reviewed `control-loop-harness.md` Phase 1 spec, implemented by a sub-agent, then adversarially reviewed by 2 heterogeneous auditors (codex + pi) whose findings were union-merged (no voting) and fixed before merge.
 - **Summary**: LTO could observe a run's *current* state (`state.json`) but kept no first-class record of *what happened over time* — so `next`/`recap` and any future eval had to guess from snapshots. This adds the spec's Phase 1 sensor layer: an append-only `.lto/<run-id>/events.jsonl` event stream and a derived `.lto/<run-id>/telemetry.json`. It is **pure sensor**: zero LLM, zero decisions, append-only. It records what occurred; it never routes, promotes, or decides. This is the foundation the deferred items (`autopilot --autonomous`, eval `llm_judge`) were waiting on — see `references/backlog.md`.
 
 ### Changes

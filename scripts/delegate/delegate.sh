@@ -4,8 +4,13 @@
 # Usage:
 #   delegate.sh -a <agent> -p <prompt_file> -o <reply_file> [-t <timeout_sec>]
 #               [--headless] [-s <tmux_session>] [--keep-window]
+#               [--sandbox <read-only|workspace-write|danger-full-access>]
 #
 # Agents: codex | claude | pi | agy | gemini
+# --sandbox: only codex honors it (maps to CODEX_SANDBOX). Default read-only.
+#   Pass workspace-write for tasks that must edit files; otherwise codex can
+#   only read and will (correctly) report it cannot write. Ignored for non-codex
+#   agents with a stderr notice.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,9 +26,10 @@ KEEP_WINDOW=0
 AD_CALL_DEPTH="${AD_CALL_DEPTH:-0}"
 AD_MAX_CALL_DEPTH="${AD_MAX_CALL_DEPTH:-2}"
 AD_HOST_AGENT="${AD_HOST_AGENT:-}"
+SANDBOX=""
 
 usage() {
-  sed -n '2,12p' "$0" >&2
+  sed -n '2,17p' "$0" >&2
   exit 64
 }
 
@@ -36,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --headless) FORCE_HEADLESS=1; shift ;;
     -s) SESSION="$2"; shift 2 ;;
     --keep-window) KEEP_WINDOW=1; shift ;;
+    --sandbox) SANDBOX="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown option: $1" >&2; usage ;;
   esac
@@ -64,12 +71,25 @@ if [[ -n "$AD_HOST_AGENT" && "$AD_HOST_AGENT" == "$AGENT" ]]; then
 fi
 NEXT_CALL_DEPTH=$((AD_CALL_DEPTH + 1))
 
+# Sandbox: only codex consumes CODEX_SANDBOX. Validate + map; warn for others.
+if [[ -n "$SANDBOX" ]]; then
+  case "$SANDBOX" in
+    read-only|workspace-write|danger-full-access) ;;
+    *) echo "invalid --sandbox: $SANDBOX (expect read-only|workspace-write|danger-full-access)" >&2; exit 64 ;;
+  esac
+  if [[ "$AGENT" != "codex" ]]; then
+    echo "[$AGENT] note: --sandbox only applies to codex; ignored for $AGENT" >&2
+    SANDBOX=""
+  fi
+fi
+
 mkdir -p "$(dirname "$REPLY_FILE")"
 : > "$REPLY_FILE"
 
 run_subprocess() {
-  AD_CALL_DEPTH="$NEXT_CALL_DEPTH" AD_MAX_CALL_DEPTH="$AD_MAX_CALL_DEPTH" AD_HOST_AGENT="$AGENT" \
-    "$RUNNER" "$PROMPT_FILE" "$REPLY_FILE" "$TIMEOUT_SEC"
+  local env_args=(AD_CALL_DEPTH="$NEXT_CALL_DEPTH" AD_MAX_CALL_DEPTH="$AD_MAX_CALL_DEPTH" AD_HOST_AGENT="$AGENT")
+  [[ -n "$SANDBOX" ]] && env_args+=(CODEX_SANDBOX="$SANDBOX")
+  env "${env_args[@]}" "$RUNNER" "$PROMPT_FILE" "$REPLY_FILE" "$TIMEOUT_SEC"
 }
 
 run_tmux() {
@@ -80,7 +100,9 @@ run_tmux() {
   rcfile="$(mktemp "${REPLY_FILE}.rc.XXXX")"
 
   local payload
-  payload="AD_CALL_DEPTH=$(printf '%q' "$NEXT_CALL_DEPTH") AD_MAX_CALL_DEPTH=$(printf '%q' "$AD_MAX_CALL_DEPTH") AD_HOST_AGENT=$(printf '%q' "$AGENT") $(printf '%q' "$RUNNER") $(printf '%q' "$PROMPT_FILE") $(printf '%q' "$REPLY_FILE") $(printf '%q' "$TIMEOUT_SEC"); echo \$? > $(printf '%q' "$rcfile"); tmux wait-for -S $(printf '%q' "$sig")"
+  local sandbox_env=""
+  [[ -n "$SANDBOX" ]] && sandbox_env="CODEX_SANDBOX=$(printf '%q' "$SANDBOX") "
+  payload="AD_CALL_DEPTH=$(printf '%q' "$NEXT_CALL_DEPTH") AD_MAX_CALL_DEPTH=$(printf '%q' "$AD_MAX_CALL_DEPTH") AD_HOST_AGENT=$(printf '%q' "$AGENT") ${sandbox_env}$(printf '%q' "$RUNNER") $(printf '%q' "$PROMPT_FILE") $(printf '%q' "$REPLY_FILE") $(printf '%q' "$TIMEOUT_SEC"); echo \$? > $(printf '%q' "$rcfile"); tmux wait-for -S $(printf '%q' "$sig")"
 
   local wid
   if ! wid="$(tmux new-window -P -F '#{window_id}' -t "$sess" -n "$win" "bash -c $(printf '%q' "$payload")" 2>/dev/null)"; then
