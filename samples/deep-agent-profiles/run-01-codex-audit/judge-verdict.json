@@ -1,0 +1,12 @@
+{
+  "evidence_hash": "sha256:20ec86e42ad4152158a5ba75dddcf63688cfcba0e70e9d0210e5fcf17bbdc1ef",
+  "judge_runner": "pi",
+  "judgment_hash": "sha256:4a00f1817938102f964084089b36afc17f55d54cd3c03f09383ee766e6e0b952",
+  "parsed_judgment": {
+    "blocker_quality": "strong",
+    "false_positive_suspected": false,
+    "rationale": "candidate 7 findings all cite concrete dual evidence (spec lines + code paths), identify real spec-implementation divergence with verifiable predicates; no claim relies on speculation or misinterpreted source."
+  },
+  "schema_version": 1,
+  "status": "ok"
+}

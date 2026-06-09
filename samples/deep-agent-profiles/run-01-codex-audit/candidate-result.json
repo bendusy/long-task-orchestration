@@ -1,0 +1,28 @@
+{
+  "artifacts": [],
+  "attempts": 1,
+  "cost": {
+    "elapsed_sec": 192.104,
+    "tokens": 486090,
+    "tokens_in": 478146,
+    "tokens_out": 7944
+  },
+  "error": "",
+  "exit_code": 0,
+  "findings": [],
+  "job_id": "eval-codex-audit-structured-output-candidate",
+  "model": null,
+  "permissions": {
+    "env_keys": [
+      "CODEX_JSON",
+      "CODEX_PROFILE"
+    ],
+    "reason": "",
+    "runner": "codex",
+    "sandbox": "read-only",
+    "user_approved": false
+  },
+  "reply_text": "[\n  {\n    \"severity\": \"high\",\n    \"claim\": \"The spec assumes `eval-run` is safe-by-default plan-only, but the implemented CLI has no `--plan-only` or `--execute` switch and always calls the execution path.\",\n    \"evidence\": \"references/plugin-real-eval-runner.md:115-164; scripts/lto/commands/plugin.py:138-152,231-249; scripts/lto/plugin_eval_run.py:185-198,311-319\",\n    \"recommendation\": \"Implement plan-only as the default and require `--execute` for model calls, or downgrade the spec/status text so it does not claim that execution is explicit.\",\n    \"confidence\": \"high\"\n  },\n  {\n    \"severity\": \"high\",\n    \"claim\": \"The spec says plugins cannot select runners unless the host passes `--runner` or an approved routing policy, but the eval pack selects `codex` and implementation trusts `case.runner` directly.\",\n    \"evidence\": \"references/plugin-real-eval-runner.md:160-164; plugins/deep-agent-profiles/eval/profile-ab-cases.json:15-18; scripts/lto/plugin_eval_run.py:243-245; scripts/lto/commands/plugin.py:231-249\",\n    \"recommendation\": \"Add a host-owned `--runner` argument or approved routing policy, treat case runner data as an allowlist/hint only, and reject plugin-controlled runner selection by default.\",\n    \"confidence\": \"high\"\n  },\n  {\n    \"severity\": \"high\",\n    \"claim\": \"The spec assumes budget and timeout are hard stops, but eval-run ignores profile/case budget data and constructs both jobs with default `Budget()`.\",\n    \"evidence\": \"references/plugin-real-eval-runner.md:139-162,379; plugins/deep-agent-profiles/profiles/codex-audit-readonly.json:10; scripts/lto/plugin_eval_run.py:291-308; scripts/lto/agent_job.py:81-86\",\n    \"recommendation\": \"Parse and enforce CLI/profile/case budgets explicitly, including timeout and token/cost ceilings, or remove the hard-stop claim from the spec.\",\n    \"confidence\": \"high\"\n  },\n  {\n    \"severity\": \"high\",\n    \"claim\": \"The spec presents evidence freeze/hash/redact as part of the pre-execution eval pipeline, but implementation freezes only the brief and replies after baseline/candidate jobs have already run.\",\n    \"evidence\": \"references/plugin-real-eval-runner.md:69-83,271-311,455-460; scripts/lto/plugin_eval_run.py:260-270,339-346; plugins/deep-agent-profiles/eval/profile-ab-cases.json:15-18\",\n    \"recommendation\": \"Separate post-run judge evidence freezing from pre-run evidence bundle freezing, then either implement pre-execution evidence refs/copy/hash/redact or mark that capability as deferred.\",\n    \"confidence\": \"high\"\n  },\n  {\n    \"severity\": \"high\",\n    \"claim\": \"The spec assumes oracle-assisted quality metrics, but the shipped eval case has no oracle, thresholds, or negative controls while static eval still reports the pack as OK.\",\n    \"evidence\": \"references/plugin-real-eval-runner.md:220-239,327-340,469-473; plugins/deep-agent-profiles/eval/profile-ab-cases.json:3-19; scripts/lto/plugin_extra.py:57-125; command `python3 scripts/lto_run.py plugin eval plugins/deep-agent-profiles --json` returned `ok: true`\",\n    \"recommendation\": \"Require oracle/negative-control data before accepting declared oracle-assisted metrics, and report unsupported declared metrics as not computed rather than successful.\",\n    \"confidence\": \"high\"\n  },\n  {\n    \"severity\": \"medium\",\n    \"claim\": \"The structured output contract is inconsistent and weakly enforced: the spec shows an object wrapper with `confidence: high|moderate|low`, but the plugin schema and prompt require a bare array with `confidence: high|medium|low`, and parse success is only `json.loads`.\",\n    \"evidence\": \"references/plugin-real-eval-runner.md:342-364; plugins/deep-agent-profiles/schemas/findings.json:1-12; plugins/deep-agent-profiles/prompts/codex-audit.md:5-8; scripts/lto/plugin_eval_run.py:395-400,508-520\",\n    \"recommendation\": \"Choose one findings schema, align the prompt/spec/schema, and validate required fields/enums instead of counting any valid JSON as `parse_ok`.\",\n    \"confidence\": \"high\"\n  },\n  {\n    \"severity\": \"medium\",\n    \"claim\": \"The report schema assumes promotion-grade artifacts such as `runner_health`, separated metric layers, gates, and verdict, but the implementation report only records cases, warnings, declared metrics, and deferred items.\",\n    \"evidence\": \"references/plugin-real-eval-runner.md:399-443; scripts/lto/plugin_eval_run.py:209-221,354-369\",\n    \"recommendation\": \"Either emit the documented report schema fields or label the current report as a partial v0 diagnostic report that is not sufficient for promotion decisions.\",\n    \"confidence\": \"high\"\n  }\n]",
+  "runner": "codex",
+  "status": "ok"
+}

@@ -1,0 +1,27 @@
+{
+  "artifacts": [],
+  "attempts": 1,
+  "cost": {
+    "elapsed_sec": 217.907,
+    "tokens": 673827,
+    "tokens_in": 665558,
+    "tokens_out": 8269
+  },
+  "error": "",
+  "exit_code": 0,
+  "findings": [],
+  "job_id": "eval-codex-audit-structured-output-baseline",
+  "model": null,
+  "permissions": {
+    "env_keys": [
+      "CODEX_JSON"
+    ],
+    "reason": "",
+    "runner": "codex",
+    "sandbox": "read-only",
+    "user_approved": false
+  },
+  "reply_text": "{\n  \"schema_version\": 1,\n  \"audited_spec\": \"references/control-loop-harness.md\",\n  \"scope_note\": \"No spec path was provided; I audited the primary file titled LTO control-loop harness spec.\",\n  \"findings\": [\n    {\n      \"id\": \"LTO-SPEC-PA-001\",\n      \"severity\": \"blocker\",\n      \"title\": \"The spec still treats later control modes as future or non-goals after they were implemented.\",\n      \"premature_assumption\": \"Reviewers can evaluate the system as Phase 1 passive logging while deferring autonomous/judge/mining risks.\",\n      \"evidence\": [\n        \"references/control-loop-harness.md:3 says later phases are still spec.\",\n        \"references/control-loop-harness.md:638 lists no long autonomous loop as a non-goal.\",\n        \"scripts/lto/commands/autopilot.py:104-133 implements autonomous gate plus mechanical execution.\",\n        \"references/backlog.md:15 marks autopilot --autonomous as implemented.\"\n      ],\n      \"impact\": \"The spec is no longer reliable as the current review surface; it can approve passive logging while missing already-shipped autonomy behavior.\",\n      \"recommendation\": \"Split current implementation spec from roadmap, then update non-goals/review questions to cover autonomous, decide, judge, and cross-run mining.\",\n      \"confidence\": \"high\"\n    },\n    {\n      \"id\": \"LTO-SPEC-PA-002\",\n      \"severity\": \"high\",\n      \"title\": \"Privacy/export gating assumes scan and redaction-failure signals that are not concretely defined.\",\n      \"premature_assumption\": \"Event redaction plus a standalone repo privacy script is enough to make state.json/artifacts.json references export-safe.\",\n      \"evidence\": [\n        \"references/control-loop-harness.md:276-277 defines privacy_findings/redaction_summary as hard export gates.\",\n        \"references/control-loop-harness.md:316 and :581 require state.json/artifacts.json privacy scan marking.\",\n        \"scripts/lto/events.py:255-258 only writes redaction_status as not_required or passed for new events.\",\n        \"scripts/lto/artifacts.py:121-144 emits artifact.registered without an artifact privacy-scan status.\"\n      ],\n      \"impact\": \"Telemetry can report no failed redactions while linked state/artifact surfaces were never field-level scanned or marked; the hard gate has no stable predicate.\",\n      \"recommendation\": \"Add machine-readable privacy_scan status for state/artifacts and make export/closeout/push gates consume it; keep it distinct from event-line redaction status.\",\n      \"confidence\": \"high\"\n    },\n    {\n      \"id\": \"LTO-SPEC-PA-003\",\n      \"severity\": \"medium\",\n      \"title\": \"The metric catalog assumes evidence_count comes from artifacts, but implementation derives it from state.\",\n      \"premature_assumption\": \"Artifacts are already the evidence source of truth for Phase 1 metrics.\",\n      \"evidence\": [\n        \"references/control-loop-harness.md:273 declares evidence_count source as artifacts.\",\n        \"scripts/lto/telemetry.py:175 computes evidence_count from task.evidence in state.\",\n        \"scripts/lto/commands/runner.py:57 appends evidence directly into task state.\"\n      ],\n      \"impact\": \"Consumers may treat evidence_count as artifact-backed proof when it is actually state-backed; this weakens provenance and privacy reasoning.\",\n      \"recommendation\": \"Either change the catalog source to state or derive evidence_count from artifacts.json entries and test that contract.\",\n      \"confidence\": \"high\"\n    }\n  ]\n}",
+  "runner": "codex",
+  "status": "ok"
+}

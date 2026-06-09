@@ -1,0 +1,89 @@
+{
+  "approved_sandbox": "read-only",
+  "cases": [
+    {
+      "baseline": {
+        "elapsed_sec": 217.907,
+        "exit_code": 0,
+        "parse_ok": null,
+        "permission_violation": false,
+        "pointer_only": false,
+        "private_path_leak": false,
+        "ran": true,
+        "status": "ok",
+        "timeout": false,
+        "tokens": 673827
+      },
+      "candidate": {
+        "elapsed_sec": 192.104,
+        "exit_code": 0,
+        "parse_ok": true,
+        "permission_violation": false,
+        "pointer_only": false,
+        "private_path_leak": false,
+        "ran": true,
+        "status": "ok",
+        "timeout": false,
+        "tokens": 486090
+      },
+      "case_id": "codex-audit-structured-output",
+      "deferred": [
+        "automatic_promotion"
+      ],
+      "deltas": {
+        "candidate_new_permission_violation": false,
+        "candidate_new_pointer_only": false,
+        "candidate_new_private_path_leak": false,
+        "candidate_new_timeout": false,
+        "elapsed_delta_sec": -25.802999999999997,
+        "token_delta": -187737.0
+      },
+      "evidence_hash": "sha256:20ec86e42ad4152158a5ba75dddcf63688cfcba0e70e9d0210e5fcf17bbdc1ef",
+      "judge": {
+        "blocker_quality": "strong",
+        "evidence_hash": "sha256:20ec86e42ad4152158a5ba75dddcf63688cfcba0e70e9d0210e5fcf17bbdc1ef",
+        "false_positive_suspected": false,
+        "judgment_hash": "sha256:4a00f1817938102f964084089b36afc17f55d54cd3c03f09383ee766e6e0b952",
+        "kind": "subjective_judgment",
+        "note": "judge does NOT affect promote; deterministic metrics own promotion",
+        "rationale": "candidate 7 findings all cite concrete dual evidence (spec lines + code paths), identify real spec-implementation divergence with verifiable predicates; no claim relies on speculation or misinterpreted source.",
+        "runner": "pi",
+        "status": "ok"
+      },
+      "metrics_declared": [
+        "parse_rate",
+        "blocker_quality",
+        "false_positive_rate",
+        "timeout_rate",
+        "permission_violations",
+        "private_path_leaks"
+      ],
+      "ok": true,
+      "profile": "codex-audit-readonly-v1",
+      "runner": "codex",
+      "token_metering_available": true,
+      "wall_clock_sec": 228.887,
+      "warnings": []
+    }
+  ],
+  "deferred": [
+    "automatic_promotion"
+  ],
+  "eval_id": "profile-ab-cases-v1",
+  "metrics_declared": [
+    "parse_rate",
+    "blocker_quality",
+    "false_positive_rate",
+    "timeout_rate",
+    "permission_violations",
+    "private_path_leaks"
+  ],
+  "mount_present": false,
+  "ok": true,
+  "plugin": "deep-agent-profiles",
+  "plugin_id": "deep-agent-profiles",
+  "run_id": "20260609-180121-deep-agent-profiles-eval-run-358c33aa",
+  "warnings": [
+    "plugin not mounted for this run — ran at default read-only sandbox without a mount-lock provenance record; run `lto plugin mount` first for an auditable approval trail"
+  ]
+}
