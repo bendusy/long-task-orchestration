@@ -15,6 +15,7 @@
 | ③ | `autopilot --autonomous` 机械闸门+机械执行（不 spawn 决策 agent） | ★ 中 | P2 | ✅ 已实现 | 证据闸门读⑥；codex 审 2BLOCKER+3HIGH 修；与 --decide 互斥 |
 | ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | 外部阻塞 | 等 am（animem）下游接口稳定 |
 | ⑤ | `AgentJobKind.TOURNAMENT` / `LOOP` 枚举 | ☆ 低 | **P3 不做** | YAGNI | 无真实触发场景，保持占位 |
+| ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
 
 ## 依赖链
 
@@ -77,6 +78,17 @@
 - **关键复用**：`interventions.py` 已有 `aggregate_across_runs` / `recurring_friction` / `render_cross_run_advisory`——**跨 run 挖掘摩擦的成熟模式已存在**。⑥ 是把同样模式套到 events.jsonl + ② 的 judge 结果上，新增维度：**按 runner 模型分组**（哪个模型在哪类任务有效），不只是按 category。
 - **缺口锚点**：`events.py` 当前**只有单 run 读取，零跨 run 聚合**（已核实）。
 - **铁律**：挖掘出的是**证据和派生信号**，不是命令——LTO 出 brief，host 决定调优，绝不自动 route/promote/晋升（沿用 control-loop 不变量）。judge 的主观分参与挖掘时仍标「主观非测量」。
+
+## ⑧ ACP 协议 fallback runner（远期观察，协议稳了再接）
+
+- **是什么**：让 LTO 能把任意 ACP（Agent Client Protocol）coding agent 当 runner——作为现有 4 家硬编码 runner（codex/pi/claude/agy）之外的**兜底通道**，不抢主路径。
+- **定位**：**fallback，不是主路径**。现有 delegate 四家 runner 已实测可用（headless 子进程 + token sidecar + sandbox），不缺派工能力。ACP 只在「需要派一个非这 4 家的 ACP agent」时兜底。
+- **为何现在不做（一手数据，2026-06-09 网查）**：
+  - **acpx CLI**（ACP 的 headless 客户端）：v0.9.0（2026-05-22），README 仍标 **alpha**「CLI/runtime interfaces likely to change」；其 README **不碰 orchestration 集成**。
+  - **ACP 协议本身**：v0.13.6（2026-06-05），**仍 0.x breaking-change 阶段**，正在 **v1/v2 架构分裂重构**，release 频繁 `(unstable)`/`(unstable-v2)`，remote agent support 还 work-in-progress。
+  - 结论：协议自身还在重构、breaking change 满天飞——现在接 = 对着移动靶。把要稳定开源的 LTO 绑 alpha 协议是引入已知不稳定依赖。
+- **触发条件（满足才动手）**：ACP 协议出 **1.0 / 摘掉 unstable 标 + remote agent 做完**，或 acpx 摘 alpha。在此之前**只观察不立项**。
+- **接的时候接什么**：接 **ACP 协议**（标准、可复用），不绑 acpx 这一个 alpha CLI。
 
 ---
 
