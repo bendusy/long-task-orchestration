@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 — 2026-06-09
+
+The "gets smarter the more you use it" release — but the host agent does the reasoning, never LTO. Cross-run mining (model effectiveness over time, down to the specific model), eval-run's frozen-and-isolated quality judge, and the mechanical-gate `--autonomous`. Entries below.
 
 ### autopilot --autonomous — mechanical evidence gate + execution (LTO never reflects)
 
