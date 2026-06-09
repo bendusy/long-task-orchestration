@@ -262,8 +262,10 @@ def _token_usage_line(state: dict) -> str:
     roll = st.token_rollup(state)
     if roll["runs_total"] == 0:
         return "no agent runs"
+    el = roll.get("total_elapsed_sec") or 0
+    el_part = f", {el:.0f}s total" if el > 0 else ""
     if roll["total_tokens"] == 0:
-        return f"unmetered ({roll['runs_total']} runs, no runner reported tokens)"
+        return f"unmetered ({roll['runs_total']} runs, no runner reported tokens{el_part})"
     by = ", ".join(
         f"{r}={s['tokens']}"
         for r, s in sorted(roll["by_runner"].items(), key=lambda kv: -kv[1]["tokens"])
@@ -272,7 +274,7 @@ def _token_usage_line(state: dict) -> str:
     return (
         f"{roll['total_tokens']} total "
         f"(in={roll['tokens_in']}, out={roll['tokens_out']}; "
-        f"{roll['runs_with_tokens']}/{roll['runs_total']} runs metered; {by})"
+        f"{roll['runs_with_tokens']}/{roll['runs_total']} runs metered{el_part}; {by})"
     )
 
 

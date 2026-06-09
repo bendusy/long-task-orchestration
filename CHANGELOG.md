@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Per-dispatch token + elapsed feedback (no waiting for closeout)
+
+- **Summary**: Each spawned subtask now reports its token + elapsed cost **the moment it finishes**, instead of only surfacing in `recap`/`closeout` aggregates. `spawn_agents` prints a per-job line to stderr (`⤷ pi/deepseek-v4-pro · ok · 40.7k tokens · 32s`) and a batch total when more than one job runs. Unmetered runners (agy) are honestly labeled, not faked as 0.
+- **Run-level total elapsed**: `token_rollup` now also accumulates `total_elapsed_sec` across all `agent_runs`, so `recap` ("约 69.5k tokens：pi 40.7k，codex 28.8k · 派工累计 47s") and `closeout` handoff ("69500 total … 47s total …") report both how many tokens and how long the dispatches took. `report=False` silences the per-job lines (used in tests).
+
 ## v0.3.0 — 2026-06-09
 
 The "gets smarter the more you use it" release — but the host agent does the reasoning, never LTO. Cross-run mining (model effectiveness over time, down to the specific model), eval-run's frozen-and-isolated quality judge, and the mechanical-gate `--autonomous`. Entries below.

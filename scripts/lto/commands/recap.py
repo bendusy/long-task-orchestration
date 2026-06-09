@@ -117,7 +117,19 @@ def _token_summary(state: dict) -> str:
             parts.append(f"{runner} {_fmt_tokens(s['tokens'])}")
     by = "，".join(parts)
     coverage = "" if wt == rt else f"（{wt}/{rt} 次派工有计量）"
-    return f"约 {_fmt_tokens(total)} tokens{coverage}：{by}"
+    el = roll.get("total_elapsed_sec") or 0
+    el_part = f" · 派工累计 {_fmt_duration(el)}" if el > 0 else ""
+    return f"约 {_fmt_tokens(total)} tokens{coverage}：{by}{el_part}"
+
+
+def _fmt_duration(sec: float) -> str:
+    """秒 → 人话（95→1m35s / 3700→1h2m）。"""
+    s = int(sec)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m{s % 60}s"
+    return f"{s // 3600}h{(s % 3600) // 60}m"
 
 
 def _fmt_tokens(n: int) -> str:

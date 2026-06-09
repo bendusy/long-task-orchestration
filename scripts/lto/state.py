@@ -304,6 +304,7 @@ def token_rollup(state: dict[str, Any]) -> dict[str, Any]:
     """
     total = tin = tout = 0
     with_tokens = total_runs = 0
+    total_elapsed = 0.0   # 所有派工的累计执行耗时（秒），与 token 一起报"这次 run 烧了多少"
     by_runner: dict[str, dict[str, int]] = {}
 
     def _int(val: Any) -> int:
@@ -320,6 +321,9 @@ def token_rollup(state: dict[str, Any]) -> dict[str, Any]:
             slot = by_runner.setdefault(runner, {"tokens": 0, "runs_with_tokens": 0, "runs_total": 0})
             slot["runs_total"] += 1
             cost = r.get("cost") or {}
+            el = cost.get("elapsed_sec")
+            if isinstance(el, (int, float)) and not isinstance(el, bool) and el >= 0:
+                total_elapsed += float(el)
             tok = _int(cost.get("tokens"))
             ti = _int(cost.get("tokens_in"))
             to = _int(cost.get("tokens_out"))
@@ -340,5 +344,6 @@ def token_rollup(state: dict[str, Any]) -> dict[str, Any]:
         "tokens_out": tout,
         "runs_with_tokens": with_tokens,
         "runs_total": total_runs,
+        "total_elapsed_sec": round(total_elapsed, 1),
         "by_runner": by_runner,
     }

@@ -34,8 +34,8 @@ def main() -> int:
 
     # mixed: codex+pi metered, agy not
     s = _state([
-        {"runner": "codex", "cost": {"tokens_in": 100, "tokens_out": 20, "tokens": 500}},
-        {"runner": "pi", "cost": {"tokens_in": 200, "tokens_out": 30, "tokens": 800}},
+        {"runner": "codex", "cost": {"tokens_in": 100, "tokens_out": 20, "tokens": 500, "elapsed_sec": 12}},
+        {"runner": "pi", "cost": {"tokens_in": 200, "tokens_out": 30, "tokens": 800, "elapsed_sec": 30.5}},
         {"runner": "agy", "cost": {"elapsed_sec": 5}},
     ])
     r = st.token_rollup(s)
@@ -43,6 +43,8 @@ def main() -> int:
     e += ok(r["runs_with_tokens"] == 2 and r["runs_total"] == 3, "2 of 3 runs metered")
     e += ok(r["by_runner"]["codex"]["tokens"] == 500, "codex breakdown")
     e += ok(r["by_runner"]["agy"]["tokens"] == 0, "agy contributes 0 tokens")
+    # 总耗时累计所有派工（含无 token 计量的 agy）：12+30.5+5 = 47.5
+    e += ok(r["total_elapsed_sec"] == 47.5, f"total_elapsed = 12+30.5+5 (got {r['total_elapsed_sec']})")
 
     # tokens absent but in/out present → fall back to sum
     s2 = _state([{"runner": "codex", "cost": {"tokens_in": 10, "tokens_out": 5}}])

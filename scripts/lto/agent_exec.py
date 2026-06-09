@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import sys
 import warnings
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,34 @@ from typing import Any
 from lto.agent_job import AgentJob, AgentResult
 from lto.scheduler import Scheduler
 from lto import state as st
+
+
+def _fmt_tokens(n: int) -> str:
+    """token 数 → 人话（1234→1.2k / 1200000→1.2M）。本地持有，不反向依赖 commands 层。"""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+def _job_done_line(job: AgentJob, result: AgentResult) -> str:
+    """单个派工完成的即时提示行：runner/model · 状态 · token · 耗时。
+
+    token 来自 sidecar（codex/pi/claude 真实计量）；缺则诚实标 unmetered（如 agy）。
+    用户即时看到每个子任务烧了多少，不必等 recap/closeout 汇总。
+    """
+    cost = result.cost if isinstance(result.cost, dict) else {}
+    tok = cost.get("tokens")
+    if tok is None:
+        ti, to = cost.get("tokens_in"), cost.get("tokens_out")
+        if isinstance(ti, int) or isinstance(to, int):
+            tok = (ti or 0) + (to or 0)
+    tok_str = f"{_fmt_tokens(tok)} tokens" if isinstance(tok, int) and tok > 0 else "unmetered"
+    elapsed = cost.get("elapsed_sec")
+    el_str = f" · {elapsed:.0f}s" if isinstance(elapsed, (int, float)) else ""
+    who = f"{job.runner}/{job.model}" if job.model else job.runner
+    return f"  ⤷ {who} · {result.status} · {tok_str}{el_str}"
 
 
 def spawn_agents(
@@ -33,6 +62,7 @@ def spawn_agents(
     max_concurrency: int = 4,
     persist: bool = True,
     runners_dir: Path | None = None,
+    report: bool = True,
 ) -> list[AgentResult]:
     """执行一批 agent job，可选把结果落进 state.json 的 agent_runs 区。
 
@@ -66,6 +96,27 @@ def spawn_agents(
 
     sched = Scheduler(repo, max_concurrency=max_concurrency, runners_dir=runners_dir, run_id=run_id)
     results = sched.submit(jobs)
+
+    # 即时 token 提示：每个子任务完成当场报烧了多少（不等 recap/closeout）。
+    # 打 stderr，不污染 stdout 的结构化输出；report=False 可关（如测试）。
+    if report and results:
+        total = 0
+        total_elapsed = 0.0
+        for job, result in zip(jobs, results):
+            print(_job_done_line(job, result), file=sys.stderr)
+            cost = result.cost if isinstance(result.cost, dict) else {}
+            tok = cost.get("tokens") or ((cost.get("tokens_in") or 0) + (cost.get("tokens_out") or 0))
+            if isinstance(tok, int):
+                total += tok
+            el = cost.get("elapsed_sec")
+            if isinstance(el, (int, float)):
+                total_elapsed += el
+        if len(results) > 1:
+            tok_part = f"{_fmt_tokens(total)} tokens" if total > 0 else "unmetered"
+            print(
+                f"  ⤷ 本批 {len(results)} 派工合计 {tok_part} · {total_elapsed:.0f}s",
+                file=sys.stderr,
+            )
 
     if persist:
         state_path = repo / ".lto" / run_id / "state.json"
