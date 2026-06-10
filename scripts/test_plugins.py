@@ -121,6 +121,29 @@ def main() -> int:
         r = run("plugin", "validate", str(base), "--json")
         errors += ok(r.returncode != 0 and "host-approved" in r.stdout, "host-owned env allowlist enforced")
 
+    with tempfile.TemporaryDirectory(prefix="lto_bad_family_") as td:
+        # W4-2（2026-06-10 dev-workflow spec）：family 枚举 + runner_constraints 形状校验。
+        base = Path(td) / "fam"
+        subprocess.run(["cp", "-R", str(SAMPLE), str(base)], check=True)
+        prof_path = base / "profiles" / "codex-audit-readonly.json"
+        prof = json.loads(prof_path.read_text(encoding="utf-8"))
+
+        prof["family"] = "alienai"
+        prof_path.write_text(json.dumps(prof), encoding="utf-8")
+        r = run("plugin", "validate", str(base), "--json")
+        errors += ok(r.returncode != 0 and "family" in r.stdout, "unknown family enum rejected")
+
+        prof["family"] = "openai"
+        prof["runner_constraints"] = {"min_distinct_families": 0}
+        prof_path.write_text(json.dumps(prof), encoding="utf-8")
+        r = run("plugin", "validate", str(base), "--json")
+        errors += ok(r.returncode != 0 and "min_distinct_families" in r.stdout, "bad min_distinct_families rejected")
+
+        prof["runner_constraints"] = {"exclude_host_family": True, "min_distinct_families": 3}
+        prof_path.write_text(json.dumps(prof), encoding="utf-8")
+        r = run("plugin", "validate", str(base), "--json")
+        errors += ok(r.returncode == 0, "valid runner_constraints accepted")
+
     with tempfile.TemporaryDirectory(prefix="lto_bad_eval_") as td:
         base = Path(td) / "evalbad"
         subprocess.run(["cp", "-R", str(SAMPLE), str(base)], check=True)

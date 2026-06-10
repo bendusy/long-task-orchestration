@@ -91,13 +91,15 @@ class PermissionPolicy:
                 )
             return
 
-        if runner == "agy":
+        if runner in ("agy", "gemini"):
             # §7 实测：agy --sandbox = workspace-write，无 read-only 档。
             # read-only profile 下 agy 无可兑现档位 → validate 阶段即拒绝（item 7）。
+            # gemini 同样无任何 read-only 兑现机制（gemini.sh 裸跑），却曾被本分支
+            # 漏掉直接放行——2026-06-10 三方 spec 审（agy）审出，同等 fail-closed。
             if self.sandbox == "read-only":
                 raise ValueError(
-                    "agy cannot enforce read-only (--sandbox is workspace-write, not "
-                    "read-only); defer agy for read-only jobs"
+                    f"{runner} cannot enforce read-only (no read-only sandbox "
+                    f"mechanism); defer {runner} for read-only jobs"
                 )
             return
 

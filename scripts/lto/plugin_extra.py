@@ -168,12 +168,36 @@ def create_source_note(
     return path
 
 
+# 跨族约束的机读枚举（2026-06-10 dev-workflow spec W4-2，三方审 q4 共识）。
+# 与 auditors._FAMILY 的值域一致；派工侧同族排除在 auditors._pick_auditors。
+KNOWN_FAMILIES = {"openai", "anthropic", "google", "deepseek", "meta"}
+
+
 def validate_profile_refs(plugin_dir: Path, manifest: dict[str, Any], errors: list[str]) -> None:
     security = manifest.get("security", {}) or {}
     env_allowlist = set(security.get("env_allowlist", []) or [])
     max_sandbox = security.get("max_sandbox", "read-only")
     for profile in _load_declared_profiles(plugin_dir, manifest, errors=errors):
         pid = profile.get("id", "<unknown>")
+        family = profile.get("family")
+        if family is not None and family not in KNOWN_FAMILIES:
+            errors.append(
+                f"profile {pid} family {family!r} not in known enum {sorted(KNOWN_FAMILIES)}"
+            )
+        rc = profile.get("runner_constraints")
+        if rc is not None:
+            if not isinstance(rc, dict):
+                errors.append(f"profile {pid} runner_constraints must be an object")
+            else:
+                ehf = rc.get("exclude_host_family")
+                if ehf is not None and not isinstance(ehf, bool):
+                    errors.append(f"profile {pid} runner_constraints.exclude_host_family must be bool")
+                mdf = rc.get("min_distinct_families")
+                if mdf is not None and (not isinstance(mdf, int) or isinstance(mdf, bool) or mdf < 1):
+                    errors.append(f"profile {pid} runner_constraints.min_distinct_families must be int >= 1")
+                unknown = set(rc) - {"exclude_host_family", "min_distinct_families"}
+                if unknown:
+                    errors.append(f"profile {pid} runner_constraints unknown keys: {sorted(unknown)}")
         for key in (profile.get("env") or {}).keys():
             if key not in env_allowlist:
                 errors.append(f"profile {pid} env key not allowlisted: {key}")
