@@ -21,6 +21,8 @@ This plugin captures the claim-verify pattern as a data-only playbook:
 
 ## Boundary
 
+**Boundary with docs-sync**: the object of verification here is an *outward-facing claim* (a statement made to users, reviewers, or external consumers). Drift between documentation and code is a different problem: detecting and fixing doc/code drift belongs to a docs-sync flow, not to this plugin. If verification reveals that a claim is wrong because the docs lag the code, record the verdict here and route the doc fix to docs-sync.
+
 These patterns are hypotheses until evaluated. The plugin does not grant write permission, does not change LTO convergence logic, and does not auto-promote verdicts to core state.
 
 All evidence used to upgrade a claim must be frozen (path:line or deterministic command output captured and redacted). "Another model also agrees" is explicitly not evidence.

@@ -15,7 +15,8 @@
     "profiles": [
       "profiles/codex-refuter-v1.json",
       "profiles/pi-refuter-v1.json",
-      "profiles/agy-refuter-v1.json"
+      "profiles/agy-refuter-v1.json",
+      "profiles/claude-refuter-v1.json"
     ],
     "evals": [
       "eval/adversarial-audit-cases.json"

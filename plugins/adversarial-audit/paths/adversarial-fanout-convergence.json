@@ -11,9 +11,10 @@
       "profiles": [
         "codex-refuter-v1",
         "pi-refuter-v1",
-        "agy-refuter-v1"
+        "agy-refuter-v1",
+        "claude-refuter-v1"
       ],
-      "note": "Dispatch all three profiles in parallel against the same artifact. Each runner must be a different model family from the artifact producer.",
+      "note": "Dispatch the profiles in parallel against the same artifact. Each runner must be a different model family from the artifact producer; when the host agent is claude, exclude claude-refuter-v1 (same-family self-audit). Read-only caveat: agy cannot enforce read-only, so the scheduler fail-closes and rejects agy dispatch for read-only audit (2026-06-10 verified); do not dispatch read-only audit tasks to agy/gemini.",
       "expected_artifact": "findings-round-N.json"
     },
     {
@@ -29,7 +30,7 @@
       "label": "host-triage",
       "primitive": "judge",
       "action": "host reads each blocker, verifies cited path:line evidence, classifies adopt/reject/needs-info",
-      "note": "LLM claim alone is not evidence. Host must open and read the cited file location. Rejected blockers require a falsification note.",
+      "note": "LLM claim alone is not evidence. Host must open and read the cited file location. Rejected blockers require a falsification note. Divergence routing: when findings contradict each other on facts, the host adjudicates by reading the cited sources first-hand; when the disagreement is about direction (no evidence can adjudicate), do not force a verdict here — hand off to a direction-review flow (prose pointer only, no hard inter-plugin dependency).",
       "expected_artifact": "triage-round-N.json"
     },
     {
@@ -46,12 +47,14 @@
     "HIGH+CRITICAL blocker count monotonically non-increasing across all rounds",
     "two consecutive rounds with zero new HIGH/CRITICAL blockers",
     "every adopted/rejected blocker has first-hand evidence (path:line or command output)",
-    "no permission escalation beyond read-only"
+    "no permission escalation beyond read-only",
+    "divergence exit: contradictory findings are adjudicated by host first-hand reads; direction-level disagreement with no adjudicating evidence is routed to a direction-review flow instead of being settled inside this path"
   ],
   "anti_patterns": [
     "ap1:same-family self-audit — auditor and producer share model family",
     "ap2:vote-to-merge-findings — majority vote used instead of union merge",
     "ap3:historical-contrast hallucination — before/after context shown to auditor",
-    "ap4:rubber-stamp PASS — empty findings accepted without proof-of-read"
+    "ap4:rubber-stamp PASS — empty findings accepted without proof-of-read",
+    "ap5:claude-host-claude-refuter — host agent is claude but claude-refuter-v1 is dispatched anyway (same-family self-audit; exclude it when the host is claude)"
   ]
 }

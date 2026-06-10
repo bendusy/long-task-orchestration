@@ -1,0 +1,12 @@
+{
+  "id": "claude-refuter-v1",
+  "runner": "claude",
+  "family": "anthropic",
+  "intent": "audit",
+  "description": "Fourth refute-first auditor (anthropic family). Do NOT dispatch when the host agent is claude: same-family self-audit (see path anti_patterns).",
+  "prompt_suffix_ref": "prompts/claude-refute-first.md",
+  "output_schema_ref": "schemas/findings.json",
+  "permission": {"sandbox": "read-only"},
+  "budget": {"timeout_sec": 360},
+  "failure": {"timeout_exit_codes": [124], "empty_reply_is_failure": true}
+}

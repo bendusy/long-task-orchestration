@@ -31,7 +31,12 @@
       "runner": "agy",
       "profile": "agy-refuter-v1",
       "parallelizable": true,
-      "brief": "Adopt a refute-first posture. Read plugins/adversarial-audit/paths/adversarial-fanout-convergence.json from the repo. Assume the playbook is wrong. Find steps that lack stop conditions, anti-patterns that are declared but not enforced by the path structure, missing evidence requirements, and convergence criteria that could be gamed or trivially satisfied. Evidence must be path:line. Output JSON findings only."
+      "case_type": "negative",
+      "expected_outcome": "scheduler_reject",
+      "expected_error_contains": "cannot enforce read-only",
+      "description": "Negative case: agy cannot enforce read-only, so dispatch of this read-only audit profile must be rejected fail-closed by the scheduler at the validate stage (2026-06-10 verified). This case passes when dispatch is rejected with an error containing 'cannot enforce read-only'; an actual agy run completing would be a regression of the fail-closed behavior.",
+      "brief": "Adopt a refute-first posture. Read plugins/adversarial-audit/paths/adversarial-fanout-convergence.json from the repo. Assume the playbook is wrong. Find steps that lack stop conditions, anti-patterns that are declared but not enforced by the path structure, missing evidence requirements, and convergence criteria that could be gamed or trivially satisfied. Evidence must be path:line. Output JSON findings only.",
+      "notes": "Expected behavior: dispatch is rejected at the validate stage before any agy process is spawned; the rejection error message contains 'cannot enforce read-only'. Do not work around by escalating sandbox or removing the read-only requirement."
     },
     {
       "id": "codex-refute-adversarial-plugin-json",

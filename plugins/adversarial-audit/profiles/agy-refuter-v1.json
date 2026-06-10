@@ -3,6 +3,7 @@
   "runner": "agy",
   "family": "google",
   "intent": "audit",
+  "description": "agy cannot enforce read-only sandbox; the scheduler fail-closes and rejects read-only dispatch to agy (2026-06-10 verified). Do not dispatch read-only audit tasks to agy/gemini. Kept as data for non-read-only contexts and as the negative-case fixture in eval.",
   "prompt_suffix_ref": "prompts/agy-refute-first.md",
   "output_schema_ref": "schemas/findings.json",
   "permission": {"sandbox": "read-only"},

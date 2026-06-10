@@ -1,7 +1,7 @@
 {
   "id": "pi-completeness-critic-v1",
   "runner": "pi",
-  "family": "perplexity",
+  "family": "deepseek",
   "intent": "completeness-critic",
   "prompt_suffix_ref": "prompts/pi-completeness-critic.md",
   "output_schema_ref": "schemas/verdict.json",

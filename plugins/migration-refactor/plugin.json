@@ -14,7 +14,8 @@
     ],
     "profiles": [
       "profiles/codex-migration-diff-audit-v1.json",
-      "profiles/claude-semantic-equivalence-v1.json"
+      "profiles/claude-semantic-equivalence-v1.json",
+      "profiles/codex-semantic-equivalence-v1.json"
     ],
     "evals": [
       "eval/migration-audit-cases.json"

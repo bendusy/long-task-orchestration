@@ -15,7 +15,7 @@
       "step": 2,
       "label": "evidence-freeze",
       "primitive": "audit",
-      "description": "Collect one-hand evidence for each hypothesis: path:line references or deterministic command outputs only. Copy evidence to artifacts/, hash it, redact private paths. LLM agreement is not evidence.",
+      "description": "Collect one-hand evidence for each hypothesis: path:line references or deterministic command outputs only. Copy evidence to artifacts/, hash it, redact private paths. LLM agreement is not evidence. HARD REQUIREMENT for local-code claims: any claim about local code MUST be verified by actually reading the cited source files; evidence MUST be a path:line reference or a command output. An LLM assertion (including the host's own) is NOT evidence and cannot freeze a local-code claim.",
       "expected_artifact": "frozen-evidence.json"
     },
     {
@@ -56,6 +56,7 @@
     "every verdict references at least one frozen evidence artifact",
     "no unverified claim appears in the conclusion section",
     "completeness-critic pass has run and its gaps are resolved or explicitly deferred",
+    "every local-code claim is backed by a first-hand source read with path:line or command-output evidence; LLM assertion alone never freezes a local-code claim",
     "no private paths in public artifacts",
     "no permission escalation beyond read-only"
   ]

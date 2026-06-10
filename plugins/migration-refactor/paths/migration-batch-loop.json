@@ -13,6 +13,7 @@
       "primitive": "runner",
       "label": "minimal-exemplar",
       "description": "Pick the smallest representative migration point. Migrate it in an isolated worktree, run full regression suite, commit as precedent. This commit is the reference template for all subsequent batches.",
+      "exemplar_selection": "Pick the minimal exemplar that still covers ALL transformation patterns in scope — smallest is not the goal by itself; coverage-per-line is. Judge candidates on four dimensions: (1) pattern coverage — does the candidate exercise every transformation pattern the migration will apply? (2) file size — prefer the smallest file/diff that still satisfies (1); (3) dependency fan-out — prefer low fan-out so regression failures localize to the migration itself; (4) test coverage — prefer a call site already covered by tests so behavior preservation is verifiable, not asserted.",
       "expected_artifact": "exemplar-diff.md"
     },
     {
@@ -38,14 +39,24 @@
     {
       "primitive": "judge",
       "label": "semantic-equivalence-spot-check",
-      "description": "For batches touching public API or core logic: run claude-semantic-equivalence-v1 profile. Judge must read both before and after versions of key files directly; must not infer from diff alone.",
+      "description": "For batches touching public API or core logic: run a semantic-equivalence profile from a different model family than the host. Host picks by family: claude host -> codex-semantic-equivalence-v1, codex host -> claude-semantic-equivalence-v1. Both profiles share the same prompt and are static data; the profile itself contains zero runtime logic. Judge must read both before and after versions of key files directly; must not infer from diff alone.",
       "profile": "claude-semantic-equivalence-v1",
+      "alt_profiles_by_host_family": {
+        "anthropic": "codex-semantic-equivalence-v1",
+        "openai": "claude-semantic-equivalence-v1"
+      },
       "expected_artifact": "batch-{n}-semantic-check.json"
     },
     {
       "primitive": "runner",
       "label": "merge",
-      "description": "Merge each passing batch worktree branch into integration branch. On conflict: stop immediately, do not cascade to remaining batches. git push always requires human confirmation.",
+      "description": "Merge each passing batch worktree branch into integration branch. On conflict: stop immediately, do not cascade to remaining batches. The scheduler only STOPS on conflict — it never rolls back automatically; rollback is executed by the host following on_conflict_rollback in order. git push always requires human confirmation.",
+      "on_conflict_rollback": [
+        "1. Preserve the scene: do NOT delete the worktree. Register rollback-artifact.json recording the worktree path and the conflict diff.",
+        "2. If mid-merge: `git merge --abort` (or `git rebase --abort` if mid-rebase).",
+        "3. Host decision: either rebase the batch branch and retry, or abandon the batch (`git worktree remove --force <path>` + `git branch -D <batch-branch>` — execute only AFTER the abandon decision is recorded as an artifact).",
+        "4. No cascade: batches after the conflicting batch do not continue automatically."
+      ],
       "expected_artifact": "merge-log.md"
     },
     {
