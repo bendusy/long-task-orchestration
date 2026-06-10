@@ -333,6 +333,18 @@ class Scheduler:
             # --- classify ---
             exit_code, status, error = _classify(exit_code, reply_text, stderr)
 
+            # --- permission evidence：构造侧权威 snapshot + runner sidecar 补充 ---
+            perm = _permission_snapshot(job)
+            sidecar = _read_perm_sidecar(reply_path, job.job_id)
+            # readonly_enforced：read-only job 必须有匹配的 sidecar 证据（RC3）；
+            # 缺/不匹配 → unknown（None），由 _sandbox_exceeds 按 fail-closed 判违规。
+            if perm.get("readonly_requested"):
+                perm["readonly_enforced"] = bool(sidecar) or None
+                if sidecar:
+                    perm["sidecar"] = sidecar
+            else:
+                perm["readonly_enforced"] = None  # 非 read-only 不适用
+
             return AgentResult(
                 job_id=job.job_id,
                 runner=job.runner,
@@ -340,7 +352,7 @@ class Scheduler:
                 exit_code=exit_code,
                 reply_text=reply_text,
                 cost=cost,
-                permissions=_permission_snapshot(job),
+                permissions=perm,
                 attempts=attempt,
                 error=error,
                 artifacts=[],  # reply file is deleted in finally; content is in reply_text
@@ -352,6 +364,7 @@ class Scheduler:
             if reply_path is not None:
                 _unlink_safe(reply_path)
                 _unlink_safe(_sidecar_path(reply_path))
+                _unlink_safe(Path(str(reply_path) + ".perm.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -552,30 +565,105 @@ def _kill_proc_group(proc: subprocess.Popen) -> None:
 def _effective_env(job: AgentJob) -> dict[str, str]:
     """Build subprocess env from process env + AgentJob.env + permission policy.
 
-    Parent CODEX_SANDBOX is intentionally not inherited for Codex jobs: each
-    job must carry its own permission_policy, defaulting to read-only.
+    read-only 意图作为 job 级显式参数显式注入（C3 / RH1）——不依赖会被子进程继承
+    的普通环境变量。所有 runner 统一从 scheduler 构造侧注入的 LTO_PERM_* 读 job 意图，
+    codex 额外用其原生 CODEX_SANDBOX 通道（同样由这里显式注入，不继承父进程）。
     """
     env = os.environ.copy()
+    # 主动隔离任何同名残留（前次 run / 用户 shell 污染），再按 job 重设。
+    for k in ("LTO_PERM_SANDBOX", "LTO_PERM_TOOLS", "LTO_JOB_ID", "CODEX_SANDBOX"):
+        env.pop(k, None)
     env.update({k: str(v) for k, v in job.env.items()})
+
+    pp = job.permission_policy
+    env["LTO_JOB_ID"] = job.job_id
+    env["LTO_PERM_SANDBOX"] = pp.sandbox
+    # tool-allowlist runner（pi/claude）read-only 时注入有效工具集：显式 tools 优先，
+    # 否则回落该 runner 标准只读 allowlist。claude 用逗号分隔；pi 同。
+    eff_tools = pp.effective_readonly_tools(job.runner)
+    if eff_tools:
+        env["LTO_PERM_TOOLS"] = ",".join(eff_tools)
+
     if job.runner == "codex":
-        env["CODEX_SANDBOX"] = job.permission_policy.sandbox
+        env["CODEX_SANDBOX"] = pp.sandbox
         if job.model and "CODEX_MODEL" not in job.env:
             env["CODEX_MODEL"] = job.model
     return env
 
 
+# read-only 兑现机制（与 runner-readonly-contract.md §2 一致）
+_READONLY_MECHANISM = {
+    "codex": "sandbox-rank",
+    "agy": "sandbox-flag",
+    "pi": "tool-allowlist",
+    "claude": "tool-allowlist",
+}
+
+
 def _permission_snapshot(job: AgentJob) -> dict[str, Any]:
-    """Return safe-to-persist permission evidence for state/artifacts."""
+    """Return mechanism-aware, construct-side-authoritative permission evidence.
+
+    证据首选 scheduler 构造侧（客观，RH2）——scheduler 自己知道给这个 job 注入了
+    什么 sandbox/工具 flag，记 `enforced_argv`/`actual_tools` 不靠 runner 自报。
+    runner sidecar 仅作补充（见 _read_perm_sidecar），且必须 job_id 匹配。
+    """
+    pp = job.permission_policy
+    runner = job.runner
+    mechanism = _READONLY_MECHANISM.get(runner)
     snap: dict[str, Any] = {
-        "runner": job.runner,
-        "sandbox": job.permission_policy.sandbox if job.runner == "codex" else None,
-        "reason": job.permission_policy.reason,
-        "user_approved": job.permission_policy.user_approved,
+        "runner": runner,
+        "job_id": job.job_id,
+        "readonly_mechanism": mechanism,
+        "sandbox": pp.sandbox,                  # 归一化等级（跨 runner 比较用，非 codex 也填）
+        "approved_sandbox": pp.sandbox,         # job 携带的批准等级
+        "readonly_requested": pp.sandbox == "read-only",
+        "reason": pp.reason,
+        "user_approved": pp.user_approved,
         "env_keys": sorted(job.env.keys()),
     }
-    if job.runner == "codex" and job.model:
+
+    # actual_tools：tool-allowlist runner 必填（scheduler 构造侧注入的工具集）。
+    # 空集即「scheduler 没注入限制 = 全权限」，由 _sandbox_exceeds 判 fail-closed（RC1）。
+    if mechanism == "tool-allowlist":
+        # 记有效工具集（含默认回落），与 scheduler 注入 runner 的 LTO_PERM_TOOLS 一致。
+        eff_tools = pp.effective_readonly_tools(runner)
+        snap["actual_tools"] = list(eff_tools)
+        # claude 的真正 enforcer 是 plan mode；记 enforced_argv 让判据能校验它在场。
+        if runner == "claude" and pp.sandbox == "read-only":
+            snap["enforced_argv"] = ["--allowedTools", ",".join(eff_tools), "--permission-mode", "plan"]
+        elif runner == "pi" and pp.sandbox == "read-only":
+            snap["enforced_argv"] = ["--tools", ",".join(eff_tools)]
+        else:
+            snap["enforced_argv"] = []  # 非 read-only：无工具限制
+    else:
+        snap["actual_tools"] = None
+        if runner == "codex":
+            snap["enforced_argv"] = ["-s", pp.sandbox]
+        elif runner == "agy":
+            snap["enforced_argv"] = ["--sandbox"] if pp.sandbox == "workspace-write" else (
+                ["--dangerously-skip-permissions"] if pp.sandbox == "danger-full-access" else [])
+        else:
+            snap["enforced_argv"] = []
+
+    if runner == "codex" and job.model:
         snap["model_source"] = "job.model" if "CODEX_MODEL" not in job.env else "env.CODEX_MODEL"
     return snap
+
+
+def _read_perm_sidecar(reply_path: Path, job_id: str) -> dict[str, Any] | None:
+    """读 runner 写的 <reply>.perm.json 补充证据（RC3：job_id 必须匹配）。
+
+    仅作 scheduler 构造侧证据的补充（记 runner 实际接受的 flag）；缺/不匹配 → None
+    （由调用方按 fail-closed 处理）。绝不沿用上一次的残留——job_id 校验天然挡住。
+    """
+    perm_file = Path(str(reply_path) + ".perm.json")
+    try:
+        data = json.loads(perm_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict) or data.get("job_id") != job_id:
+        return None
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -949,7 +1037,9 @@ exit 0
     })
     results = sched.submit([
         make_job("c6_ok", runner="codex"),
-        make_job("c6_bad", runner="agy"),
+        # agy 无 read-only 档（§7）；本测验的是 health-skip 不是权限，给合法 workspace-write。
+        make_job("c6_bad", runner="agy",
+                 permission_policy=PermissionPolicy(sandbox="workspace-write", reason="health-skip test")),
     ])
     r_ok = results[0]
     r_bad = results[1]

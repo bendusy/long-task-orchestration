@@ -17,7 +17,10 @@ REPLY_FILE="$2"
 TIMEOUT_SEC="${3:-900}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 CODEX_WORKDIR="${CODEX_WORKDIR:-$PWD}"
+# RH1: CODEX_SANDBOX 由 scheduler 在 spawn 时以隔离 env 显式注入（_effective_env），
+# 不从用户 shell/父进程继承——与「不走继承 env」统一为「scheduler 构造侧注入」。
 CODEX_SANDBOX="${CODEX_SANDBOX:-read-only}"
+JOB_ID="${LTO_JOB_ID:-}"
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
   echo "codex runner: prompt file not found: $PROMPT_FILE" >&2
@@ -136,6 +139,15 @@ fi
 
 if [[ -s "$ERR_FILE" ]]; then
   cat "$ERR_FILE" >&2
+fi
+
+# perm sidecar (RC3: job_id 绑定 + 原子 rename)。codex 用 sandbox-rank 机制。
+if [[ -n "$JOB_ID" ]]; then
+  PERM_FILE="$REPLY_FILE.perm.json"
+  PERM_TMP="$(mktemp "${PERM_FILE}.XXXXXX")"
+  printf '{"job_id":"%s","runner":"codex","readonly_mechanism":"sandbox-rank","enforced_argv":"-s %s","sandbox":"%s"}\n' \
+    "$JOB_ID" "$CODEX_SANDBOX" "$CODEX_SANDBOX" > "$PERM_TMP"
+  mv -f "$PERM_TMP" "$PERM_FILE"
 fi
 
 exit "$rc"

@@ -17,12 +17,27 @@ RAW_FILE="$(mktemp)"
 cleanup() { rm -f "$RAW_FILE" "$RAW_FILE.parsed"; }
 trap cleanup EXIT
 
+# read-only contract (references/runner-readonly-contract.md §7):
+#   实测确认 pi `--tools` 是完整替换语义（非追加）——传 read,grep,find,ls 后
+#   write/edit/bash 全 NO-SUCH-TOOL。read-only 时注入工具白名单。
+SANDBOX="${LTO_PERM_SANDBOX:-danger-full-access}"
+JOB_ID="${LTO_JOB_ID:-}"
+PERM_TOOLS="${LTO_PERM_TOOLS:-}"
+
+PERM_ARGV=()
+PERM_MECH="full"
+if [[ "$SANDBOX" == "read-only" ]]; then
+  PERM_ARGV=(--tools "${PERM_TOOLS:-read,grep,find,ls}")
+  PERM_MECH="tool-allowlist"
+fi
+
 # pipefail off so the tee in the pipe can't mask pi's rc; PIPESTATUS[0] keeps it.
 # stdout via tee: stored in RAW_FILE (for reply/token parse) AND streamed to this
 # process's stdout so LTO scheduler's Popen captures it into the live log.
 set +o pipefail
 timeout "${TIMEOUT_SEC}s" pi -p --mode json \
   --provider deepseek --model deepseek-v4-pro \
+  ${PERM_ARGV[@]+"${PERM_ARGV[@]}"} \
   "$(cat "$PROMPT_FILE")" 2>/dev/null | tee "$RAW_FILE"
 rc=${PIPESTATUS[0]}
 set -o pipefail
@@ -96,6 +111,15 @@ fi
 # with raw NDJSON (B1). Sentinel absent → schema mismatch / no python3 → raw.
 if [[ ! -f "$PARSED_FLAG" && ! -s "$REPLY_FILE" && -s "$RAW_FILE" ]]; then
   cp "$RAW_FILE" "$REPLY_FILE"
+fi
+
+# perm sidecar (RC3: job_id 绑定 + 原子 rename)。
+if [[ -n "$JOB_ID" ]]; then
+  PERM_FILE="$REPLY_FILE.perm.json"
+  PERM_TMP="$(mktemp "${PERM_FILE}.XXXXXX")"
+  printf '{"job_id":"%s","runner":"pi","readonly_mechanism":"%s","enforced_argv":"%s","sandbox":"%s","tools":"%s"}\n' \
+    "$JOB_ID" "$PERM_MECH" "${PERM_ARGV[*]+${PERM_ARGV[*]}}" "$SANDBOX" "${PERM_TOOLS}" > "$PERM_TMP"
+  mv -f "$PERM_TMP" "$PERM_FILE"
 fi
 
 exit "$rc"

@@ -30,6 +30,7 @@ from ..auditors import (
     _runtime_from_filename,
     _same_family,
     parse_findings_text,
+    readonly_intent_policy,
 )
 
 # 高风险关键词：碰这些领域的 task 默认进审计
@@ -146,6 +147,7 @@ def _auto_dispatch(
             job_id=f"audit-{auditor}",
             prompt_ref=str(brief_path),
             runner=auditor,
+            permission_policy=readonly_intent_policy(auditor),
             output_schema=output_schema,
             budget=Budget(timeout_sec=300),
             parent_pattern=Pattern.ADVERSARIAL.value,
@@ -449,6 +451,7 @@ def _discover_risks(repo: Path, run_id: str, target_dir: Path, state: dict, args
         job_id=f"risk-discover-{discoverer}",
         prompt_ref=str(brief_path),
         runner=discoverer,
+        permission_policy=readonly_intent_policy(discoverer),
         output_schema=output_schema,
         budget=Budget(timeout_sec=300),
         parent_pattern=Pattern.ADVERSARIAL.value,

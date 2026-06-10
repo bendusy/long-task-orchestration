@@ -33,6 +33,15 @@ class Pattern(str, Enum):
 KNOWN_RUNNERS = ("codex", "pi", "agy", "gemini", "claude")
 CODEX_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 
+# 跨 runner read-only 兑现机制（见 references/runner-readonly-contract.md）。
+# 四家机制不可通约——codex 是 sandbox 三级，agy 是 sandbox 开关(=workspace-write，
+# 无 read-only 档)，pi/claude 是工具白名单（pi 替换语义真裁、claude 靠 plan mode 软约束）。
+# 这些 allowlist 是 §2.1 的只读安全工具精确集，大小写敏感。
+READONLY_TOOL_ALLOWLIST = {
+    "claude": frozenset({"Read", "Grep", "Glob", "WebFetch"}),
+    "pi": frozenset({"read", "grep", "find", "ls"}),
+}
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -46,36 +55,84 @@ class JobStatus(str, Enum):
 
 @dataclass
 class PermissionPolicy:
-    """Per-job permission intent, used by scheduler/runner env guards."""
+    """Per-job permission intent, used by scheduler/runner env guards.
+
+    sandbox 是归一化的跨 runner 等级（read-only/workspace-write/danger-full-access）。
+    tools 是 tool-allowlist 机制(pi/claude)下 scheduler 构造侧要注入的工具集——
+    pi M-v2：用结构化字段而非 ad-hoc env 字典，避免绕类型检查。非 tool 机制留空。
+    """
     sandbox: str = "read-only"
     reason: str = ""
     user_approved: bool = False
+    tools: tuple[str, ...] = ()  # tool-allowlist runner 注入的工具集（pi/claude）
 
     def validate_for_runner(self, runner: str, env: dict[str, str]) -> None:
         if not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
             raise ValueError("env keys and values must be strings")
+        if self.sandbox not in CODEX_SANDBOXES:
+            raise ValueError(f"invalid sandbox: {self.sandbox!r}")
 
-        if runner != "codex":
-            return
-
-        sandbox = env.get("CODEX_SANDBOX", self.sandbox)
-        if sandbox != self.sandbox:
-            raise ValueError(
-                "CODEX_SANDBOX conflicts with permission_policy.sandbox "
-                f"({sandbox!r} != {self.sandbox!r})"
-            )
-        if sandbox not in CODEX_SANDBOXES:
-            raise ValueError(f"invalid codex sandbox: {sandbox!r}")
-        if sandbox == "workspace-write" and not self.reason.strip():
+        # 通用越权前置约束（任何 runner、任何机制）：高权限需 reason / 审批。
+        if self.sandbox == "workspace-write" and not self.reason.strip():
             raise ValueError("workspace-write requires permission_policy.reason")
-        if sandbox == "danger-full-access":
+        if self.sandbox == "danger-full-access":
             if not self.reason.strip():
                 raise ValueError("danger-full-access requires permission_policy.reason")
             if not self.user_approved:
                 raise ValueError("danger-full-access requires user_approved=True")
 
+        if runner == "codex":
+            # codex 用 env 通道（CODEX_SANDBOX），必须与 policy 一致（不双路径）。
+            sandbox = env.get("CODEX_SANDBOX", self.sandbox)
+            if sandbox != self.sandbox:
+                raise ValueError(
+                    "CODEX_SANDBOX conflicts with permission_policy.sandbox "
+                    f"({sandbox!r} != {self.sandbox!r})"
+                )
+            return
+
+        if runner == "agy":
+            # §7 实测：agy --sandbox = workspace-write，无 read-only 档。
+            # read-only profile 下 agy 无可兑现档位 → validate 阶段即拒绝（item 7）。
+            if self.sandbox == "read-only":
+                raise ValueError(
+                    "agy cannot enforce read-only (--sandbox is workspace-write, not "
+                    "read-only); defer agy for read-only jobs"
+                )
+            return
+
+        if runner in READONLY_TOOL_ALLOWLIST:
+            # claude / pi：tool-allowlist 机制。read-only 时 tools 必须是只读安全子集。
+            # 空 tools 合法——scheduler 构造侧会注入该 runner 的默认只读集
+            # (effective_readonly_tools)，零回归不强迫调用方到处显式传。fail-closed
+            # 的兜底在运行后的 _sandbox_exceeds（按 actual_tools 判），不在此前置拒绝。
+            # 只在调用方显式给了 allowlist 外的工具时才拒（明确越读意图）。
+            if self.sandbox == "read-only" and self.tools:
+                allow = READONLY_TOOL_ALLOWLIST[runner]
+                extra = set(self.tools) - allow
+                if extra:
+                    raise ValueError(
+                        f"{runner} read-only tools exceed allowlist: {sorted(extra)} "
+                        f"not in {sorted(allow)}"
+                    )
+            return
+
+    def effective_readonly_tools(self, runner: str) -> tuple[str, ...]:
+        """scheduler 构造侧用：read-only + tool-allowlist runner 的实际注入工具集。
+
+        显式 tools 优先；否则回落到该 runner 的标准只读 allowlist（§2.1）。
+        非 read-only 或非 tool-allowlist runner 返回空。
+        """
+        if self.sandbox != "read-only" or runner not in READONLY_TOOL_ALLOWLIST:
+            return ()
+        if self.tools:
+            return self.tools
+        return tuple(sorted(READONLY_TOOL_ALLOWLIST[runner]))
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["tools"] = list(self.tools)
+        return d
 
 
 @dataclass
@@ -148,7 +205,10 @@ class AgentJob:
                 rp["retry_on"] = tuple(rp["retry_on"])
             d["retry_policy"] = RetryPolicy(**rp)
         if "permission_policy" in d and isinstance(d["permission_policy"], dict):
-            d["permission_policy"] = PermissionPolicy(**d["permission_policy"])
+            pp = dict(d["permission_policy"])
+            if "tools" in pp and isinstance(pp["tools"], list):
+                pp["tools"] = tuple(pp["tools"])
+            d["permission_policy"] = PermissionPolicy(**pp)
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 

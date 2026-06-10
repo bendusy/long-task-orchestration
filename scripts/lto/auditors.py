@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+from .agent_job import PermissionPolicy
+
 
 _VALID_SEVERITIES = {"critical", "high", "medium", "low"}
 
@@ -81,6 +83,23 @@ def _family(runtime: str) -> str:
 
 def _same_family(a: str, b: str) -> bool:
     return _family(a) == _family(b)
+
+
+def readonly_intent_policy(runner: str) -> PermissionPolicy:
+    """审计/评审/judge 这类只读意图派工的统一权限收口。
+
+    评审是只读意图，但 §7 实测 agy 无 read-only 档（--sandbox=workspace-write 开关）。
+    保留 agy 这一异构视角（union-merge 不投票、一个不漏），给它 workspace-write，
+    越权风险靠 agy --sandbox 的工作区外封锁 + perm sidecar 监控兜底。
+    其余 runner 一律 read-only（codex sandbox 档 / claude+pi tool-allowlist）。
+    """
+    if runner == "agy":
+        return PermissionPolicy(
+            sandbox="workspace-write",
+            reason="agy has no read-only sandbox (§7); workspace-write is the "
+            "minimal enforceable level to keep agy's heterogeneous review lens",
+        )
+    return PermissionPolicy(sandbox="read-only")
 
 
 def _pick_auditors(host: str) -> list[str]:

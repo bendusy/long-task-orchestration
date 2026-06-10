@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from . import agent_exec
-from .agent_job import AgentJob, Budget, PermissionPolicy, Pattern
-from .auditors import _same_family
+from .agent_job import AgentJob, Budget, Pattern
+from .auditors import _same_family, readonly_intent_policy
 from .scheduler import Scheduler
 
 # verdict 冻结 schema 版本——进 judgment_hash，schema 变 hash 变（防跨版本误比对）。
@@ -353,7 +353,7 @@ def judge_case(
         prompt_is_inline=True,
         runner=chosen,
         output_schema=JUDGE_OUTPUT_SCHEMA,
-        permission_policy=PermissionPolicy(sandbox="read-only"),
+        permission_policy=readonly_intent_policy(chosen),
         budget=Budget(timeout_sec=300),
         parent_pattern=Pattern.ADVERSARIAL.value,
         meta={"role": "judge", "evidence_hash": evidence_hash, "candidate_runner": candidate_runner},

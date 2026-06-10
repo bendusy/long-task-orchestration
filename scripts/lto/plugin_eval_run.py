@@ -399,8 +399,9 @@ def _deterministic_metrics(res: AgentResult | None, approved_sandbox: str, *, ha
         parse_ok = parsed_substantive
     leak = bool(_PRIVATE_PATH_RE.search(reply))
     pointer_only = _is_pointer_only(reply, parsed_substantive=parsed_substantive)
-    sandbox_used = str(res.permissions.get("sandbox", "")) if res.permissions else ""
-    violation = _sandbox_exceeds(sandbox_used, approved_sandbox)
+    # 传完整 permission snapshot（mechanism-aware 判据），不再只看 sandbox 字符串。
+    snapshot = res.permissions if isinstance(res.permissions, dict) else {}
+    violation = _sandbox_exceeds(snapshot, approved_sandbox)
     return {
         "ran": res.status != "missing",
         "status": res.status,
@@ -491,15 +492,71 @@ def _mounted_sandbox(repo: Path, run_id: str, plugin_id: str) -> tuple[str, bool
 
 _SANDBOX_RANK = {"read-only": 0, "workspace-write": 1, "danger-full-access": 2}
 
+# read-only 安全工具 allowlist（§2.1，大小写敏感）。子集判定，非黑名单。
+_READONLY_TOOL_ALLOWLIST = {
+    "claude": frozenset({"Read", "Grep", "Glob", "WebFetch"}),
+    "pi": frozenset({"read", "grep", "find", "ls"}),
+}
 
-def _sandbox_exceeds(used: str, approved: str) -> bool:
-    """I: 未知 sandbox 值保守判违规——不认识的等级不能当成"没超"放过。
-    used 为空（runner 没报）也保守视为违规（缺 permission snapshot）。"""
-    if not used:
+
+def _actual_sandbox_from_snapshot(snap: dict[str, Any]) -> str:
+    """按机制从 permission snapshot 求 runner 实际兑现的归一化 sandbox 等级。
+
+    四家机制不可通约（runner-readonly-contract.md §3.2），统一归一成 _SANDBOX_RANK
+    的等级再比偏序。无证据/空集一律 fail-closed 成 danger-full-access（最宽）。
+    """
+    mechanism = snap.get("readonly_mechanism")
+    runner = snap.get("runner", "")
+
+    if mechanism == "sandbox-rank":  # codex
+        used = str(snap.get("sandbox", ""))
+        return used if used in _SANDBOX_RANK else "danger-full-access"
+
+    if mechanism == "sandbox-flag":  # agy：--sandbox=workspace-write，缺=full-access
+        argv = snap.get("enforced_argv") or []
+        return "workspace-write" if "--sandbox" in argv else "danger-full-access"
+
+    if mechanism == "tool-allowlist":  # claude / pi
+        # RC1：空集/无工具 = scheduler 没注入限制 = 全权限 → fail-closed。
+        tools = snap.get("actual_tools")
+        if not tools:
+            return "danger-full-access"
+        allow = _READONLY_TOOL_ALLOWLIST.get(runner, frozenset())
+        if set(tools) - allow:
+            # 含 allowlist 外工具（写工具/未知/MCP）→ 按最宽定级。
+            return "danger-full-access"
+        # claude 的真正 enforcer 是 plan mode；白名单不硬裁，必须验 plan 在场（§7）。
+        if runner == "claude":
+            argv = snap.get("enforced_argv") or []
+            if "plan" not in argv:
+                return "danger-full-access"
+        # readonly_enforced 缺证据（unknown/None）→ 不能算兑现 → fail-closed。
+        if snap.get("readonly_requested") and not snap.get("readonly_enforced"):
+            return "danger-full-access"
+        return "read-only"
+
+    # 未知机制 → fail-closed。
+    return "danger-full-access"
+
+
+def _sandbox_exceeds(snapshot: dict[str, Any] | str, approved: str) -> bool:
+    """统一偏序越权判定（RC2）：actual 实际权限是否超出 approved，对所有 approved 等级生效。
+
+    snapshot 是 mechanism-aware permission snapshot（_permission_snapshot 产出）。
+    向后兼容：传字符串时按旧 sandbox-rank 语义处理（codex 路径）。
+    缺证据/未知等级一律 fail-closed 判违规。
+    """
+    if approved not in _SANDBOX_RANK:
         return True
-    if used not in _SANDBOX_RANK or approved not in _SANDBOX_RANK:
+    if isinstance(snapshot, str):
+        used = snapshot
+        if not used or used not in _SANDBOX_RANK:
+            return True
+        return _SANDBOX_RANK[used] > _SANDBOX_RANK[approved]
+    if not isinstance(snapshot, dict) or not snapshot:
         return True
-    return _SANDBOX_RANK[used] > _SANDBOX_RANK[approved]
+    actual = _actual_sandbox_from_snapshot(snapshot)
+    return _SANDBOX_RANK[actual] > _SANDBOX_RANK[approved]
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)

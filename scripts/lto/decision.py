@@ -32,7 +32,7 @@ from typing import Any
 from lto import state as st
 from lto import artifacts as af
 from lto.agent_job import AgentJob, AgentResult, Budget, Pattern
-from lto.auditors import _pick_auditors, parse_findings_text
+from lto.auditors import _pick_auditors, parse_findings_text, readonly_intent_policy
 from lto.decision_brief import (
     build_decision_brief_v2,
     build_budget_exhausted_brief,
@@ -220,6 +220,7 @@ def _run_direction_track(
             job_id=f"decision-dir-{auditor}",
             prompt_ref=str(brief_path),
             runner=auditor,
+            permission_policy=readonly_intent_policy(auditor),
             output_schema=DIRECTION_OUTPUT_SCHEMA,
             budget=Budget(timeout_sec=300),
             parent_pattern=Pattern.ADVERSARIAL.value,
@@ -528,6 +529,7 @@ def _run_review_track(
             job_id=f"decision-rev-{auditor}",
             prompt_ref=str(brief_path),
             runner=auditor,
+            permission_policy=readonly_intent_policy(auditor),
             output_schema=REVIEW_OUTPUT_SCHEMA,
             budget=Budget(timeout_sec=300),
             parent_pattern=Pattern.ADVERSARIAL.value,
