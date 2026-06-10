@@ -1,0 +1,29 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["claim_id", "verdict", "confidence", "evidence", "reasoning"],
+    "properties": {
+      "claim_id": {"type": "string"},
+      "verdict": {"enum": ["verified", "refuted", "not_found"]},
+      "confidence": {"enum": ["high", "moderate", "low", "unknown"]},
+      "evidence": {"type": "string", "description": "path:line reference or deterministic command output; must not contain private paths"},
+      "reasoning": {"type": "string"},
+      "recommendation": {"type": "string"},
+      "gaps": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["claim_id", "gap_type", "description", "confidence"],
+          "properties": {
+            "claim_id": {"type": "string"},
+            "gap_type": {"enum": ["unverified", "unsupported_evidence", "missing_angle"]},
+            "description": {"type": "string"},
+            "confidence": {"enum": ["high", "moderate", "low", "unknown"]}
+          }
+        }
+      },
+      "all_claims_addressed": {"type": "boolean"}
+    }
+  }
+}

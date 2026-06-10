@@ -1,0 +1,34 @@
+{
+  "id": "migration-refactor",
+  "version": "0.1.0",
+  "stage": "experimental",
+  "kind": "path-plugin",
+  "description": "Data-only playbook for batched migration/refactor tasks with per-batch regression gates. Covers minimal-exemplar-first, worktree isolation, behavior-preservation enforcement, and artifact-evidenced progress.",
+  "source_notes": [
+    "sources/internal-migration-practice.json",
+    "sources/internal-migration-practice.md"
+  ],
+  "provides": {
+    "paths": [
+      "paths/migration-batch-loop.json"
+    ],
+    "profiles": [
+      "profiles/codex-migration-diff-audit-v1.json",
+      "profiles/claude-semantic-equivalence-v1.json"
+    ],
+    "evals": [
+      "eval/migration-audit-cases.json"
+    ]
+  },
+  "security": {
+    "executable_code": false,
+    "max_sandbox": "read-only",
+    "env_allowlist": [],
+    "requires_human_approval_for": [
+      "workspace-write",
+      "danger-full-access",
+      "network"
+    ]
+  },
+  "default_enabled": false
+}

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Three preset scenario plugins (playbook data packs, not workflows)
+
+- **Summary**: Adds three data-only plugins distilled from real usage scenarios: `adversarial-audit` (heterogeneous refute-first audit squads; union-merge findings without voting, vote only on direction), `claim-verify-research` (claim → falsifiable hypothesis → frozen evidence → heterogeneous refute → explicit-confidence verdict), and `migration-refactor` (minimal exemplar first, batched migration with per-batch regression gates in isolated worktrees). All three follow plugin-boundary v0: `kind: path-plugin`, `stage: experimental`, read-only profiles, empty env allowlist, eval packs with the two mandatory safety metrics and `safety_regressions_allowed: 0`. They are **playbook priors for the host agent, not preset workflows** — host stays planner; nothing routes or promotes automatically.
+- **Verified**: `lto plugin list` all OK; `plugin validate` + static `plugin eval` green for each; `scripts/test_plugins.py`, `scripts/test_plugin_eval_run.py` (18 passed), and `lto self-test` all pass; real `plugin eval-run` A/B evidence recorded per plugin (see samples or run artifacts).
+
 ### Per-dispatch token + elapsed feedback (no waiting for closeout)
 
 - **Summary**: Each spawned subtask now reports its token + elapsed cost **the moment it finishes**, instead of only surfacing in `recap`/`closeout` aggregates. `spawn_agents` prints a per-job line to stderr (`⤷ pi/deepseek-v4-pro · ok · 40.7k tokens · 32s`) and a batch total when more than one job runs. Unmetered runners (agy) are honestly labeled, not faked as 0.

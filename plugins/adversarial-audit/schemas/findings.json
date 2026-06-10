@@ -1,0 +1,21 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["severity", "claim", "evidence", "recommendation"],
+    "properties": {
+      "severity": {"enum": ["critical", "high", "medium", "low"]},
+      "claim": {"type": "string"},
+      "evidence": {
+        "type": "string",
+        "description": "Must be path:line or verbatim command output. Free-text LLM assertion does not qualify."
+      },
+      "recommendation": {"type": "string"},
+      "confidence": {"enum": ["high", "medium", "low"]},
+      "unsupported": {
+        "type": "boolean",
+        "description": "Set true when evidence does not meet path:line or command-output standard. Auto-classified low severity."
+      }
+    }
+  }
+}

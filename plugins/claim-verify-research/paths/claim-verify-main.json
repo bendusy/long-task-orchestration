@@ -1,0 +1,62 @@
+{
+  "id": "claim-verify-main-v1",
+  "intent": "claim-verify",
+  "description": "End-to-end claim verification: intake unverified claims, decompose into falsifiable hypotheses, freeze evidence, run heterogeneous refutation, produce explicit-confidence verdicts.",
+  "steps": [
+    {
+      "step": 1,
+      "label": "intake",
+      "primitive": "runner",
+      "profile": "claude-claim-decomposer-v1",
+      "description": "Receive raw external claims. Re-write each as a falsifiable hypothesis with measurable metrics. Mark all claims status=unverified. No verdict allowed at this step.",
+      "expected_artifact": "hypotheses.json"
+    },
+    {
+      "step": 2,
+      "label": "evidence-freeze",
+      "primitive": "audit",
+      "description": "Collect one-hand evidence for each hypothesis: path:line references or deterministic command outputs only. Copy evidence to artifacts/, hash it, redact private paths. LLM agreement is not evidence.",
+      "expected_artifact": "frozen-evidence.json"
+    },
+    {
+      "step": 3,
+      "label": "fan-out-search",
+      "primitive": "runner",
+      "description": "For research-type claims: dispatch parallel search angles (by source type, by entity, by time window). Each angle produces its own evidence batch. Merge before proceeding.",
+      "expected_artifact": "search-fanout-evidence.json",
+      "parallelizable": true
+    },
+    {
+      "step": 4,
+      "label": "heterogeneous-refute",
+      "primitive": "audit",
+      "variant": "adversarial",
+      "profile": "codex-evidence-refuter-v1",
+      "description": "Dispatch heterogeneous runner(s) to attempt refutation of each hypothesis using frozen evidence. Default verdict: refuted if uncertain. Only surviving claims proceed to verified.",
+      "expected_artifact": "refutation-findings.json"
+    },
+    {
+      "step": 5,
+      "label": "completeness-critic",
+      "primitive": "runner",
+      "profile": "pi-completeness-critic-v1",
+      "description": "Review all hypotheses and verdicts. Enumerate any claim not yet verified or refuted. Flag gaps and missing evidence. Output must list at least one gap if any hypothesis is still unverified.",
+      "expected_artifact": "completeness-report.json"
+    },
+    {
+      "step": 6,
+      "label": "verdict",
+      "primitive": "judge",
+      "description": "Aggregate refutation findings and completeness report into final verdicts. Each verdict must: reference frozen evidence, carry explicit confidence (high/moderate/low/unknown), and state 'not found' rather than fabricating missing facts.",
+      "expected_artifact": "verdict.json"
+    }
+  ],
+  "stop_conditions": [
+    "every claim has a verdict with explicit confidence",
+    "every verdict references at least one frozen evidence artifact",
+    "no unverified claim appears in the conclusion section",
+    "completeness-critic pass has run and its gaps are resolved or explicitly deferred",
+    "no private paths in public artifacts",
+    "no permission escalation beyond read-only"
+  ]
+}

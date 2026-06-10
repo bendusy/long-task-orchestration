@@ -1,0 +1,41 @@
+{
+  "id": "note.internal.migration-practice.2026-06-10",
+  "title": "Batched Migration/Refactor with Regression Gates — Internal Practice",
+  "url": "internal:agent-skills/lto-release/practices/migration-refactor-2026",
+  "captured_at": "2026-06-10",
+  "claims": [
+    {
+      "id": "c1",
+      "text": "Templating the first minimal exemplar as a precedent commit reduces rework rate in subsequent batches because all batch agents share a concrete verified reference.",
+      "status": "unverified"
+    },
+    {
+      "id": "c2",
+      "text": "A per-batch regression gate (compile + tests + lint + artifact diff) catches cross-batch cascading breakage before it accumulates, making total repair cost lower than detecting at the end.",
+      "status": "unverified"
+    },
+    {
+      "id": "c3",
+      "text": "Worktree isolation per batch prevents in-flight batches from interfering with each other and makes rollback atomic.",
+      "status": "unverified"
+    },
+    {
+      "id": "c4",
+      "text": "Forbidding test-assertion weakening during migration is a reliable proxy for behavior preservation when full semantic equivalence checking is impractical.",
+      "status": "unverified"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h1",
+      "text": "Minimal-exemplar-first + precedent commit reduces per-batch agent error rate vs. diving straight into batch execution.",
+      "metrics": ["regression_gate_failures_per_batch", "scope_creep_incidents"]
+    },
+    {
+      "id": "h2",
+      "text": "Per-batch regression gate catches at least one cascading breakage that would have been missed by end-of-migration testing.",
+      "metrics": ["batches_stopped_by_gate", "regressions_found_late"]
+    }
+  ],
+  "lto_status": "experimental; not a core guarantee"
+}

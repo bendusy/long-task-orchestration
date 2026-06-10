@@ -1,0 +1,46 @@
+{
+  "id": "note.internal.claim-verify-practice.2026-06-10",
+  "title": "Internal: Claim Verification Practice in LTO Audit Runs",
+  "url": "internal:lto-release/long-task-orchestration/audit-ledger-observations-2026",
+  "captured_at": "2026-06-10",
+  "claims": [
+    {
+      "id": "c1",
+      "text": "Refute-first heterogeneous judgment produces lower false-positive verdicts than confirm-first judgment on the same claim set.",
+      "status": "unverified"
+    },
+    {
+      "id": "c2",
+      "text": "A completeness critic pass finds at least one unverified claim that the primary verifier missed.",
+      "status": "unverified"
+    },
+    {
+      "id": "c3",
+      "text": "Evidence that cannot be reproduced from a frozen path:line reference or deterministic command output should not be used to upgrade a claim from unverified to verified.",
+      "status": "unverified"
+    },
+    {
+      "id": "c4",
+      "text": "Fan-out across multiple orthogonal search angles (by source type, entity, and time window) surfaces more evidence items than single-angle search.",
+      "status": "unverified"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h1",
+      "text": "Refute-first judgment: when auditors default to 'refuted if uncertain', surviving claims have higher precision.",
+      "metrics": ["false_positive_rate", "verdict_confidence_distribution"]
+    },
+    {
+      "id": "h2",
+      "text": "Completeness critic finds ≥1 missed unverified claim per 5-claim batch on average.",
+      "metrics": ["missed_claim_rate", "completeness_critic_yield"]
+    },
+    {
+      "id": "h3",
+      "text": "Evidence freeze (copy + hash + redact private paths) enables deterministic re-verification across runs.",
+      "metrics": ["private_path_leaks", "evidence_reproducibility_rate"]
+    }
+  ],
+  "lto_status": "experimental; not a core guarantee"
+}

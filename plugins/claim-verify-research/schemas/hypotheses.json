@@ -1,0 +1,15 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["claim_id", "original_text", "hypothesis", "metrics", "status"],
+    "properties": {
+      "claim_id": {"type": "string"},
+      "original_text": {"type": "string"},
+      "hypothesis": {"type": "string"},
+      "metrics": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+      "status": {"enum": ["unverified", "unfalsifiable"]},
+      "falsifiability_note": {"type": "string"}
+    }
+  }
+}

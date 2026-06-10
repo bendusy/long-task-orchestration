@@ -1,0 +1,11 @@
+{
+  "id": "codex-migration-diff-audit-v1",
+  "runner": "codex",
+  "family": "openai",
+  "intent": "audit",
+  "prompt_suffix_ref": "prompts/codex-migration-diff-audit.md",
+  "output_schema_ref": "schemas/findings.json",
+  "permission": {"sandbox": "read-only"},
+  "budget": {"timeout_sec": 300},
+  "failure": {"timeout_exit_codes": [124], "empty_reply_is_failure": true}
+}

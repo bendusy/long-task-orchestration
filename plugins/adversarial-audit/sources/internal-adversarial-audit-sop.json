@@ -1,0 +1,68 @@
+{
+  "id": "note.internal.adversarial-audit-sop.2026-06-10",
+  "title": "Heterogeneous Adversarial Audit SOP — Internal Operational Distillation",
+  "url": "internal:am://agent-skills/references/adversarial-audit-sop",
+  "captured_at": "2026-06-10",
+  "claims": [
+    {
+      "id": "c1",
+      "text": "Union-merge of audit findings has lower blocker miss-rate than majority-vote merge, because voting can eliminate real blockers that only one auditor caught.",
+      "status": "unverified"
+    },
+    {
+      "id": "c2",
+      "text": "Refute-first prompting (assume the work is wrong, try to prove it) captures more true blockers per run than neutral review prompting.",
+      "status": "unverified"
+    },
+    {
+      "id": "c3",
+      "text": "Requiring path:line or command-output evidence per finding reduces LLM hallucinated blockers compared to free-text evidence.",
+      "status": "unverified"
+    },
+    {
+      "id": "c4",
+      "text": "Convergence is reached reliably when HIGH+CRITICAL count is monotonically non-increasing across rounds and two consecutive rounds produce zero new blockers.",
+      "status": "unverified"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h1",
+      "text": "Union-merge produces fewer missed HIGH/CRITICAL blockers per run than majority-vote merge on the same artifact set.",
+      "metrics": ["blocker_quality", "false_negative_rate"]
+    },
+    {
+      "id": "h2",
+      "text": "Refute-first prompt suffix increases blocker capture rate without increasing false-positive rate relative to neutral audit prompt.",
+      "metrics": ["blocker_quality", "false_positive_rate", "parse_rate"]
+    },
+    {
+      "id": "h3",
+      "text": "Mandating path:line evidence in the prompt reduces unsupported_claim_rate in findings JSON.",
+      "metrics": ["unsupported_claim_rate", "parse_rate"]
+    }
+  ],
+  "anti_patterns": [
+    {
+      "id": "ap1",
+      "name": "same-family self-audit",
+      "description": "Using the same model family for both producer and auditor invalidates the audit. Heterogeneous runtime pairing is mandatory."
+    },
+    {
+      "id": "ap2",
+      "name": "vote-to-merge-findings",
+      "description": "Merging audit findings by majority vote silently drops real blockers. Findings must be union-merged; host decides per-item."
+    },
+    {
+      "id": "ap3",
+      "name": "historical-contrast hallucination",
+      "description": "LLM auditors shown before/after diffs re-hallucinate the old state as the current state and report false blockers. Prompts must describe the CURRENT state only; historical context must be stripped before auditor sees artifact."
+    },
+    {
+      "id": "ap4",
+      "name": "rubber-stamp PASS",
+      "description": "An auditor that returns no findings is not evidence of quality; it is evidence of a weak audit posture. Empty findings should trigger a re-run with stronger refute-first prompt."
+    }
+  ],
+  "lto_status": "experimental; not a core guarantee"
+}

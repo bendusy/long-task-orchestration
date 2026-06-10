@@ -1,0 +1,35 @@
+{
+  "id": "claim-verify-research",
+  "version": "0.1.0",
+  "stage": "experimental",
+  "kind": "path-plugin",
+  "description": "Playbook for claim verification and deep research: intake → falsifiable hypothesis → evidence freeze → heterogeneous refutation → explicit-confidence verdict.",
+  "source_notes": [
+    "sources/internal-claim-verify-practice.json",
+    "sources/internal-claim-verify-practice.md"
+  ],
+  "provides": {
+    "paths": [
+      "paths/claim-verify-main.json"
+    ],
+    "profiles": [
+      "profiles/claude-claim-decomposer-v1.json",
+      "profiles/codex-evidence-refuter-v1.json",
+      "profiles/pi-completeness-critic-v1.json"
+    ],
+    "evals": [
+      "eval/claim-verify-cases.json"
+    ]
+  },
+  "security": {
+    "executable_code": false,
+    "max_sandbox": "read-only",
+    "env_allowlist": [],
+    "requires_human_approval_for": [
+      "workspace-write",
+      "danger-full-access",
+      "network"
+    ]
+  },
+  "default_enabled": false
+}

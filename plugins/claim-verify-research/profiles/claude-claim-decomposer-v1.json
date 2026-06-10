@@ -1,0 +1,11 @@
+{
+  "id": "claude-claim-decomposer-v1",
+  "runner": "claude",
+  "family": "anthropic",
+  "intent": "claim-decompose",
+  "prompt_suffix_ref": "prompts/claude-claim-decomposer.md",
+  "output_schema_ref": "schemas/hypotheses.json",
+  "permission": {"sandbox": "read-only"},
+  "budget": {"timeout_sec": 180},
+  "failure": {"timeout_exit_codes": [124], "empty_reply_is_failure": true}
+}

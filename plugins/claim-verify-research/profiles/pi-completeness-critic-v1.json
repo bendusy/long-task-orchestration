@@ -1,0 +1,11 @@
+{
+  "id": "pi-completeness-critic-v1",
+  "runner": "pi",
+  "family": "perplexity",
+  "intent": "completeness-critic",
+  "prompt_suffix_ref": "prompts/pi-completeness-critic.md",
+  "output_schema_ref": "schemas/verdict.json",
+  "permission": {"sandbox": "read-only"},
+  "budget": {"timeout_sec": 360},
+  "failure": {"timeout_exit_codes": [124], "empty_reply_is_failure": true}
+}

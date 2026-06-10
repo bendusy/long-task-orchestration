@@ -1,0 +1,35 @@
+{
+  "id": "adversarial-audit",
+  "version": "0.1.0",
+  "stage": "experimental",
+  "kind": "path-plugin",
+  "description": "Heterogeneous adversarial audit playbook: fan-out refute-first audit squad, union-merge findings, blocker-register convergence loop.",
+  "source_notes": [
+    "sources/internal-adversarial-audit-sop.json",
+    "sources/internal-adversarial-audit-sop.md"
+  ],
+  "provides": {
+    "paths": [
+      "paths/adversarial-fanout-convergence.json"
+    ],
+    "profiles": [
+      "profiles/codex-refuter-v1.json",
+      "profiles/pi-refuter-v1.json",
+      "profiles/agy-refuter-v1.json"
+    ],
+    "evals": [
+      "eval/adversarial-audit-cases.json"
+    ]
+  },
+  "security": {
+    "executable_code": false,
+    "max_sandbox": "read-only",
+    "env_allowlist": [],
+    "requires_human_approval_for": [
+      "workspace-write",
+      "danger-full-access",
+      "network"
+    ]
+  },
+  "default_enabled": false
+}

@@ -1,0 +1,73 @@
+{
+  "id": "migration-batch-loop-v1",
+  "intent": "migration",
+  "description": "Batched migration/refactor path: discover call sites, run minimal exemplar end-to-end, then iterate batches each in an isolated worktree with a regression gate before merging. Behavior preservation is enforced throughout.",
+  "steps": [
+    {
+      "primitive": "runner",
+      "label": "discover",
+      "description": "Enumerate all in-scope migration points (call sites, files, patterns). Produce a ranked list artifact. No edits.",
+      "expected_artifact": "migration-discovery.json"
+    },
+    {
+      "primitive": "runner",
+      "label": "minimal-exemplar",
+      "description": "Pick the smallest representative migration point. Migrate it in an isolated worktree, run full regression suite, commit as precedent. This commit is the reference template for all subsequent batches.",
+      "expected_artifact": "exemplar-diff.md"
+    },
+    {
+      "primitive": "audit",
+      "label": "exemplar-gate",
+      "description": "Audit the exemplar diff for behavior changes, weakened test assertions, and scope creep. Block if any blocker-severity finding exists.",
+      "profile": "codex-migration-diff-audit-v1",
+      "expected_artifact": "exemplar-audit.json"
+    },
+    {
+      "primitive": "worktree_exec",
+      "label": "batch-loop",
+      "description": "For each batch: create isolated worktree, execute migration for that batch's call sites only, run regression (compile + tests + lint + artifact diff), write regression-output artifact and diff-summary artifact. Batch is complete only when regression exits 0 and both artifacts are written. On any regression failure: stop, repair or rollback this batch. Do not proceed to next batch while any batch is red.",
+      "expected_artifact": "batch-{n}-regression.txt"
+    },
+    {
+      "primitive": "audit",
+      "label": "batch-diff-audit",
+      "description": "After each batch passes regression: audit the batch diff for behavioral changes, unmigrated call sites, weakened/deleted test assertions, and out-of-scope edits. Run both profiles. Block on any high/critical finding.",
+      "profile": "codex-migration-diff-audit-v1",
+      "expected_artifact": "batch-{n}-audit.json"
+    },
+    {
+      "primitive": "judge",
+      "label": "semantic-equivalence-spot-check",
+      "description": "For batches touching public API or core logic: run claude-semantic-equivalence-v1 profile. Judge must read both before and after versions of key files directly; must not infer from diff alone.",
+      "profile": "claude-semantic-equivalence-v1",
+      "expected_artifact": "batch-{n}-semantic-check.json"
+    },
+    {
+      "primitive": "runner",
+      "label": "merge",
+      "description": "Merge each passing batch worktree branch into integration branch. On conflict: stop immediately, do not cascade to remaining batches. git push always requires human confirmation.",
+      "expected_artifact": "merge-log.md"
+    },
+    {
+      "primitive": "runner",
+      "label": "closeout",
+      "description": "Run full regression on integration branch. Write final migration summary: batches completed, call sites migrated, any residual findings, artifact evidence index.",
+      "expected_artifact": "migration-closeout.md"
+    }
+  ],
+  "stop_conditions": [
+    "any batch regression gate fails: stop that batch, repair or rollback before proceeding",
+    "any high/critical finding from diff audit: block merge until resolved",
+    "merge conflict detected: stop immediately, do not cascade to remaining batches",
+    "git push always requires human confirmation",
+    "test assertion weakened or deleted: treat as migration error, fix migration not the test",
+    "out-of-scope file in batch diff: flag as scope creep, revert that edit",
+    "progress evidence required: regression command output + diff summary artifact must exist before batch is marked complete",
+    "agent self-report alone is not accepted as completion evidence"
+  ],
+  "notes": [
+    "worktree_exec handles write isolation; plugin profiles only audit the resulting diffs in read-only mode",
+    "plugin cannot grant write permission; PermissionPolicy on the host run controls execution sandbox",
+    "exemplar commit is the reference template; subsequent batch agents should receive it as context"
+  ]
+}

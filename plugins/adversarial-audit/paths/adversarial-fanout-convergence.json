@@ -1,0 +1,57 @@
+{
+  "id": "adversarial-fanout-convergence-v1",
+  "intent": "audit",
+  "description": "Fan-out heterogeneous refute-first audit squad, union-merge findings into blocker register, iterate until HIGH+CRITICAL count converges.",
+  "steps": [
+    {
+      "step": 1,
+      "label": "fanout-audit",
+      "primitive": "runner",
+      "parallelizable": true,
+      "profiles": [
+        "codex-refuter-v1",
+        "pi-refuter-v1",
+        "agy-refuter-v1"
+      ],
+      "note": "Dispatch all three profiles in parallel against the same artifact. Each runner must be a different model family from the artifact producer.",
+      "expected_artifact": "findings-round-N.json"
+    },
+    {
+      "step": 2,
+      "label": "union-merge",
+      "primitive": "audit",
+      "action": "union-merge findings from all runners into blocker-register-round-N.json",
+      "note": "Do NOT deduplicate or vote. Every finding from every runner enters the register. Identical claims may appear multiple times; that is intentional signal.",
+      "expected_artifact": "blocker-register-round-N.json"
+    },
+    {
+      "step": 3,
+      "label": "host-triage",
+      "primitive": "judge",
+      "action": "host reads each blocker, verifies cited path:line evidence, classifies adopt/reject/needs-info",
+      "note": "LLM claim alone is not evidence. Host must open and read the cited file location. Rejected blockers require a falsification note.",
+      "expected_artifact": "triage-round-N.json"
+    },
+    {
+      "step": 4,
+      "label": "convergence-check",
+      "primitive": "next",
+      "check": "HIGH+CRITICAL count in triage <= previous round AND zero new HIGH/CRITICAL blockers in this round",
+      "on_converged": "proceed to closeout",
+      "on_not_converged": "apply adopted fixes, increment N, return to step 1",
+      "note": "Two consecutive clean rounds required before declaring convergence. If count is non-monotonic (rebounds), pause and re-examine audit scope or artifact."
+    }
+  ],
+  "stop_conditions": [
+    "HIGH+CRITICAL blocker count monotonically non-increasing across all rounds",
+    "two consecutive rounds with zero new HIGH/CRITICAL blockers",
+    "every adopted/rejected blocker has first-hand evidence (path:line or command output)",
+    "no permission escalation beyond read-only"
+  ],
+  "anti_patterns": [
+    "ap1:same-family self-audit — auditor and producer share model family",
+    "ap2:vote-to-merge-findings — majority vote used instead of union merge",
+    "ap3:historical-contrast hallucination — before/after context shown to auditor",
+    "ap4:rubber-stamp PASS — empty findings accepted without proof-of-read"
+  ]
+}
