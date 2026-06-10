@@ -21,6 +21,8 @@ __pycache__/
 .DS_Store
 audit-report-*.md
 cache/
+.fastembed_cache/
+.cache/
 dist/
 build/
 *.egg-info/

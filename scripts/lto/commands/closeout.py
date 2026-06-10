@@ -65,24 +65,44 @@ def run(args: argparse.Namespace) -> int:
     # Gate: dirty worktree
     if not gs.is_git_repo(repo):
         raise SystemExit("closeout requires a git worktree")
-    if gs.git_dirty(repo) and not args.allow_dirty:
+    # Tracked changes (modified/added/deleted version-controlled files) are the
+    # real "don't close out with uncommitted code" signal → still blocks.
+    # Untracked files (new files git isn't tracking — often runtime caches like
+    # .fastembed_cache/, build droppings) only warn, since blocking closeout on
+    # a stray cache dir is the over-strict behavior pi hit in practice. Anything
+    # truly committable should be gitignored (porcelain already honors that) or
+    # the user can re-run after `git add`. --allow-dirty still bypasses both.
+    breakdown = gs.git_dirty_breakdown(repo)
+    if breakdown["tracked"] and not args.allow_dirty:
         iv.append(
             repo, run_id,
             type="intervention_candidate",
             category="dirty_closeout_blocked",
-            reason="closeout blocked by dirty worktree outside .lto",
+            reason="closeout blocked by tracked uncommitted changes outside .lto",
             source="lto closeout",
             meaningful=False,
             avoidable=True,
             preventable=True,
             actor="gate",
             gate="closeout",
-            details={"suggested_action": "commit_or_stash_then_closeout_no_changelog"},
+            details={
+                "suggested_action": "commit_or_stash_then_closeout_no_changelog",
+                "tracked_count": len(breakdown["tracked"]),
+            },
         )
+        sample = ", ".join(breakdown["tracked"][:5])
         raise SystemExit(
-            "closeout refused: uncommitted changes outside .lto. "
+            f"closeout refused: {len(breakdown['tracked'])} tracked uncommitted "
+            f"change(s) outside .lto (e.g. {sample}). "
             "Commit or stash code changes first; use --no-changelog after commit "
             "for admin closeout without new tracked dirt."
+        )
+    if breakdown["untracked"] and not args.allow_dirty:
+        sample = ", ".join(breakdown["untracked"][:5])
+        print(
+            f"⚠ closeout: {len(breakdown['untracked'])} untracked file(s) present "
+            f"(e.g. {sample}) — not blocking. If any are real artifacts, gitignore "
+            "or commit them; runtime caches can be ignored."
         )
 
     # Gate: already closed

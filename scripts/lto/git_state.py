@@ -29,6 +29,39 @@ def git_dirty(repo: Path, exclude_lto: bool = True) -> bool:
     return bool(run(args, repo))
 
 
+def git_dirty_breakdown(repo: Path, exclude_lto: bool = True) -> dict[str, list[str]]:
+    """Split dirty state into tracked changes vs untracked files.
+
+    `git status --porcelain` already honors .gitignore (ignored files never
+    appear), so a project that gitignores its runtime caches won't surface
+    them here at all.  For caches that aren't gitignored, the caller can still
+    distinguish them: porcelain prefixes untracked entries with '?? '.
+
+    Returns {"tracked": [paths...], "untracked": [paths...]}.  `tracked` means
+    staged or unstaged modifications/additions/deletions to version-controlled
+    files — the genuinely "don't close out with uncommitted code" signal.
+    `untracked` is new files git isn't tracking (often build/runtime droppings).
+    """
+    args = ["git", "status", "--porcelain", "--", "."]
+    if exclude_lto:
+        args.append(":(exclude).lto")
+    out = run(args, repo)
+    tracked: list[str] = []
+    untracked: list[str] = []
+    for line in out.splitlines():
+        if not line:
+            continue
+        # porcelain v1: 2-char status code, a space, then the path.
+        code, _, path = line.partition(" ")
+        # untracked is exactly "??"; everything else is a tracked change.
+        if line.startswith("??"):
+            # path after "?? "
+            untracked.append(line[3:])
+        else:
+            tracked.append(path or line[3:])
+    return {"tracked": tracked, "untracked": untracked}
+
+
 def git_head(repo: Path) -> str:
     return git_value(repo, "rev-parse", "HEAD") or "unknown"
 

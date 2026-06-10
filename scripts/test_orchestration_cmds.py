@@ -240,6 +240,89 @@ def test_closeout_force_intervention(repo: Path) -> None:
        f"closeout_force: event carries actor/gate facts (got actor={ev.get('actor')}, gate={ev.get('gate')})")
 
 
+def test_closeout_untracked_cache_not_blocked(repo: Path) -> None:
+    """Untracked files (e.g. runtime caches) warn but don't block closeout;
+    tracked changes still block. Regression for pi's .fastembed_cache/ report."""
+    lto = _lto_factory(repo)
+    r = lto("start", "--goal", "untracked cache closeout", "--host", "codex", "--force")
+    ok(r.returncode == 0, f"untracked_cache: start rc=0 (got {r.returncode})")
+
+    # Pure untracked dropping (simulates .fastembed_cache/ that isn't gitignored
+    # in the user's project) → closeout must NOT block, only warn.
+    cache_dir = repo / ".fancy_runtime_cache"
+    cache_dir.mkdir(exist_ok=True)
+    (cache_dir / "blob.bin").write_text("cache\n", encoding="utf-8")
+    r = lto("closeout", "--summary", "done", "--next-action", "none", "--no-changelog")
+    ok(r.returncode == 0,
+       f"untracked_cache: untracked-only closeout rc=0 (got {r.returncode}; {r.stderr[:160]})")
+    ok("not blocking" in (r.stdout + r.stderr),
+       "untracked_cache: warns about untracked files without blocking")
+
+    # Now a tracked modification → must still block.
+    r = lto("start", "--goal", "tracked still blocks", "--host", "codex", "--force")
+    ok(r.returncode == 0, f"untracked_cache: 2nd start rc=0 (got {r.returncode})")
+    (repo / "README.md").write_text("tracked dirty\n", encoding="utf-8")
+    r = lto("closeout", "--summary", "x", "--no-changelog")
+    ok(r.returncode != 0, "untracked_cache: tracked change still blocks closeout")
+    ok("tracked uncommitted change" in (r.stderr + r.stdout),
+       "untracked_cache: tracked-block message is specific")
+    subprocess.run(["git", "checkout", "--", "README.md"], cwd=repo, capture_output=True)
+    import shutil
+    shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+def test_task_update_and_phase(repo: Path) -> None:
+    """task-update records facts without spawning; phase advances current_phase.
+    Regression for pi's report: no way to mark done without `runner --command
+    true`, and run stuck in intake with no phase-set command."""
+    lto = _lto_factory(repo)
+    r = lto("start", "--goal", "task-update + phase e2e", "--host", "codex", "--force")
+    ok(r.returncode == 0, f"task_update: start rc=0 (got {r.returncode})")
+    run_id = r.stdout.strip().split("/")[-1]
+    r = lto("task-add", "--task-id", "T1", "--title", "research step", "--phase", "intake")
+    ok(r.returncode == 0, f"task_update: task-add rc=0 (got {r.returncode})")
+
+    # task-update: status + manual note + touched files, no subprocess
+    r = lto("task-update", "--task-id", "T1", "--status", "done",
+            "--note", "manually verified", "--touch", "docs/a.md", "--touch", "docs/b.md")
+    ok(r.returncode == 0, f"task_update: update rc=0 (got {r.returncode}; {r.stderr[:120]})")
+    state = json.loads((repo / ".lto" / run_id / "state.json").read_text(encoding="utf-8"))
+    t = next(t for t in state["tasks"] if t["id"] == "T1")
+    ok(t["status"] == "done", f"task_update: status set to done (got {t['status']})")
+    ok(any(e.get("kind") == "manual" and "manually verified" in e.get("summary", "")
+           for e in t["evidence"]), "task_update: manual evidence note recorded")
+    ok("docs/a.md" in t["touched_files"] and "docs/b.md" in t["touched_files"],
+       "task_update: touched files recorded")
+
+    # no-op guard
+    r = lto("task-update", "--task-id", "T1")
+    ok(r.returncode != 0 and "no-op" in (r.stderr + r.stdout),
+       "task_update: empty update is a guarded no-op")
+    # invalid status rejected
+    r = lto("task-update", "--task-id", "T1", "--status", "finished")
+    ok(r.returncode != 0 and "invalid status" in (r.stderr + r.stdout),
+       "task_update: invalid status rejected")
+
+    # phase: report then advance
+    r = lto("phase")
+    ok(r.returncode == 0 and "current phase: intake" in r.stdout,
+       f"phase: reports current phase (got {r.stdout[:60]})")
+    r = lto("phase", "--set", "audit")
+    ok(r.returncode == 0 and "intake → audit" in r.stdout,
+       f"phase: advances current_phase (got {r.stdout[:60]}; {r.stderr[:120]})")
+    state = json.loads((repo / ".lto" / run_id / "state.json").read_text(encoding="utf-8"))
+    ok(state["current_phase"] == "audit", f"phase: state shows audit (got {state['current_phase']})")
+    ok(any(tr["to"] == "audit" for tr in state.get("phase_transitions", [])),
+       "phase: transition recorded in history")
+    r = lto("phase", "--set", "nonsense")
+    ok(r.returncode != 0 and "invalid phase" in (r.stderr + r.stdout),
+       "phase: invalid phase rejected")
+    # events emitted with the correct taxonomy (no UserWarning leaking through)
+    events = (repo / ".lto" / run_id / "events.jsonl").read_text(encoding="utf-8")
+    ok("task.status_changed" in events and "phase.changed" in events,
+       "phase/task_update: emit valid event types")
+
+
 def test_recap(repo: Path) -> None:
     """recap 基本路径：rc=0 + 六问输出齐全（给人看的回顾）。"""
     lto = _lto_factory(repo)
@@ -433,6 +516,10 @@ def main() -> int:
         test_next_cross_run_friction(_make_repo(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         test_next_cross_run_avoided_not_friction(_make_repo(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_closeout_untracked_cache_not_blocked(_make_repo(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_task_update_and_phase(_make_repo(Path(tmp)))
 
     if FAIL:
         print(f"\n{len(FAIL)} FAILURES", file=sys.stderr)
