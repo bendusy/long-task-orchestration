@@ -578,19 +578,41 @@ def test_memory(repo: Path) -> None:
            for rec in data.get("records", [])),
        "memory: workflow routing is schema-only placeholder")
 
-    r = lto("memory", "resume", "--project", repo.name, "--timeout", "0.1")
+    # Default sink (am-cli) with am absent must degrade to the local-first
+    # capsule, never error. Use a missing binary to force the degraded path
+    # deterministically (CI may or may not have am installed).
+    r = lto("memory", "resume", "--project", repo.name, "--am-bin", "am-nonexistent-ci")
     ok(r.returncode == 0, f"memory: resume degraded rc=0 (got {r.returncode})")
     ok("LTO MEMORY LOCAL CAPSULE" in r.stdout and "did not modify files" in r.stdout,
        "memory: resume prints local-first capsule")
-    ok("unavailable" in r.stderr and "not configured" in r.stderr and "local .lto" in r.stderr,
+    ok("unavailable" in r.stderr and "am CLI not found" in r.stderr and "local .lto" in r.stderr,
        f"memory: resume prints degraded warning (stderr={r.stderr.strip()[:160]})")
     ok("Projection Drift: state_hash=" in r.stdout,
        "memory: resume capsule includes projection drift hashes")
 
-    r = lto("memory", "publish")
-    ok(r.returncode != 0, "memory: publish without config/token fails clearly")
-    ok("optional memory sink" in (r.stderr + r.stdout) and "MEMORY_FLOW" in (r.stderr + r.stdout),
-       f"memory: publish error mentions MEMORY_FLOW config (got {(r.stderr + r.stdout)[:160]})")
+    # legacy-rest resume still degrades via the old not-configured path.
+    r = lto("memory", "resume", "--project", repo.name, "--sink", "legacy-rest", "--timeout", "0.1")
+    ok(r.returncode == 0, f"memory: legacy-rest resume degraded rc=0 (got {r.returncode})")
+    ok("not configured" in r.stderr,
+       f"memory: legacy-rest resume degraded warning (stderr={r.stderr.strip()[:120]})")
+
+    # Default sink is am-cli since am 0.7.0. With am absent (CI), it must fail
+    # clearly pointing at the am binary — and explicitly reassure that local
+    # .lto/ is still the source of truth (publish is optional).
+    r = lto("memory", "publish", "--am-bin", "am-nonexistent-ci")
+    ok(r.returncode != 0, "memory: am-cli publish without am binary fails clearly")
+    out = r.stderr + r.stdout
+    ok("am CLI not found" in out and "am-nonexistent-ci" in out,
+       f"memory: am-cli publish error names missing am binary (got {out[:160]})")
+    ok("local .lto" in out and "source of truth" in out,
+       "memory: am-cli publish error reassures local .lto is source of truth")
+
+    # legacy-rest sink remains a fallback and still requires MEMORY_FLOW config.
+    r = lto("memory", "publish", "--sink", "legacy-rest")
+    ok(r.returncode != 0, "memory: legacy-rest publish without config fails clearly")
+    out = r.stderr + r.stdout
+    ok("optional memory sink" in out and "MEMORY_FLOW" in out,
+       f"memory: legacy-rest publish error mentions MEMORY_FLOW config (got {out[:160]})")
 
 
 def main() -> int:

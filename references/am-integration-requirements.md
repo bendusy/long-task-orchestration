@@ -172,15 +172,36 @@ run 的成果投影出去；am 负责索引、召回、跨 run 模式挖掘。�
   小改动），am 据此可隔离 / 过滤 LTO 运行记录，避免稀释技术库的人工经验召回。
 - 若日后 LTO 记录量大到污染技术库召回，再议单独立库——但先 tag 隔离够用。
 
-## 7. 接 sink 的 LTO 侧就绪度（你这边的活，等 am CLI 后）
+## 7. 接 sink 的 LTO 侧就绪度 —— ✅ 已落地（am 0.7.0）
 
-LTO 已为换 sink 准备好：`memory_sink.py` 的 `MemorySink` 是抽象基类，
-`LegacyMemoryFlowSink` 是 REST 实现。am CLI 落地后，LTO 侧只需：
+am 0.7.0 交付 `am ingest` 后，LTO 侧 `AmCliSink` 已实现并真跑验证。最终契约
+与原计划略有不同（用 `am ingest` 而非 `am write` 逐条）：
 
-1. 加一个 `AmCliSink(MemorySink)`：`publish()` 里 subprocess 调
-   `am write --json`（喂上面 §6 的投影 JSON），按退出码 + stderr 判成败。
-2. `memory.py` 的 sink 选择（现写死 `LegacyMemoryFlowSink`）改成可配
-   （`--sink am-cli|rest` 或按 `am` 可执行存在性自动选），legacy REST 留作
-   过渡期 fallback。
+**真实契约**（`am ingest --help`）：
+```
+am ingest [-f FILE | stdin] [--json] [--database-url URL]
+```
+- 输入：LTO `memory export` 产的**整个信封**（JSON，stdin 或 `-f`），无需逐条拆。
+- `--json`：业务结果 → stdout，tracing → stderr。
+- am 自读 `DATABASE_URL`（env/默认）。**LTO 不传 `--database-url`**，PG 连接串
+  永不进 LTO 进程参数/日志/仓库。
 
-这是小改动（一个子类 + 一处选择逻辑），等 am 的 CLI 签名/退出码契约定了就接。
+**LTO 侧实现**（已 commit）：
+1. `AmCliSink(MemorySink)`：`publish()` 把 `build_projection` 信封管道喂
+   `am ingest -f - --json`，从 `data.summary.{written,updated,skipped,failed}`
+   解析三态；`resume()` 调 `am search <q> --library 技术 --json`。
+2. `memory.py` 加 `--sink am-cli|legacy-rest`（默认 **am-cli**）+ `--am-bin`；
+   timeout 默认提到 60s（am ingest 连 PG 比 REST 慢，实测 ~15s）。
+3. am 缺席（`shutil.which` 找不到）→ `MemorySinkError` 优雅降级，提示
+   “local .lto/ remains the source of truth”，publish 不是硬依赖。
+
+**真跑验证**（animem-private 的 J run，10 条投影）：
+- 首次手动管道 `export | am ingest`：written:3 / updated:2 / skipped:5 / failed:0
+- 再跑 `memory publish --sink am-cli`：written:0 / updated:1 / skipped:9 / failed:0
+  —— 幂等收敛正确（updated 那条是 `updated_at` 时间戳刷新导致 state_hash 变）。
+- 回归测试：am-cli 缺 binary 报错路径 + legacy-rest 兜底路径都进
+  `test_orchestration_cmds.py`，`SELFTEST OK`。
+
+**一个观察**（留给 am）：每次 export 都刷新 `updated_at` → state_hash 变 →
+lto_run_snapshot 每次 publish 都 updated 一条。若想更纯的幂等，可考虑投影
+排除易变时间戳，或 am 侧 dedup 时忽略 `updated_at`。当前不阻塞，数据零损坏。

@@ -10,7 +10,26 @@ from pathlib import Path
 from .. import state as st
 from .. import git_state as gs
 from ..memory_projection import build_projection
-from ..memory_sink import LegacyMemoryFlowSink, MemorySinkError, print_resume_result
+from ..memory_sink import (
+    AmCliSink,
+    LegacyMemoryFlowSink,
+    MemorySink,
+    MemorySinkError,
+    print_resume_result,
+)
+
+
+def _make_sink(args: argparse.Namespace) -> MemorySink:
+    """Pick the memory sink. am-cli is the recommended path since am 0.7.0;
+    legacy-rest stays as a fallback for hosts still on memory-flow REST."""
+    sink = getattr(args, "sink", "am-cli")
+    if sink == "legacy-rest":
+        return LegacyMemoryFlowSink(
+            url=getattr(args, "url", None),
+            token=getattr(args, "token", None),
+            timeout=args.timeout,
+        )
+    return AmCliSink(binary=getattr(args, "am_bin", None), timeout=args.timeout)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -36,27 +55,34 @@ def _publish(args: argparse.Namespace) -> int:
     repo = args.repo.resolve()
     run_id = st.resolve_run_id(repo, args.run_id)
     projection = build_projection(repo, run_id)
-    sink = LegacyMemoryFlowSink(url=args.url, token=args.token, timeout=args.timeout)
+    sink = _make_sink(args)
     try:
         result = sink.publish(projection)
     except MemorySinkError as exc:
         print(f"memory publish failed: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps({"ok": result.ok, "published": result.published, "detail": result.detail},
-                     ensure_ascii=False, sort_keys=True))
-    return 0
+    print(json.dumps({
+        "ok": result.ok,
+        "published": result.published,
+        "written": result.written,
+        "updated": result.updated,
+        "skipped": result.skipped,
+        "failed": result.failed,
+        "detail": result.detail,
+    }, ensure_ascii=False, sort_keys=True))
+    return 0 if result.ok else 2
 
 
 def _resume(args: argparse.Namespace) -> int:
     repo = args.repo.resolve()
     project_key = args.project or repo.name
-    sink = LegacyMemoryFlowSink(url=args.url, token=args.token, timeout=args.timeout)
+    sink = _make_sink(args)
     try:
         result = sink.resume(project_key)
         print_resume_result(result)
     except MemorySinkError as exc:
         print(
-            "warning: memory-flow/ANIMEM unavailable; "
+            "warning: am/ANIMEM memory unavailable; "
             f"using local .lto only. cross-project history unavailable. ({exc})",
             file=sys.stderr,
         )
@@ -125,17 +151,32 @@ def add_parser(subparsers) -> None:
     export.add_argument("--dry-run", action="store_true", help="accepted for clarity; export never writes")
     export.set_defaults(func=run)
 
-    publish = mem.add_parser("publish", help="publish redacted projection to legacy memory-flow REST")
+    publish = mem.add_parser(
+        "publish",
+        help="publish redacted projection to am (native CLI, default) or legacy memory-flow REST",
+    )
     publish.add_argument("--run-id")
-    publish.add_argument("--url", help="memory-flow base URL; defaults to MEMORY_FLOW_URL")
-    publish.add_argument("--token", help="memory-flow token; defaults to MEMORY_FLOW_TOKEN")
-    publish.add_argument("--timeout", type=float, default=5.0)
+    publish.add_argument(
+        "--sink", choices=["am-cli", "legacy-rest"], default="am-cli",
+        help="am-cli = pipe envelope to `am ingest` (recommended since am 0.7.0); "
+             "legacy-rest = memory-flow REST fallback",
+    )
+    publish.add_argument("--am-bin", help="am binary path; defaults to AM_BIN or 'am'")
+    publish.add_argument("--url", help="[legacy-rest] memory-flow base URL; defaults to MEMORY_FLOW_URL")
+    publish.add_argument("--token", help="[legacy-rest] memory-flow token; defaults to MEMORY_FLOW_TOKEN")
+    publish.add_argument("--timeout", type=float, default=60.0,
+                         help="sink timeout seconds (am ingest connects PG, slower than REST)")
     publish.set_defaults(func=run)
 
     resume = mem.add_parser("resume", help="discover memory projection, then print local-first capsule")
     resume.add_argument("--project", help="project key; defaults to repo directory name")
     resume.add_argument("--run-id", help="local run id for fallback capsule")
-    resume.add_argument("--url", help="memory-flow base URL; defaults to MEMORY_FLOW_URL")
-    resume.add_argument("--token", help="memory-flow token; defaults to MEMORY_FLOW_TOKEN")
-    resume.add_argument("--timeout", type=float, default=5.0)
+    resume.add_argument(
+        "--sink", choices=["am-cli", "legacy-rest"], default="am-cli",
+        help="am-cli = `am search` (recommended); legacy-rest = memory-flow REST fallback",
+    )
+    resume.add_argument("--am-bin", help="am binary path; defaults to AM_BIN or 'am'")
+    resume.add_argument("--url", help="[legacy-rest] memory-flow base URL; defaults to MEMORY_FLOW_URL")
+    resume.add_argument("--token", help="[legacy-rest] memory-flow token; defaults to MEMORY_FLOW_TOKEN")
+    resume.add_argument("--timeout", type=float, default=60.0)
     resume.set_defaults(func=run)

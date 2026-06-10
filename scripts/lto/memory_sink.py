@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import shutil
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +23,12 @@ class PublishResult:
     ok: bool
     published: int
     detail: str
+    # three-state breakdown when the sink reports it (am ingest); legacy REST
+    # leaves these at zero and only sets `published`.
+    written: int = 0
+    updated: int = 0
+    skipped: int = 0
+    failed: int = 0
 
 
 @dataclass
@@ -110,6 +118,110 @@ class LegacyMemoryFlowSink(MemorySink):
             raise MemorySinkError(f"memory-flow write returned {exc.code}: {detail}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise MemorySinkError(str(exc)) from exc
+
+
+class AmCliSink(MemorySink):
+    """Native am-CLI adapter: pipes the LTO projection envelope into `am ingest`.
+
+    The recommended path since am 0.7.0. The whole `memory export` envelope is
+    handed to `am ingest -f - --json` on stdin verbatim — am owns slug
+    generation, three-state dedup (written/updated/skipped) and supersede
+    versioning. LTO never constructs slugs or touches PG.
+
+    Security: we deliberately do NOT pass --database-url. am reads the
+    connection string from its own env/default, so no PG credential ever
+    enters LTO's process args, logs, or repo.
+    """
+
+    def __init__(self, binary: str | None = None, timeout: float = 60.0):
+        self.binary = binary or os.getenv("AM_BIN") or "am"
+        self.timeout = timeout
+
+    def publish(self, payload: dict[str, Any]) -> PublishResult:
+        self._require_binary()
+        envelope = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        try:
+            proc = subprocess.run(
+                [self.binary, "ingest", "-f", "-", "--json"],
+                input=envelope,
+                capture_output=True,
+                timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise MemorySinkError(f"am ingest timed out after {self.timeout}s") from exc
+        except OSError as exc:
+            raise MemorySinkError(f"am ingest could not run: {exc}") from exc
+        stdout = proc.stdout.decode("utf-8", errors="replace")
+        stderr = proc.stderr.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            raise MemorySinkError(
+                f"am ingest exited {proc.returncode}: {(stderr or stdout)[:500]}"
+            )
+        return self._parse_ingest_output(stdout, stderr)
+
+    def resume(self, project_key: str) -> ResumeResult:
+        self._require_binary()
+        query = f"lto {project_key} project_snapshot lto_run_snapshot"
+        try:
+            proc = subprocess.run(
+                [self.binary, "search", query, "--library", "技术",
+                 "--json", "--top-k", "5"],
+                capture_output=True,
+                timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise MemorySinkError(f"am search timed out after {self.timeout}s") from exc
+        except OSError as exc:
+            raise MemorySinkError(f"am search could not run: {exc}") from exc
+        stdout = proc.stdout.decode("utf-8", errors="replace")
+        stderr = proc.stderr.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            raise MemorySinkError(
+                f"am search exited {proc.returncode}: {(stderr or stdout)[:500]}"
+            )
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            parsed = {"raw": stdout[:6000]}
+        return ResumeResult(True, "am search ok", parsed)
+
+    def _require_binary(self) -> None:
+        if shutil.which(self.binary) is None:
+            raise MemorySinkError(
+                f"am CLI not found on PATH (looked for '{self.binary}'); "
+                "install am or set AM_BIN. LTO core commands do not require am — "
+                "local .lto/ remains the source of truth."
+            )
+
+    @staticmethod
+    def _parse_ingest_output(stdout: str, stderr: str) -> PublishResult:
+        try:
+            doc = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise MemorySinkError(
+                f"am ingest produced non-JSON output: {(stdout or stderr)[:500]}"
+            ) from exc
+        if not doc.get("ok", False):
+            raise MemorySinkError(f"am ingest reported failure: {json.dumps(doc)[:500]}")
+        summary = (doc.get("data") or {}).get("summary") or {}
+        written = int(summary.get("written", 0))
+        updated = int(summary.get("updated", 0))
+        skipped = int(summary.get("skipped", 0))
+        failed = int(summary.get("failed", 0))
+        published = written + updated
+        detail = (
+            f"am ingest: {written} written, {updated} updated, "
+            f"{skipped} skipped, {failed} failed"
+        )
+        return PublishResult(
+            ok=failed == 0,
+            published=published,
+            detail=detail,
+            written=written,
+            updated=updated,
+            skipped=skipped,
+            failed=failed,
+        )
 
 
 def _record_to_experience(payload: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:

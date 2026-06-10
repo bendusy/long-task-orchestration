@@ -231,8 +231,11 @@ $L memory resume --project <repo-key>
 $L memory export --run-id <run-id> --dry-run
 ```
 
-它只输出 redacted JSON，不联网。只有显式 `$L memory publish` 才需要配置
-`MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 或未来 ANIMEM sink。
+它只输出 redacted JSON，不联网。只有显式 `$L memory publish` 才需要 sink。
+`publish` 默认走 am 原生 CLI（`--sink am-cli`，am 0.7.0+）：信封管道喂
+`am ingest`，am 负责三态去重（written/updated/skipped），LTO 不碰 PG、
+不持有连接串。am 缺席时报错并提示本地 `.lto` 仍是真源（publish 非硬依赖）。
+旧 memory-flow REST 用 `--sink legacy-rest` + `MEMORY_FLOW_URL/TOKEN` 兜底。
 
 ## hook：让你别忘了用 LTO
 
