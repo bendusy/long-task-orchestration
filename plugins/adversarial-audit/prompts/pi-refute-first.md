@@ -14,3 +14,5 @@ OUTPUT: JSON array only, no prose wrapper.
 [
   {"severity":"critical|high|medium|low","claim":"...","evidence":"path:line or verbatim output","recommendation":"...","confidence":"high|medium|low"}
 ]
+
+Your entire reply must be the JSON output (a ```json fence is acceptable). No preamble, no commentary, no sentence before or after the JSON — even one introductory sentence breaks the parser and fails the run.

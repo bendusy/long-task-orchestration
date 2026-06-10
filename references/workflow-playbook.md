@@ -35,6 +35,12 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 
 ## Playbooks
 
+> 其中三个场景已有配套的 data-only 场景插件（`plugins/` 下，合同见
+> `plugin-boundary.md`）：`adversarial-audit`（review 的审计编队先验）、
+> `claim-verify-research`（claim-verify / research 的核验先验）、
+> `migration-refactor`（migration 的分批闸门先验）。插件提供 prompt /
+> profile / path / eval 素材，**不替你选路**——读完本节再决定挂不挂。
+
 ### review
 
 触发信号：
@@ -50,6 +56,7 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 - `lto audit --collect <reply-dir>`
 - `lto check --to implementation|closed`
 - `lto judge --phase <phase>`
+- 场景插件 `plugins/adversarial-audit`：refute-first prompt、codex/pi/agy 跨族 profile、union 合并收敛路径
 
 期望 artifact：
 
@@ -118,6 +125,7 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 - `lto parallel` / `lto pipeline` 跑批量 shell 验证
 - `lto audit --auto-dispatch` 做 adversarial review
 - `lto check --to closed --strict`
+- 场景插件 `plugins/migration-refactor`：最小样例先行 + 批间回归闸门路径、diff 审计 / 语义等价 profile
 
 期望 artifact：
 
@@ -153,6 +161,7 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 - 对稳定事实用本地源码/文档验证；对时效性事实用 web/context7/官方文档验证。
 - 可用 `lto runner --kind manual` 登记核验证据。
 - 高风险时走 `audit --auto-dispatch` 做 source adversarial review。
+- 场景插件 `plugins/claim-verify-research`：claim 拆解 / 证据反驳 / completeness critic 三类 profile 与主路径。
 
 期望 artifact：
 
@@ -186,6 +195,7 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 - 必要时 fan-out 不同角度研究，再 synthesis。
 - `lto runner --kind manual` 登记关键证据。
 - `audit --auto-dispatch` 用于 adversarial source critique。
+- 场景插件 `plugins/claim-verify-research` 同样适用本场景（fan-out 检索 + completeness critic）。
 
 期望 artifact：
 

@@ -19,3 +19,5 @@ Output JSON only, matching the hypotheses schema:
     "falsifiability_note": "optional — only if unfalsifiable"
   }
 ]
+
+Your entire reply must be the JSON output (a ```json fence is acceptable). No preamble, no commentary, no sentence before or after the JSON — even one introductory sentence breaks the parser and fails the run.

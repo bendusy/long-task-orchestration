@@ -80,6 +80,7 @@ LTO 是给**要来回折腾好几轮、你担心做过头或做着做着跑偏**
 | **术语表 + 完整命令手册 + 怎么装给自己用** | **[references/onboarding.md](./references/onboarding.md)** ← agent 先读这份 |
 | LTO 是什么、为什么这么设计 | [SKILL.md](./SKILL.md) |
 | host agent 的调度先验（review/debug/migration…） | [references/workflow-playbook.md](./references/workflow-playbook.md) |
+| 预设场景插件（对抗审 / 主张核验 / 迁移闸门，data-only） | [plugins/](./plugins/) + [references/plugin-boundary.md](./references/plugin-boundary.md) |
 | 控制论 harness：run logs / telemetry / 闭环 | [references/control-loop-harness.md](./references/control-loop-harness.md) |
 | 在 codex/pi/agy 当宿主的专项坑 | [references/cross-runtime-host-notes.md](./references/cross-runtime-host-notes.md) |
 | 插件真实世界 eval-run 设计 | [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md) |
