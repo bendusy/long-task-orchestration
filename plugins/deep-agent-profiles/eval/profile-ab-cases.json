@@ -15,7 +15,25 @@
       "id": "codex-audit-structured-output",
       "runner": "codex",
       "profile": "codex-audit-readonly-v1",
-      "brief": "Audit a spec for premature assumptions and output JSON findings."
+      "brief": "Audit the design spec at references/plugin-boundary.md (read it from the repo) for premature assumptions, unstated invariants, and gaps between stated boundary rules and what the code could actually enforce. Output JSON findings only."
+    },
+    {
+      "id": "claude-audit-structured-output",
+      "runner": "claude",
+      "profile": "claude-audit-reflection-v1",
+      "brief": "Audit the design spec at references/plugin-boundary.md (read it from the repo) for premature assumptions, unstated invariants, and gaps between stated boundary rules and what the code could actually enforce. Output JSON findings only."
+    },
+    {
+      "id": "pi-audit-structured-output",
+      "runner": "pi",
+      "profile": "pi-audit-thinking-v1",
+      "brief": "Audit the design spec at references/plugin-boundary.md (read it from the repo) for premature assumptions, unstated invariants, and gaps between stated boundary rules and what the code could actually enforce. Output JSON findings only."
+    },
+    {
+      "id": "agy-audit-structured-output",
+      "runner": "agy",
+      "profile": "agy-audit-contract-v1",
+      "brief": "Audit the design spec at references/plugin-boundary.md (read it from the repo) for premature assumptions, unstated invariants, and gaps between stated boundary rules and what the code could actually enforce. Output JSON findings only."
     }
   ]
 }
