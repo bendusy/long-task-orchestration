@@ -95,35 +95,42 @@ LTO 轨道上编排 yh cap，让长任务可恢复、可审计、产物可追溯
 - **LTO 不持有办文领域知识**：人名 / 模板 / 公文规范都在 yh（和 am 的办文库）。
   LTO 只负责让办文工作流可恢复、可审计、产物可追溯。
 
-## 4. LTO 侧要补的（不依赖 yh，LTO 自己做）
+## 4. LTO 侧要补的（不依赖 yh，LTO 自己做）—— ✅ 已落地
 
-新增 workflow-playbook 的 **`doc-workflow`（办文）节**，写清：
-- 触发信号：任务是"把素材办成公文 / 呈批 / 意见函"，要经多步转换 + 质检 + 呈批。
-- 可用 primitive：`runner` 跑 yh cap 链（convert-to-md → make-official-doc →
-  gov-doc-verify）、质检结果进 `audit --collect`、产物 sha256 进 evidence、
-  跨 session 用 `runs`/`resume` 恢复。
-- 期望 artifact：每步 yh cap 的输入输出 + exit code、质量门 findings、最终公文
-  产物指纹。
-- 停止条件：质量门收敛（无 high/critical violation）+ 人工确认终稿（办文是
-  对外产出，human gate）。
-- 反模式：跳质检直接出稿、把 yh cap 失败的 exit 1 当成功、办文产物不留指纹无法
-  追溯改了哪版。
+新增 workflow-playbook 的 **`doc-workflow`（办文）节** 已写入
+`references/workflow-playbook.md`（第 10 个场景节，五段式：触发信号 / 可用
+primitive / 期望 artifact / 停止条件 / 反模式）。引用 yh `cap list`（已落地）
+的确切 cap 清单写编排步骤：`convert-to-md → doc-format → make-official-doc →
+质检`，质检 findings 进 `audit --collect`，产物 sha256 进 manifest，终稿 human
+gate。
 
-这一节等本文对齐后，我在 LTO 侧实现（纯文档，不依赖 yh 改任何东西）。
+配套 **findings audit 适配**（LTO `auditors.py`）也已实现：yh 质检 cap 的
+`--json` 输出（顶层对象裹 `findings[]`，severity 中文）现在能直接喂
+`lto audit --collect`——LTO 自动提取 `findings` 字段 + 把中文 severity
+（严重/警告/提示）映射到四档（critical/high/low）+ 把 `location.file` 提到顶层。
+真实 yh schema 集成验证 8 断言全过，回归进 `test_audit_parse.py [S11]`。
 
-## 5. 优先级
+## 5. 优先级 —— 全部清零（2026-06-10）
 
-1. **P0**：2.1 `yh cap list [--json]` + 单 cap `--describe`——没有能力发现，
-   host agent 没法把 yh 编排进 LTO 工作流（只能靠人读 quickref，不可机读）。
-2. **P1**：2.2 quickref drift（list 落地后自动解决）、2.3 质检 cap 的结构化
-   findings 输出（让质量门进 LTO audit 收敛）。
-3. **P2**：2.4 animem-bridge 与 LTO↔am 桥的 tag/kind 协调（三方对齐，避免重复写）。
+1. **P0** ✅ `yh cap list` + 单 cap `--describe`（commit b99361d）。能力发现
+   入口落地，`yh cap list` 机读可用。**残留**：单 cap `--describe` 目前只出
+   元信息（name/description/deprecated），还没有参数 schema（input/output/
+   必填项）——对 playbook 列 cap 够用，对"agent 自动知道每个 cap 吃什么参数"
+   还差一截，留作 P1.5。
+2. **P1** ✅ 2.3 质检 cap 结构化 findings（commit 37d4efd，`findings.go` 定义
+   `Finding{severity,claim,location,source_cap,rule}`，gov-doc-verify/govdocx-qc/
+   chengpi-gate 输出统一加 `findings[]+summary`）。LTO 侧适配已接（见 §4）。
+3. **P2** ✅ 2.4 animem-bridge 处理得比建议更彻底——yh 实测发现 animem-bridge
+   走停服的 18920 HTTP（旧 memory-flow，已退役）是死代码，**直接废弃删除**
+   （commit 68becf5，cap 26→25）。三方桥去重最终态：yh 用办文 tag +
+   `--source-agent yh`、LTO 用 `lto_*` kind（去重键 `(project_key,run_id,kind,
+   task_id?)`）、am 单一 CLI 入口，三方写 am 不撞去重键。
 
-## 6. 分工
+## 6. 分工 —— 双方都已交付
 
-- **yh 侧**：P0 加 `yh cap list --json` + 单 cap describe；P1 质检 cap 结构化
-  findings；P2 与 LTO/am 协调 am 写入的 tag/kind。
-- **LTO 侧**：补 `doc-workflow` playbook 节（不依赖 yh，等本文对齐后做）；yh cap
-  当 runner 命令跑零适配。
-- **对齐点**：yh 的 `yh cap list --json` schema（cap 名 + 参数契约）一旦定了，
-  LTO 的 doc-workflow playbook 就能引用确切的 cap 清单写编排步骤。
+- **yh 侧** ✅：P0 `yh cap list`（b99361d）、P1 质检 findings（37d4efd）、
+  P2 删 animem-bridge（68becf5）。
+- **LTO 侧** ✅：`doc-workflow` playbook 节 + findings audit 适配（见 §4）；
+  `AmCliSink` 对接 am ingest（见 `am-integration-requirements.md` §7）。
+- **残留对齐点（非阻塞）**：① 单 cap `--describe` 的参数 schema（P1.5，让 agent
+  机读每个 cap 的 I/O 契约）；② quickref drift（cap list 落地后可自动生成文档）。
