@@ -57,6 +57,12 @@ class Scheduler:
         Cumulative retry-sleep wall-clock budget (default 300s).  When exceeded,
         the job stops retrying and returns the latest result.
         The effective cap is min(job.budget.timeout_sec, total_retry_wall_sec).
+    healthcheck_retries:
+        Extra healthcheck attempts when a runner probes unhealthy (default 1, so
+        up to 2 probes total).  The 1+1 probe is cheap (~3-4s) and runner flake
+        (e.g. pi hanging ~1-in-5) is intermittent, not persistent — a single
+        re-probe only re-checks the runners that came back unhealthy, never the
+        healthy ones, so a transient hang doesn't strand a whole batch as SKIPPED.
     runners_dir:
         Override runners directory (used by tests to inject fake runners).
     """
@@ -69,6 +75,7 @@ class Scheduler:
         max_total_agents: int = 50,
         max_backoff_sec: float = 60,
         total_retry_wall_sec: float = 300,
+        healthcheck_retries: int = 1,
         runners_dir: Path | None = None,
         run_id: str | None = None,
         stall_timeout: float = 0,
@@ -78,6 +85,7 @@ class Scheduler:
         self.max_total_agents = max_total_agents
         self.max_backoff_sec = max_backoff_sec
         self.total_retry_wall_sec = total_retry_wall_sec
+        self.healthcheck_retries = max(0, int(healthcheck_retries))
         # stall_timeout：stdout 字节连续 N 秒不增长则强杀（0 = 禁用，默认）。
         # D 修复：默认禁用，因 thinking-heavy runner（pi/codex reasoning）可能
         # 200s+ 只在最后输出，开 stall 会误杀。调用方按需 opt-in，且应设
@@ -100,11 +108,11 @@ class Scheduler:
 
     # -- healthcheck -------------------------------------------------------
 
-    def healthcheck(self, runners: list[str]) -> dict[str, bool]:
-        """Call healthcheck.sh --json, return {runner: is_healthy}.
+    def _probe_once(self, runners: list[str]) -> dict[str, bool]:
+        """Run healthcheck.sh --json once for the given runners.
 
         ``verdict == "OK"`` → healthy; anything else (EMPTY / TIMEOUT / ERROR /
-        MISSING) → not healthy.
+        MISSING) → not healthy.  Any failure to invoke/parse → all unhealthy.
         """
         hc_script = self.runners_dir / "healthcheck.sh"
         if not hc_script.exists():
@@ -139,6 +147,29 @@ class Scheduler:
         for r in runners:
             out.setdefault(r, False)
         return out
+
+    def healthcheck(self, runners: list[str]) -> dict[str, bool]:
+        """Probe runner liveness, re-probing only the ones that come back
+        unhealthy.
+
+        Runner flake (notably pi hanging ~1-in-5 on the 1+1 probe) is
+        intermittent, not persistent: a runner that timed out once is almost
+        always fine on the next ~3-4s probe.  So we re-run the probe up to
+        ``healthcheck_retries`` extra times, but each retry only re-checks the
+        runners still marked unhealthy — healthy runners are never re-probed,
+        keeping the common (all-healthy) path single-probe and cheap.  A runner
+        is unhealthy only if it fails every attempt.
+        """
+        healthy = self._probe_once(runners)
+        for _ in range(self.healthcheck_retries):
+            still_bad = [r for r in runners if not healthy.get(r, False)]
+            if not still_bad:
+                break
+            retry = self._probe_once(still_bad)
+            for r in still_bad:
+                if retry.get(r, False):
+                    healthy[r] = True
+        return healthy
 
     # -- submit ------------------------------------------------------------
 
@@ -831,6 +862,16 @@ sys.exit(exit_code)
         wrapper.chmod(0o755)
 
     # Fake healthcheck (controlled by $SCHEDULER_TEST_HEALTHCHECK JSON)
+    # Two control shapes:
+    #   - a plain list [{agent,verdict},...]  → returned verbatim every call
+    #     (back-compat: all existing tests keep working)
+    #   - {"__sequence__": [[...call1...], [...call2...], ...]} → the i-th call
+    #     returns the i-th list (last list repeats past the end), so a retry can
+    #     be tested: first probe unhealthy, second probe healthy.  Per-call index
+    #     is tracked in a sibling "<ctrl>.callcount" file (cross-process safe).
+    # Either way, only entries whose agent is in the requested runner args are
+    # returned — mirrors real healthcheck.sh, so re-probing only the unhealthy
+    # subset is exercised correctly.
     hc_script = runners_dir / "healthcheck.sh"
     hc_script.write_text(r'''#!/usr/bin/env bash
 # Fake healthcheck — reads from $SCHEDULER_TEST_HEALTHCHECK
@@ -838,9 +879,27 @@ ctrl="${SCHEDULER_TEST_HEALTHCHECK:-}"
 if [ -n "$ctrl" ] && [ -f "$ctrl" ]; then
     python3 -c "
 import json, sys
-with open('$ctrl') as f:
-    print(json.dumps(json.load(f)))
-" 2>/dev/null || echo '[]'
+ctrl = '$ctrl'
+requested = [a for a in sys.argv[1:] if a != '--json']
+with open(ctrl) as f:
+    data = json.load(f)
+if isinstance(data, dict) and '__sequence__' in data:
+    seq = data['__sequence__']
+    cnt_path = ctrl + '.callcount'
+    try:
+        with open(cnt_path) as cf:
+            i = int(cf.read().strip() or '0')
+    except (OSError, ValueError):
+        i = 0
+    with open(cnt_path, 'w') as cf:
+        cf.write(str(i + 1))
+    entries = seq[i] if i < len(seq) else seq[-1]
+else:
+    entries = data
+if requested:
+    entries = [e for e in entries if e.get('agent') in requested]
+print(json.dumps(entries))
+" "$@" 2>/dev/null || echo '[]'
 else
     echo '[]'
 fi
@@ -858,8 +917,16 @@ exit 0
     def set_healthcheck(data: list[dict]) -> Path:
         p = tmpdir / "hc.json"
         p.write_text(json.dumps(data))
+        # reset the per-call counter so a prior sequence test can't bleed into
+        # this one (the fake hc tracks call index in <ctrl>.callcount)
+        (tmpdir / "hc.json.callcount").unlink(missing_ok=True)
         os.environ["SCHEDULER_TEST_HEALTHCHECK"] = str(p)
         return p
+
+    def set_healthcheck_sequence(calls: list[list[dict]]) -> Path:
+        """Inject a per-call healthcheck sequence: the i-th probe returns
+        calls[i] (last repeats).  Used to test unhealthy→healthy re-probe."""
+        return set_healthcheck({"__sequence__": calls})
 
     def make_job(job_id: str, runner: str = "codex", **kw: Any) -> AgentJob:
         """Create a test job whose prompt encodes job_id for the fake runner."""
@@ -1056,6 +1123,54 @@ exit 0
     if passed:
         ok("healthy=OK, unhealthy=SKIPPED")
 
+    print("\n[6b] Flaky runner: unhealthy then healthy on re-probe → runs (not SKIPPED)")
+    # First probe: pi TIMEOUT (the ~1-in-5 hang). Second probe (retry of only
+    # the unhealthy subset): pi OK. With healthcheck_retries>=1 the job must run.
+    set_healthcheck_sequence([
+        [{"agent": "pi", "verdict": "TIMEOUT"}],
+        [{"agent": "pi", "verdict": "OK"}],
+    ])
+    set_control({"c6b_flaky": {"exit_code": 0, "output": "ok"}})
+    results = sched.submit([make_job(
+        "c6b_flaky", runner="pi",
+        permission_policy=PermissionPolicy(sandbox="workspace-write", reason="flaky-reprobe test"),
+    )])
+    if results[0].status == JobStatus.OK.value:
+        ok("flaky runner recovered on re-probe → OK")
+    else:
+        fail("flaky re-probe", f"expected OK after retry, got {results[0].status} / {results[0].error}")
+
+    print("\n[6c] Persistently unhealthy: fails every probe → SKIPPED (retry exhausted)")
+    # Both probes TIMEOUT — re-probe must not paper over a genuinely dead runner.
+    set_healthcheck_sequence([
+        [{"agent": "pi", "verdict": "TIMEOUT"}],
+        [{"agent": "pi", "verdict": "TIMEOUT"}],
+    ])
+    results = sched.submit([make_job(
+        "c6c_dead", runner="pi",
+        permission_policy=PermissionPolicy(sandbox="workspace-write", reason="persistent-dead test"),
+    )])
+    if results[0].status == JobStatus.SKIPPED.value and "unhealthy" in results[0].error.lower():
+        ok("persistently unhealthy → SKIPPED")
+    else:
+        fail("persistent unhealthy", f"expected SKIPPED, got {results[0].status} / {results[0].error}")
+
+    print("\n[6d] healthcheck_retries=0 → no re-probe (single flaky probe stays SKIPPED)")
+    sched_no_retry = Scheduler(repo, runners_dir=runners_dir, healthcheck_retries=0)
+    set_healthcheck_sequence([
+        [{"agent": "pi", "verdict": "TIMEOUT"}],
+        [{"agent": "pi", "verdict": "OK"}],  # would recover IF a retry happened
+    ])
+    results = sched_no_retry.submit([make_job(
+        "c6d_noretry", runner="pi",
+        permission_policy=PermissionPolicy(sandbox="workspace-write", reason="no-retry test"),
+    )])
+    if results[0].status == JobStatus.SKIPPED.value:
+        ok("retries=0 → single probe, stays SKIPPED")
+    else:
+        fail("no-retry", f"expected SKIPPED with retries=0, got {results[0].status}")
+    set_healthcheck([{"agent": "codex", "verdict": "OK"}])  # restore default for later tests
+
     # ===================================================================
     # Adversarial tests (edge cases from review spec)
     # ===================================================================
@@ -1092,7 +1207,13 @@ exit 0
     #     then delete the .sh so _execute_job hits the missing-script path.
     set_healthcheck([{"agent": "codex", "verdict": "OK"}, {"agent": "gemini", "verdict": "OK"}])
     (runners_dir / "gemini.sh").unlink()
-    results = sched.submit([make_job("adv_no_runner", runner="gemini")])
+    # gemini has no read-only mechanism (fail-closed since the W4 spec-review
+    # fix); this test is about the missing-script path, not permissions, so
+    # give it a sandbox gemini can actually honor.
+    results = sched.submit([make_job(
+        "adv_no_runner", runner="gemini",
+        permission_policy=PermissionPolicy(sandbox="workspace-write", reason="missing-script test"),
+    )])
     r = results[0]
     if r.status == JobStatus.FAILED.value and "not found" in r.error.lower():
         ok(f"missing runner → FAILED: {r.error}")
