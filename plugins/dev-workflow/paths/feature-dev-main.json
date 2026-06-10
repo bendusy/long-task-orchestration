@@ -1,0 +1,82 @@
+{
+  "id": "feature-dev-main-v1",
+  "intent": "feature-dev",
+  "description": "Six-stage feature development lifecycle: specify -> dispatch -> impl-audit -> converge -> acceptance -> release. A scheduling prior for the host agent, not a state machine: the host may enter, skip, or exit at any stage.",
+  "steps": [
+    {
+      "step": 1,
+      "label": "specify",
+      "primitive": "audit",
+      "description": "Concept -> spec v1 -> heterogeneous co-design review -> spec v2 with a correction record. Dispatch non-host-family runners with the spec-refuter-heterogeneous-v1 profile (prompts/spec-codesign.md) to refute the spec against the actual repository state. Union-merge the findings; spec-error and spec-missing findings are processed item by item; direction-disagreement findings route to the direction-review path.",
+      "note": "Worktree timing constraint: the specify stage is read-only end to end — no worktree is created here. Spec review and implementation must never share a worktree scope. Hosts that already mount the adversarial-audit plugin may reuse its refuter profiles for this review squad (informational note, not a plugin dependency; plugin-boundary v0 has no inter-plugin dependencies and the host decides what to mount).",
+      "expected_artifact": "spec-v2.md plus findings-union register with per-item adopt/reject record",
+      "stop_condition": "spec v2 is on disk and every spec-review finding is adopted, rejected with a falsification note, or routed to direction-review",
+      "escalation": "any direction-disagreement finding or needs_human signal -> direction-review path / human"
+    },
+    {
+      "step": 2,
+      "label": "dispatch",
+      "primitive": "runner",
+      "parallelizable": true,
+      "description": "Implementation dispatch: sub-agents write code, the host plans and audits. Create the worktree only now — after specify has closed with spec v2 landed. Run implementation jobs through the worktree_exec sandbox so writes stay inside the worktree.",
+      "note": "No-questions-after-dispatch contract: every clarification is resolved before dispatch, and each dispatch prompt carries the full stop conditions. A dispatched job that needs human input mid-flight is a dispatch defect; record it and fix the brief, do not normalize interruptions.",
+      "expected_artifact": "worktree branch, per-task dispatch briefs, per-task implementation evidence",
+      "stop_condition": "every dispatched task has either produced its declared artifact or failed with a recorded cause",
+      "escalation": "stalled or ambiguous tasks return to the host for re-briefing; only hard blockers (missing credentials, destructive ambiguity) go to the human"
+    },
+    {
+      "step": 3,
+      "label": "impl-audit",
+      "primitive": "audit",
+      "parallelizable": true,
+      "description": "Heterogeneous adversarial audit of the implementation. Auditors must not share a model family with the implementation producer. Union-merge all findings into the blocker register — no deduplication, no voting, not one finding dropped.",
+      "note": "Hosts that mount the adversarial-audit plugin may reuse its fan-out/convergence path and refuter profiles here (informational note, not a plugin dependency). Findings that are direction disputes rather than defects route to the direction-review path.",
+      "expected_artifact": "findings-union blocker register (per round)",
+      "stop_condition": "every auditor has reported and every finding is registered with cited evidence",
+      "escalation": "contradictory findings -> host reads the cited evidence first-hand and rules; direction disputes -> direction-review path"
+    },
+    {
+      "step": 4,
+      "label": "converge",
+      "primitive": "runner",
+      "description": "Per-blocker fix loop: fix adopted blockers, re-audit, repeat until HIGH+CRITICAL count converges. Exit condition is the test-pin: every invariant raised by the adversarial audit must land as a regression test. If an invariant has no pinned test, the stage is not converged — regardless of how the blocker register looks.",
+      "expected_artifact": "monotonically shrinking blocker register, test-pin regression test files, checkpoint commits at each convergence point",
+      "stop_condition": "zero open HIGH/CRITICAL blockers AND every audit-raised invariant has a passing pinned regression test",
+      "escalation": "non-monotonic blocker count (rebound) -> pause, re-examine audit scope or artifact before continuing"
+    },
+    {
+      "step": 5,
+      "label": "acceptance",
+      "primitive": "judge",
+      "description": "Host self-check against the six acceptance gates. Read the checklist in prompts/acceptance-gate.md and walk it gate by gate: scripts green, artifacts read first-hand, adversarial findings converged, docs synced, experience captured, observability triad present. This is a host self-check, not a runner dispatch — no profile is involved.",
+      "note": "All six gates must hold simultaneously. Any exemption (for example the observability gate on a small fix) must record an explicit reason in the run state.",
+      "expected_artifact": "gate-by-gate self-check record with per-gate evidence or recorded exemption reason",
+      "stop_condition": "all six gates pass or carry a recorded exemption reason",
+      "escalation": "a gate that cannot pass and cannot be reasonably exempted -> back to converge, or to the human if the gap is a scope decision"
+    },
+    {
+      "step": 6,
+      "label": "release",
+      "primitive": "judge",
+      "description": "Capture, sync, and version: write the changelog entry, align docs, record lessons/decisions into the memory or decision log, then run the repository privacy self-check in strict mode: `bash scripts/privacy_self_check.sh --repo . --strict`. If gitleaks is unavailable, run with `--no-gitleaks` and record the degradation explicitly in the run state.",
+      "note": "git push is always NEEDS_CONFIRM — a human must explicitly confirm every push; the path never authorizes it. Capture is a delivery action: experience not recorded means release is not done.",
+      "expected_artifact": "changelog entry, privacy self-check output (with any degradation recorded), capture/decision record, push confirmation record",
+      "stop_condition": "privacy self-check passes in strict mode (or its degradation is recorded and accepted by the human) AND the human has explicitly confirmed or declined the push",
+      "escalation": "any privacy self-check hit -> stop, human decides; never push to bypass"
+    }
+  ],
+  "stop_conditions": [
+    "spec v2 exists before any worktree is created (specify stage stays read-only)",
+    "all six acceptance gates pass simultaneously; every exemption has a recorded reason",
+    "every audit-raised invariant is pinned by a passing regression test before convergence is declared",
+    "privacy self-check ran in strict mode (degradations explicitly recorded)",
+    "git push happened only after explicit human confirmation",
+    "no permission escalation beyond what the host approved per stage"
+  ],
+  "anti_patterns": [
+    "ap1:skip-spec-straight-to-code — implementation starts before a reviewed spec v2 exists",
+    "ap2:self-audit-instead-of-heterogeneous — producer and auditor share a model family",
+    "ap3:missing-test-pin — convergence declared while audit-raised invariants have no regression test",
+    "ap4:implementation-done-treated-as-done — 'code complete' treated as task complete, skipping acceptance gates, docs sync, capture, and release hygiene"
+  ]
+}

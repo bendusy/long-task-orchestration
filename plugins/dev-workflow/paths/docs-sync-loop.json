@@ -1,0 +1,54 @@
+{
+  "id": "docs-sync-loop-v1",
+  "intent": "docs-sync",
+  "description": "Doc-vs-code drift alignment loop: fan-out drift scans, union-merge findings, fix each item against a first-hand read, then pin the alignment with an anti-drift test. Independent of review and debug paths.",
+  "steps": [
+    {
+      "step": 1,
+      "label": "fanout-drift-scan",
+      "primitive": "runner",
+      "parallelizable": true,
+      "profiles": [
+        "docs-drift-auditor-v1"
+      ],
+      "description": "Dispatch read-only drift auditors across the documentation set (README, references, command docs) against the current code. Each auditor reads both sides and reports doc-vs-code mismatches as structured findings with path:line evidence.",
+      "note": "Intentional-divergence exemption: documents may declare deliberate divergence with an inline annotation, e.g. `<!-- drift-ok: describes the target architecture, not current state -->`. Auditors must respect these annotations — a mismatch covered by a drift-ok annotation is reported with category 'intentional', never as drift.",
+      "expected_artifact": "per-auditor drift findings JSON"
+    },
+    {
+      "step": 2,
+      "label": "union-merge",
+      "primitive": "audit",
+      "description": "Union-merge all auditors' findings into a single drift register. Do not deduplicate or vote; every finding from every auditor enters the register. Findings marked 'intentional' stay in the register as exemption records, not as work items.",
+      "expected_artifact": "drift-register.json (union, with intentional items labelled)"
+    },
+    {
+      "step": 3,
+      "label": "fix-per-item",
+      "primitive": "runner",
+      "description": "For each non-intentional register item: open the cited doc location AND the cited code location first-hand, confirm the drift is real, then fix the doc (or the code, when the doc is the contract) — or mark the item intentional and add a drift-ok annotation at the doc site. An LLM claim alone is not confirmation; the host or fixer must read both sides.",
+      "expected_artifact": "per-item fix diff or intentional annotation, recorded against the register",
+      "stop_condition": "every register item is fixed or explicitly marked intentional with an annotation at the doc site"
+    },
+    {
+      "step": 4,
+      "label": "anti-drift-test-pin",
+      "primitive": "runner",
+      "description": "Pin the alignment so it cannot silently regress: add tests that derive the authoritative value from the source (e.g. extract thresholds or command lists from code) and assert the documentation states the same value. Changing the code without updating the doc must turn a test red.",
+      "expected_artifact": "anti-drift test file(s), passing",
+      "stop_condition": "anti-drift tests exist for the aligned values and pass"
+    }
+  ],
+  "stop_conditions": [
+    "drift register processed item by item: each entry fixed or marked intentional (with a drift-ok annotation at the doc site)",
+    "anti-drift test-pin landed and green",
+    "every fix verified against a first-hand read of both the doc and the code",
+    "no permission escalation beyond read-only for the scan; writes happen only in the fix step under host control"
+  ],
+  "anti_patterns": [
+    "ap1:readme-only-sweep — fixing README while other references of the same value stay stale",
+    "ap2:fix-without-pin — repairing docs without an anti-drift test, so the same drift returns",
+    "ap3:flatten-intentional-divergence — 'fixing' deliberate divergences (ADRs, future-architecture docs) that carry drift-ok annotations",
+    "ap4:vote-to-merge-findings — majority vote dropping drift items that only one auditor caught"
+  ]
+}

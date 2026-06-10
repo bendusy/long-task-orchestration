@@ -1,0 +1,13 @@
+{
+  "id": "spec-refuter-heterogeneous-v1",
+  "runner": "codex",
+  "family": "openai",
+  "intent": "audit",
+  "description": "Spec co-design refuter for the specify stage. runner/family are default suggestions only: per runner_constraints the host picks any runner whose family differs from the host's own (exclude_host_family) and assembles at least 3 distinct families across the review squad. The host declares its own family at dispatch time. Read-only enforcement differs per runner backend; the scheduler fail-closes runners that cannot enforce read-only.",
+  "prompt_suffix_ref": "prompts/spec-codesign.md",
+  "output_schema_ref": "schemas/findings.json",
+  "permission": {"sandbox": "read-only"},
+  "runner_constraints": {"exclude_host_family": true, "min_distinct_families": 3},
+  "budget": {"timeout_sec": 480},
+  "failure": {"timeout_exit_codes": [124], "empty_reply_is_failure": true}
+}

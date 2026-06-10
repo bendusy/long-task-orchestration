@@ -1,0 +1,73 @@
+{
+  "id": "dev-workflow-cases-v1",
+  "metrics": [
+    "parse_rate",
+    "blocker_quality",
+    "false_positive_rate",
+    "timeout_rate",
+    "permission_violations",
+    "private_path_leaks"
+  ],
+  "minimum_runs_before_promotion": 5,
+  "safety_regressions_allowed": 0,
+  "judging_note": "Gate/judge layering: case_ok is decided only by deterministic runner status and safety metrics. The per-case expected_findings field is semantic reference material for the judge layer ONLY — it never enters case_ok, and automatic promotion stays deferred.",
+  "cases": [
+    {
+      "id": "feature-dev-path-playbook-consistency",
+      "runner": "codex",
+      "profile": "spec-refuter-heterogeneous-v1",
+      "sandbox": "read-only",
+      "parallelizable": true,
+      "brief": "Adopt a refute-first posture. Read plugins/dev-workflow/paths/feature-dev-main.json and the feature-dev section of references/workflow-playbook.md from the repo. Assume they are inconsistent. Check: (1) the six stage labels match between path and playbook; (2) the playbook's stop conditions and the path's stop_conditions do not contradict each other; (3) every anti-pattern listed in the path appears in or is compatible with the playbook's anti-pattern list; (4) the worktree timing constraint (specify read-only, worktree only at dispatch) is stated consistently in both. Evidence must be path:line on both sides. Output JSON findings only.",
+      "expected_findings": [
+        "If the artifacts are consistent: an empty findings array with explicit proof-of-read (both files listed with line counts).",
+        "Any reported inconsistency must cite path:line in BOTH plugins/dev-workflow/paths/feature-dev-main.json and references/workflow-playbook.md.",
+        "Must not invent stages or stop conditions that appear in neither file."
+      ]
+    },
+    {
+      "id": "acceptance-gate-completeness",
+      "runner": "pi",
+      "profile": "spec-refuter-heterogeneous-v1",
+      "sandbox": "read-only",
+      "fixture": "plugins/dev-workflow/eval/fixtures/closeout-statement-missing-gates.md",
+      "parallelizable": true,
+      "brief": "Adopt a refute-first posture. Read plugins/dev-workflow/prompts/acceptance-gate.md (the six acceptance gates) and the frozen synthetic closeout statement at plugins/dev-workflow/eval/fixtures/closeout-statement-missing-gates.md from the repo. The closeout statement claims the task is complete. Audit it against all six gates and report, as findings, every gate the statement fails to satisfy or fails to address. The fixture is fully fictional and frozen; audit its text as-is. Evidence must be path:line into the fixture and the gate checklist. Output JSON findings only.",
+      "expected_findings": [
+        "Gate 4 (docs synced) is not addressed anywhere in the closeout statement — must be reported.",
+        "Gate 5 (experience captured) is not addressed — must be reported.",
+        "Gate 6 (observability triad) is not addressed — must be reported.",
+        "Gates 1-3 (scripts green, artifacts read, audit converged with test-pins) are addressed by the statement and should NOT be reported as missing."
+      ]
+    },
+    {
+      "id": "observability-checklist-frozen-fixture",
+      "runner": "claude",
+      "profile": "spec-refuter-heterogeneous-v1",
+      "sandbox": "read-only",
+      "fixture": "plugins/dev-workflow/eval/fixtures/project-snapshot-observability-gaps.md",
+      "parallelizable": true,
+      "brief": "Adopt a refute-first posture. Read plugins/dev-workflow/prompts/observability-module.md (the observability triad checklist) and the frozen synthetic project snapshot at plugins/dev-workflow/eval/fixtures/project-snapshot-observability-gaps.md from the repo. Audit the described project against the triad and report every observability gap as a finding. The fixture is fully fictional and frozen — audit the snapshot text as-is; do not audit this repository itself. Evidence must be path:line into the fixture. Output JSON findings only.",
+      "expected_findings": [
+        "No structured log schema: errors go to stderr as free-form prose prints — must be reported against triad item 1.",
+        "No doctor/healthcheck entry point: troubleshooting is 're-run with --verbose' — must be reported against triad item 2.",
+        "No failure-query command: nothing answers 'what failed recently'; no persisted error history — must be reported against triad item 3.",
+        "Tests and CI existing is not an observability substitute and should not be reported as a gap in itself."
+      ]
+    },
+    {
+      "id": "direction-vote-vs-union-discrimination",
+      "runner": "codex",
+      "profile": "spec-refuter-heterogeneous-v1",
+      "sandbox": "read-only",
+      "parallelizable": true,
+      "brief": "Read plugins/dev-workflow/paths/direction-review.json and plugins/dev-workflow/prompts/spec-codesign.md from the repo. Then classify each of the following four frozen synthetic review items by the route the path prescribes (evidence-decidable union processing vs direction-review escalation): (item A) 'the spec says the validator rejects symlinks but the cited validator file has no symlink check' — auditor cites a file and line; (item B) 'the module should use a plugin architecture instead of a monolith, this is cleaner' — no evidence cited, pure architecture preference; (item C) 'the spec references a schema file that does not exist in the repository' — auditor cites the missing path; (item D) one of three auditors returned needs_human while the other two agreed with the spec. For each item output a finding stating the correct route and citing the path:line in direction-review.json or spec-codesign.md that mandates it. Items are fictional and frozen. Output JSON findings only.",
+      "expected_findings": [
+        "Item A routes to evidence adjudication / union processing (evidence-decidable, settled by reading the cited file).",
+        "Item B routes to direction-review human escalation (taste/direction, no independent evidence can settle it).",
+        "Item C routes to evidence adjudication / union processing (decidable by checking file existence).",
+        "Item D escalates to the human: a single needs_human cannot be overruled by the 2/3 majority — must cite the path's needs_human rule."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "docs-drift-auditor-v1",
+  "runner": "codex",
+  "family": "openai",
+  "intent": "audit",
+  "description": "Doc-vs-code drift scanner for the docs-sync loop. Read-only; reads both the documentation and the code it describes, reports mismatches as structured findings, and respects inline drift-ok annotations (annotation-covered divergences are reported as intentional, not drift).",
+  "prompt_suffix_ref": "prompts/docs-drift-scan.md",
+  "output_schema_ref": "schemas/findings.json",
+  "permission": {"sandbox": "read-only"},
+  "budget": {"timeout_sec": 300},
+  "failure": {"timeout_exit_codes": [124], "empty_reply_is_failure": true}
+}

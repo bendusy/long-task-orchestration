@@ -1,0 +1,84 @@
+{
+  "id": "note.internal.dev-workflow-sop.2026-06-10",
+  "title": "Feature Development Lifecycle SOP — Internal Operational Distillation (desensitized)",
+  "url": "internal:dev-session-log-mining/dev-workflow-sop",
+  "captured_at": "2026-06-10",
+  "provenance": "Desensitized SOP mined from the host user's development session logs across multiple projects. Patterns only: no project names, no conversation excerpts, no filesystem paths.",
+  "claims": [
+    {
+      "id": "c1",
+      "text": "The high-frequency real development chain is longer than mid-task playbooks assume: it runs specify -> dispatch -> impl-audit -> converge -> acceptance -> release, and skipping the specify stage correlates with rework loops later.",
+      "status": "unverified"
+    },
+    {
+      "id": "c2",
+      "text": "Spec co-design review by heterogeneous (non-host-family) runners before implementation catches spec errors and omissions that same-family self-review misses.",
+      "status": "unverified"
+    },
+    {
+      "id": "c3",
+      "text": "Convergence without test-pins is illusory: invariants raised by adversarial audit that are not turned into regression tests resurface as drift in later sessions.",
+      "status": "unverified"
+    },
+    {
+      "id": "c4",
+      "text": "A 'no questions after dispatch' contract (resolve all clarifications before dispatching sub-agents, give full stop conditions in the prompt) reduces mid-flight stalls and human interruptions.",
+      "status": "unverified"
+    },
+    {
+      "id": "c5",
+      "text": "Observability is a cross-cutting acceptance concern: features shipped without structured logs, a doctor/healthcheck entry point, and failure-query commands generate disproportionate debugging cost later. Making observability an acceptance gate (with recorded exemptions for small fixes) is cheaper than backfilling.",
+      "status": "unverified"
+    },
+    {
+      "id": "c6",
+      "text": "Direction/taste disagreements never converge through findings-union loops; they need a separate route that classifies the disagreement and escalates non-evidence-decidable disputes to a human by default.",
+      "status": "unverified"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h1",
+      "text": "Running a heterogeneous refute-first spec review (spec-codesign prompt) before implementation lowers the count of HIGH/CRITICAL implementation-stage blockers compared to skipping spec review.",
+      "metrics": ["blocker_quality", "false_positive_rate", "parse_rate"]
+    },
+    {
+      "id": "h2",
+      "text": "Requiring test-pins as the converge exit condition reduces repeat findings (same invariant re-reported in a later round or later run) compared to fix-without-pin.",
+      "metrics": ["blocker_quality", "timeout_rate"]
+    },
+    {
+      "id": "h3",
+      "text": "An explicit six-gate acceptance checklist (scripts green, artifacts read, audit converged, docs synced, experience captured, observability present) catches incomplete closeouts that exit-code-only acceptance passes.",
+      "metrics": ["blocker_quality", "false_positive_rate"]
+    },
+    {
+      "id": "h4",
+      "text": "Docs-drift scans that respect inline drift-ok annotations produce fewer false positives than scans that treat every doc-vs-code mismatch as drift.",
+      "metrics": ["false_positive_rate", "parse_rate"]
+    }
+  ],
+  "anti_patterns": [
+    {
+      "id": "ap1",
+      "name": "skip-spec-straight-to-code",
+      "description": "Starting implementation before a reviewed spec exists. The cost shows up as direction churn and rework during converge."
+    },
+    {
+      "id": "ap2",
+      "name": "self-audit-instead-of-heterogeneous",
+      "description": "Producer and auditor sharing a model family invalidates the implementation audit, regardless of prompt strength."
+    },
+    {
+      "id": "ap3",
+      "name": "missing-test-pin",
+      "description": "Declaring convergence while audit-raised invariants have no regression test. The invariant silently regresses later."
+    },
+    {
+      "id": "ap4",
+      "name": "implementation-done-treated-as-done",
+      "description": "Treating 'code complete' as 'task complete', skipping acceptance gates, docs sync, experience capture, and release hygiene."
+    }
+  ],
+  "lto_status": "experimental; not a core guarantee"
+}

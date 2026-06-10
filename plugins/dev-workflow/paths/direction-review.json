@@ -1,0 +1,55 @@
+{
+  "id": "direction-review-v1",
+  "intent": "direction-review",
+  "description": "Route for direction/taste disagreements that findings-union loops cannot converge: classify the disagreement, decide evidence-decidable disputes by evidence, escalate taste/direction disputes to a human by default. The artifact is a decision record, not a findings JSON.",
+  "steps": [
+    {
+      "step": 1,
+      "label": "classify-disagreement",
+      "primitive": "judge",
+      "description": "Host classifies the disagreement: 'evidence-decidable' (an independent source can settle it — path:line, command output, or official documentation) versus 'taste/direction' (no independent evidence can settle it; the dispute is about values, style, or product direction).",
+      "expected_artifact": "classification record stating the dispute, the classification, and why",
+      "stop_condition": "every open disagreement has a recorded classification"
+    },
+    {
+      "step": 2,
+      "label": "evidence-adjudication",
+      "primitive": "audit",
+      "parallelizable": true,
+      "description": "For evidence-decidable disputes: dispatch heterogeneous verification (read the cited file, run the deterministic command, check the official doc) and rule strictly by the evidence. No voting — evidence decides, even when it sides with the minority.",
+      "expected_artifact": "per-dispute evidence record (path:line / command output / source citation) plus the ruling it forces",
+      "stop_condition": "each evidence-decidable dispute is settled by first-hand evidence",
+      "escalation": "evidence turns out unobtainable or ambiguous -> reclassify the dispute as taste/direction and proceed to step 3"
+    },
+    {
+      "step": 3,
+      "label": "human-escalation",
+      "primitive": "judge",
+      "description": "For taste/direction disputes: escalate to the human by default. Heterogeneous runner opinions are attached as advisory evidence only — they do not decide. A 2/3 majority may be followed ONLY when the human has explicitly pre-authorized 'go with the majority' for this dispute. A needs_human signal from any single auditor escalates immediately and cannot be overruled by a majority vote.",
+      "expected_artifact": "escalation brief: each party's position, its supporting argument, the advisory opinions, and the question posed to the human",
+      "stop_condition": "the human has ruled, or has explicitly authorized majority rule and the majority outcome is recorded",
+      "escalation": "needs_human from any auditor -> human, unconditionally; one vote suffices, majority cannot veto it"
+    },
+    {
+      "step": 4,
+      "label": "decision-record",
+      "primitive": "judge",
+      "description": "Write the decision record: each party's position, the evidence considered, the final ruling, and the rationale. File it in the repository's decision-log location. This artifact is prose for humans — deliberately not a findings JSON, because direction outcomes must be readable as decisions, not re-enter the blocker pipeline.",
+      "expected_artifact": "decision record (positions + evidence + ruling + rationale) in the decision log",
+      "stop_condition": "the decision record is on disk and referenced from the run state"
+    }
+  ],
+  "stop_conditions": [
+    "every disagreement is classified, and the classification is recorded",
+    "evidence-decidable disputes are settled by first-hand evidence, not by vote",
+    "taste/direction disputes are ruled by the human (or by a majority the human explicitly authorized in advance)",
+    "any needs_human signal resulted in escalation — it was never outvoted",
+    "a decision record exists for every settled dispute"
+  ],
+  "anti_patterns": [
+    "ap1:union-loop-on-direction — feeding a direction dispute into the findings-union convergence loop (it never converges)",
+    "ap2:same-family-three-votes — collecting three votes from the same model family and calling it a majority",
+    "ap3:majority-overrules-needs-human — using a 2/3 vote to suppress an auditor's needs_human signal",
+    "ap4:vote-on-taste-without-authorization — settling a taste dispute by vote when the human never authorized majority rule"
+  ]
+}

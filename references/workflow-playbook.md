@@ -35,10 +35,12 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 
 ## Playbooks
 
-> 其中三个场景已有配套的 data-only 场景插件（`plugins/` 下，合同见
+> 其中多个场景已有配套的 data-only 场景插件（`plugins/` 下，合同见
 > `plugin-boundary.md`）：`adversarial-audit`（review 的审计编队先验）、
 > `claim-verify-research`（claim-verify / research 的核验先验）、
-> `migration-refactor`（migration 的分批闸门先验）。插件提供 prompt /
+> `migration-refactor`（migration 的分批闸门先验）、
+> `dev-workflow`（feature-dev / docs-sync / direction-review 的全链路先验，
+> 设计依据见 `dev-workflow-spec.md`）。插件提供 prompt /
 > profile / path / eval 素材，**不替你选路**——读完本节再决定挂不挂。
 
 ### review
@@ -76,6 +78,8 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 - 让同一家 runtime 自审。
 - 只看“三个 agent 都说没问题”，不核源码和证据。
 - 把 `review` 做成一键通过闸门。
+
+注：building 阶段的中途 verification 也适用本节——边建边验，不等到收尾才审。
 
 ### debug
 
@@ -216,6 +220,163 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 - 把搜索结果堆叠成结论。
 - 不标明推断。
 - 为了“完整”继续无界检索，不回到任务目标。
+
+### feature-dev
+
+> 新需求从零到定版的全链路。六阶段（specify → dispatch → impl-audit →
+> converge → acceptance → release）是调度先验不是状态机，可在任何阶段
+> 进入、跳过、退出。设计依据与验收闸门定义见 `dev-workflow-spec.md`。
+
+触发信号：
+
+- 新需求 / 新功能从零开始；改动会产生新模块或新的对外行为。
+- 你发现自己想跳过 spec 直接写码。
+
+可用 primitive：
+
+- `lto start --goal/--why/--done-when` 记录目标与完成标准。
+- `lto task-add` 按阶段拆 task。
+- specify 阶段挂 `plugins/dev-workflow`（spec co-design 审可复用
+  `plugins/adversarial-audit` 的 refuter profile）。
+- `lto runner` 落实现证据；`lto audit --auto-dispatch` 做 impl-audit。
+- worktree_exec 在 dispatch 阶段隔离写入（specify 全程 read-only，
+  spec 收口后才开 worktree）。
+- `lto judge` / `lto closeout`。
+- 观测性查看触发条件：派工后看 `.lto/<run-id>/live/` 实时日志；收敛
+  卡壳看 `events.jsonl` 与 telemetry；做完复盘看 interventions 记录与
+  `lto recap --mine`。
+
+期望 artifact：
+
+- spec v1 与 v2（含异构审订正记录）
+- worktree 分支与 per-task evidence
+- findings union register
+- test-pin 测试文件
+- 验收闸门六条自查记录
+- changelog entry
+
+停止条件：
+
+- 验收闸门六条同时满足：脚本全绿 / 实物读验 / 对抗审收敛 / 文档同步 /
+  经验入库 / 可观测（新功能模块三件套：结构化日志 schema、doctor 入口、
+  排障命令）。任何一条豁免须显式记录理由。
+
+反模式：
+
+- 跳过 spec 直接写码。
+- 自审代替异构审。
+- 对抗审提到的不变量不落回归测试（test-pin 缺位）。
+- 把「实现完」当「做完」。
+- 观测性永远滞留 backlog。
+
+### docs-sync
+
+> 文档与代码对齐是独立任务形态——既不是 review 也不是 debug。
+
+触发信号：
+
+- 代码大改后；周期性 drift 审计。
+- 用户指出文档过时；changelog 与文档口径不一致。
+
+可用 primitive：
+
+- fan-out 多路审计扫 doc-vs-code drift（可挂 `plugins/dev-workflow` 的
+  `docs-drift-auditor-v1`）。
+- union 合并 findings；`lto runner --kind manual` 登记逐条修复证据。
+- 防 drift test-pin：从源码动态抽阈值/命令名，断言文档同值——改了代码
+  不同步文档即测试红。
+
+期望 artifact：
+
+- drift findings union 清单（命中 `drift-ok` 有意分歧注记的条目标
+  `intentional`，不算 drift）
+- 逐条修复 diff
+- 防 drift 测试
+
+停止条件：
+
+- union 清单逐条处理完（修复或标 intentional）。
+- 防 drift 测试落地并通过。
+
+反模式：
+
+- 只改 README 不查全部引用。
+- 修文档不加防 drift test。
+- 把有意分歧（ADR / 未来架构描述）当 drift 修掉。
+
+### release
+
+> 定版与对外发布。push 永远是人类闸门。
+
+触发信号：
+
+- 版本定版；对外 push；公开仓库同步；向他人交付。
+
+可用 primitive：
+
+- changelog 定版（版本号与条目对应）。
+- `bash scripts/privacy_self_check.sh --repo . --strict`（gitleaks 不可用
+  时加 `--no-gitleaks` 并在 run state 显式记录降级——dry-run 默认 exit 0，
+  不能冒充 strict 通过）。
+- 敏感扫描（私有项目名 / 内部路径 / 对话原文）。
+- `lto closeout --summary`；push 前 human gate。
+
+期望 artifact：
+
+- 版本号对应的 changelog 段
+- 隐私自检输出
+- closeout handoff
+- push 确认记录
+
+停止条件：
+
+- 隐私自检 strict 通过（或降级被显式记录且人类接受）。
+- 人工确认 push。
+- 沉淀完成（验收闸门第 5 条在 release 复查）。
+
+反模式：
+
+- push 与沉淀脱节。
+- 版本号无 changelog 对应。
+- 私有内容混入公开仓（gitignore + 敏感扫描双防线）。
+- 用 dry-run 的 exit 0 冒充 strict 通过。
+
+### direction-review
+
+> 方向 / 品味分歧与 findings 审计本质不同：findings 用 union 合并
+> （一条不漏），方向分歧默认升级人类——票决只是受限工具。
+
+触发信号：
+
+- 架构边界判断；两个都对但只能选一的方案分歧。
+- 审计方之间出现非事实性矛盾。
+
+可用 primitive：
+
+- 分歧分类：先判定是「证据可裁决」（有 path:line / 命令输出 / 官方文档
+  可核）还是「品味/方向」（无独立证据可裁决）。
+- 证据可裁决 → 派异构核验，按证据裁决（不投票）。
+- 品味/方向 → 升级人类；异构意见仅作为 advisory 证据附上。
+- 决策档落 decision log 类位置（见 `decision-logging.md`）。
+
+期望 artifact：
+
+- 分歧分类记录
+- 各方立场与证据
+- 决策档（含最终裁决与理由）
+
+停止条件：
+
+- 证据分歧被证据裁决；品味分歧由人类拍板并落档。
+- 任一审计方给出 needs_human 即直接升级，不被多数票否决；
+  2/3 票仅在人类显式授权「按多数走」时使用。
+
+反模式：
+
+- 用 findings union 流程处理方向分歧（永不收敛）。
+- 让同族模型投三票。
+- 用 2/3 票否决 needs_human。
+- 票决品味问题。
 
 ## 何时可以抽 CLI
 
