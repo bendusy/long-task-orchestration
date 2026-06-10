@@ -308,6 +308,50 @@ def _run_case(
         meta={"eval_case": case_id, "leg": "candidate", "profile": profile_id},
     )
 
+    # 负向 case（case_type: negative, expected_outcome: scheduler_reject）：
+    # 被测对象是 fail-closed 行为本身——派工必须在 validate 阶段被拒。
+    # 不 spawn 任何 agent；ok = 真被拒 且 拒绝消息命中 expected_error_contains。
+    # 来源：2026-06-10 agy read-only 实测（dev-workflow spec §5/§7）。
+    case_type = str(case.get("case_type", "positive"))
+    if case_type == "negative":
+        expected_outcome = str(case.get("expected_outcome", ""))
+        if expected_outcome != "scheduler_reject":
+            return {
+                "ok": False,
+                "case_id": case_id,
+                "error": f"unsupported negative expected_outcome: {expected_outcome!r}",
+            }
+        needle = str(case.get("expected_error_contains", ""))
+        rejection_error = ""
+        rejected = False
+        try:
+            baseline_job.validate()
+            candidate_job.validate()
+        except ValueError as exc:
+            rejected = True
+            rejection_error = str(exc)
+        neg_ok = rejected and (needle in rejection_error if needle else True)
+        comparison = {
+            "ok": neg_ok,
+            "case_id": case_id,
+            "case_type": "negative",
+            "runner": runner,
+            "profile": profile_id,
+            "expected_outcome": expected_outcome,
+            "expected_error_contains": needle,
+            "rejected": rejected,
+            "rejection_error": rejection_error,
+            "note": "negative case: passes when dispatch is rejected fail-closed at "
+                    "validate stage; no agents spawned, no judge layer",
+            "warnings": case_warnings,
+            "deferred": DEFERRED_V0,
+        }
+        (case_dir / "comparison.json").write_text(
+            json.dumps(comparison, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return comparison
+
     t0 = time.monotonic()
     results = agent_exec.spawn_agents(
         repo,

@@ -488,3 +488,101 @@ if __name__ == "__main__":
     import pytest
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_negative_case_scheduler_reject(tmp_path: Path) -> None:
+    """负向 case（case_type: negative）：派工被 fail-closed 拒绝即通过，零 spawn。
+
+    2026-06-10 dev-workflow spec §5：agy 无法兑现 read-only，scheduler validate
+    阶段拒绝是被测行为本身——eval-run 必须把这种拒绝判成 case ok 而不是崩 run。
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "rneg"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo, with_schema=False)
+
+    # 加一个 agy profile + 把 eval pack 改成 正向 codex case + 负向 agy case
+    (pdir / "profiles" / "agy.json").write_text(
+        json.dumps({
+            "id": "agy-profile-v1",
+            "runner": "agy",
+            "prompt_suffix": "REFUTE FIRST.",
+            "permission": {"sandbox": "read-only"},
+        }),
+        encoding="utf-8",
+    )
+    manifest = json.loads((pdir / "plugin.json").read_text(encoding="utf-8"))
+    manifest["provides"]["profiles"].append("profiles/agy.json")
+    (pdir / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (pdir / "evals" / "cases.json").write_text(
+        json.dumps({
+            "id": "mini-cases-v1",
+            "metrics": ["parse_rate", "private_path_leaks"],
+            "cases": [
+                {"id": "c1", "runner": "codex", "profile": "mini-profile-v1", "brief": "Audit this spec."},
+                {
+                    "id": "cneg",
+                    "runner": "agy",
+                    "profile": "agy-profile-v1",
+                    "brief": "Refute this playbook.",
+                    "case_type": "negative",
+                    "expected_outcome": "scheduler_reject",
+                    "expected_error_contains": "cannot enforce read-only",
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+    # runners 目录只有 codex.sh——负向 case 永不 spawn，缺 agy.sh 也必须能过
+    runners = _fake_runner_dir(tmp_path, reply='{"findings": []}')
+
+    report = plugin_eval_run.eval_run(
+        repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
+    )
+
+    neg = next(c for c in report["cases"] if c["case_id"] == "cneg")
+    assert neg["ok"] is True, neg
+    assert neg["case_type"] == "negative"
+    assert neg["rejected"] is True
+    assert "cannot enforce read-only" in neg["rejection_error"]
+    # 零 spawn：没有两腿结果文件，只有 comparison.json
+    cdir = repo / ".lto" / run_id / "plugin-eval" / "cneg"
+    assert (cdir / "comparison.json").exists()
+    assert not (cdir / "baseline-result.json").exists()
+    assert not (cdir / "candidate-result.json").exists()
+    # 正向 case 不受影响，整体 report ok
+    pos = next(c for c in report["cases"] if c["case_id"] == "c1")
+    assert pos["ok"] is True
+    assert report["ok"] is True
+
+
+def test_negative_case_unsupported_outcome_fails(tmp_path: Path) -> None:
+    """负向 case 只支持 scheduler_reject；未知 expected_outcome 判 case 失败不崩。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_id = "rneg2"
+    _init_run(repo, run_id)
+    pdir = _mini_plugin(repo, with_schema=False)
+    (pdir / "evals" / "cases.json").write_text(
+        json.dumps({
+            "id": "mini-cases-v1",
+            "metrics": ["parse_rate"],
+            "cases": [{
+                "id": "cbad",
+                "runner": "codex",
+                "profile": "mini-profile-v1",
+                "brief": "x",
+                "case_type": "negative",
+                "expected_outcome": "magic",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    runners = _fake_runner_dir(tmp_path, reply="{}")
+    report = plugin_eval_run.eval_run(
+        repo, run_id, pdir, runners_dir=runners, persist=False, max_concurrency=1
+    )
+    case = report["cases"][0]
+    assert case["ok"] is False
+    assert "unsupported negative expected_outcome" in case.get("error", "")
