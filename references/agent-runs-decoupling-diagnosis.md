@@ -1,4 +1,11 @@
-# 诊断：delegate 派工与 agent_runs 脱钩（只诊断，待拍板）
+# 诊断：delegate 派工与 agent_runs 脱钩（已采纳方案 A，2026-06-10 实现）
+
+> **状态更新（2026-06-10）**：用户拍板方案 A。`lto collect-agent-run` 已实现
+> （`scripts/lto/commands/collect_agent_run.py`），把 delegate.sh 派工的 reply +
+> `.meta.json` sidecar 收集成 AgentResult 追加进 `agent_runs[task_id]`，recap /
+> token_rollup / cross-run-mining 都能看见。下文保留原始诊断与权衡为决策记录。
+> 容错提示（next/recap 扫孤儿 sidecar 自动提示 collect）暂未做，留待按需补。
+
 
 > 2026-06-10。来源：pi agent 实测 LTO 跑研究型任务的反馈（"用 delegate.sh
 > 成功派了 codex 和 pi，但 LTO 完全不知道——agent_runs 为空、recap 不显示

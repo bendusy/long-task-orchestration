@@ -323,6 +323,62 @@ def test_task_update_and_phase(repo: Path) -> None:
        "phase/task_update: emit valid event types")
 
 
+def test_collect_agent_run(repo: Path) -> None:
+    """collect-agent-run bridges delegate.sh products into state.agent_runs so
+    recap/rollup see them. Regression for pi's 'agent_runs empty / recap no
+    token' report (delegate path decoupled from agent_exec)."""
+    lto = _lto_factory(repo)
+    r = lto("start", "--goal", "collect agent run e2e", "--host", "claude", "--force")
+    ok(r.returncode == 0, f"collect: start rc=0 (got {r.returncode})")
+    run_id = r.stdout.strip().split("/")[-1]
+    r = lto("task-add", "--task-id", "T1", "--title", "dispatch codex+pi")
+    ok(r.returncode == 0, f"collect: task-add rc=0 (got {r.returncode})")
+
+    # simulate delegate.sh products
+    (repo / "reply-codex.md").write_text("codex findings...\n", encoding="utf-8")
+    (repo / "reply-pi.md").write_text("pi findings...\n", encoding="utf-8")
+    (repo / "reply-pi.md.meta.json").write_text(
+        '{"tokens_in": 514, "tokens_out": 3683, "tokens": 87525}\n', encoding="utf-8")
+
+    # codex without sidecar → unmetered (cost empty, still recorded)
+    r = lto("collect-agent-run", "--task-id", "T1", "--runner", "codex", "--reply", "reply-codex.md")
+    ok(r.returncode == 0 and "unmetered" in r.stdout,
+       f"collect: codex unmetered run recorded (got {r.stdout.strip()[:80]})")
+    # pi with sidecar → tokens captured
+    r = lto("collect-agent-run", "--task-id", "T1", "--runner", "pi",
+            "--reply", "reply-pi.md", "--elapsed-sec", "53")
+    ok(r.returncode == 0 and "87525 tokens" in r.stdout,
+       f"collect: pi tokens captured (got {r.stdout.strip()[:80]})")
+
+    state = json.loads((repo / ".lto" / run_id / "state.json").read_text(encoding="utf-8"))
+    runs = state["agent_runs"]["T1"]
+    ok(len(runs) == 2, f"collect: agent_runs has both dispatches (got {len(runs)})")
+    pi_run = next(r for r in runs if r["runner"] == "pi")
+    ok(pi_run["cost"].get("tokens") == 87525 and pi_run["cost"].get("elapsed_sec") == 53.0,
+       f"collect: pi cost has tokens+elapsed (got {pi_run['cost']})")
+    codex_run = next(r for r in runs if r["runner"] == "codex")
+    ok(codex_run["cost"] == {}, f"collect: codex unmetered cost is empty (got {codex_run['cost']})")
+
+    # rollup honestly reports 1 of 2 metered
+    from lto import state as st_mod
+    roll = st_mod.token_rollup(state)
+    ok(roll["total_tokens"] == 87525 and roll["runs_with_tokens"] == 1 and roll["runs_total"] == 2,
+       f"collect: rollup is 87525 total, 1/2 metered (got {roll['total_tokens']}, "
+       f"{roll['runs_with_tokens']}/{roll['runs_total']})")
+
+    # unknown runner / missing reply / missing task are rejected
+    r = lto("collect-agent-run", "--task-id", "T1", "--runner", "bogus", "--reply", "reply-pi.md")
+    ok(r.returncode != 0 and "unknown runner" in (r.stderr + r.stdout), "collect: unknown runner rejected")
+    r = lto("collect-agent-run", "--task-id", "T1", "--runner", "pi", "--reply", "nope.md")
+    ok(r.returncode != 0 and "not found" in (r.stderr + r.stdout), "collect: missing reply rejected")
+    r = lto("collect-agent-run", "--task-id", "TX", "--runner", "pi", "--reply", "reply-pi.md")
+    ok(r.returncode != 0 and "no such task" in (r.stderr + r.stdout), "collect: unknown task rejected")
+
+    # cleanup the simulated products so later tests see a clean tree
+    for f in ("reply-codex.md", "reply-pi.md", "reply-pi.md.meta.json"):
+        (repo / f).unlink(missing_ok=True)
+
+
 def test_recap(repo: Path) -> None:
     """recap 基本路径：rc=0 + 六问输出齐全（给人看的回顾）。"""
     lto = _lto_factory(repo)
@@ -520,6 +576,8 @@ def main() -> int:
         test_closeout_untracked_cache_not_blocked(_make_repo(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         test_task_update_and_phase(_make_repo(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_collect_agent_run(_make_repo(Path(tmp)))
 
     if FAIL:
         print(f"\n{len(FAIL)} FAILURES", file=sys.stderr)
