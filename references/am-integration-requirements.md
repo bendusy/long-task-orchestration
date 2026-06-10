@@ -48,7 +48,10 @@ run 的成果投影出去；am 负责索引、召回、跨 run 模式挖掘。�
     而非报错或叠加）。**注意**：不要假设每条 record 都有 `sha256` 字段——只有
     `lto_artifact_memory` 有，其余 kind 没有。
   - **退出码契约**：写入失败（PG 不可达、schema 不符）要用非零退出码 + stderr
-    诊断，不要 exit 0 掩盖失败（这是今天另一处 am 反馈的通病：部分错误返回 0）。
+    诊断。**更正（2026-06-10，am 0.6.2 亲验）**：本文初稿说 am「部分错误返回 0」
+    是**误报**——实测 am 已是 `exit=1 + stderr 结构化 JSON`，错误信息齐全。
+    那条 `exit 0` 反馈出自 `yh`（yihub），被错安到 am 头上。LTO 侧 sink 直接按
+    am 现有的退出码 + stderr 判成败即可，此项 am 零工作。
 
 ### 2.2 写入后搜不到（FTS/向量不同步）
 
@@ -68,14 +71,17 @@ run 的成果投影出去；am 负责索引、召回、跨 run 模式挖掘。�
 - **对接要求**：`am get` 加一个 `--with-body` 选项（或默认带 body），从 md 真源
   读出正文一起返回。否则每个消费方都要自己拼 md 路径、自己读文件，重复且脆弱。
 
-### 2.4 library 写入校验缺失（写错库）
+### 2.4 library 与 slug 不一致（已澄清：非"大量"，是有意库迁移）
 
-- **现象**：观察到大量条目 **slug 里标着正确库名（如 `2026-06-09-技术-...`），
-  但 PG 的 `library` 字段却是另一个值（`工作`）**——写入时 library 被错误覆盖，
-  slug 保留了原始正确库名。导致按 library 过滤的 search 召回失真。
-- **对接要求**：`am write` 应校验 `library` 参数与 slug 前缀的库名一致（或至少
-  在不一致时 warn），防止批量写入时 library 字段被串味。这是 am 内部数据完整性
-  问题，但会直接影响 LTO publish 的条目能否被正确召回。
+- **更正（2026-06-10，am 0.6.2 亲验）**：本文初稿说"大量条目 slug 库名 ≠
+  library 字段"**不实**——LTO 侧只看到工作库 2144 条就推断"写错库"，是错误
+  归因。am 实测仅 **1 条**真不一致；那批 slug=`...-技术-...` 而 library=`工作`
+  的条目是**有意的库迁移**（办文→工作），slug 设计上不可变、但 library 迁了，
+  属预期行为不是 bug。
+- **对接要求（降级）**：`am write/ingest` 在 library≠slug前缀时**加 warn 不加
+  reject**（硬校验会和库迁移现实冲突——am 的判断，LTO 接受）。LTO publish 的
+  条目 library 由 LTO 投影显式指定（见拍板项），不依赖 slug 反推，所以这条对
+  LTO↔am 对接实际无阻碍。
 
 ## 3. LTO 侧承诺（对接契约的 LTO 半边）
 
@@ -143,8 +149,28 @@ run 的成果投影出去；am 负责索引、召回、跨 run 模式挖掘。�
 （task_id 对 run/project 级 record 为 NULL）。同键再写时，若带内容指纹
 （hash/sha256）则比指纹决定 update vs skip，不带指纹的（task/routing）直接 upsert。
 
+**⚠️ slug 反解析歧义（回应 am 方案的 slug 编码）**：am 拟用
+`lto-<project_key>-<run_id>-<kind>[-<task_id>]` 把复合键编码进 slug。问题：
+**这些字段自身都含 `-`**——`run_id` 形如 `20260604-224630-plugin-boundary-v0-...-9ee3507c`
+（10 个 `-`），`project_key`=`long-task-orchestration`（2 个 `-`），`kind`=`lto_run_snapshot`
+（含 `_`）。用 `-` 拼接后**无法可逆反解析**回 4 个字段。两条出路（am 选其一）：
+- **(A 推荐) slug 当不透明唯一键，不反解析**：去重的复合键从 record JSON 的
+  显式字段读（`record["project_key"]`/`["run_id"]`/`["kind"]`/`["task_id"]`），
+  slug 只是个稳定唯一字符串。LTO 投影里这 4 个字段都是独立显式字段（见 §6
+  样例），不需要从 slug 抠。
+- **(B) 要可逆就换不冲突的分隔符**：如 slug 用 `lto/<pk>/<run_id>/<kind>/<task_id>`
+  或对各段 base32，但更重也没必要——A 已够。
+
 **脱敏已做（am 不用再脱）**：`repo_path` → `[redacted-path]`，goal/why/done-when
 都是 `*_redacted` 字段，原始产物正文不进投影（只留 hash + summary）。
+
+**library / tag 归属（回应 am 拍板项 1）**：LTO 投影**当前不带 `library` 字段**，
+但 record 级已有 `tags`。约定：
+- LTO 投影进 **技术库**（沿用历史 REST 写入位置，零新库），由 am 在 ingest 时
+  按 record kind 默认归技术库——LTO 侧不显式指定 library。
+- **强制 `lto` tag**：LTO 在投影每条 record 的 `tags` 里加 `lto`（已有 tags 字段，
+  小改动），am 据此可隔离 / 过滤 LTO 运行记录，避免稀释技术库的人工经验召回。
+- 若日后 LTO 记录量大到污染技术库召回，再议单独立库——但先 tag 隔离够用。
 
 ## 7. 接 sink 的 LTO 侧就绪度（你这边的活，等 am CLI 后）
 
