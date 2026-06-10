@@ -82,6 +82,10 @@ run 的成果投影出去；am 负责索引、召回、跨 run 模式挖掘。�
   供 am 去重 / 关联。
 - LTO **不依赖 am 才能跑**：core 命令（start/runner/audit/closeout）零 am 依赖，
   publish 是可选的收尾动作。am 不可用时 LTO 照常工作。
+- **am 缺席时 `.lto/` 是回退记忆层**：没装 am，项目的 `.lto/` 目录就是全部记忆
+  ——每个 run 一个子目录（state/handoff/run-state/证据）。`lto runs` 列出本项目
+  所有历史 run，agent 进项目先看它。装了 am 后，`.lto/` 仍是真源，am 是它的
+  跨项目投影下游。换句话说：**LTO 的本地记忆永远在，am 是可选的长期/跨项目增强**。
 
 ## 4. 建议的对接验收（双方各跑一遍）
 

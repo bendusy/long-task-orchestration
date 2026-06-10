@@ -32,6 +32,26 @@ LTO 文档里反复出现这些词。第一次见不用全记，卡住了回这�
 | **worktree 沙箱** | 一份独立的 git worktree 副本。autopilot 自动执行的命令都在这里跑——`rm -rf` 再狠也只炸可弃副本，主工作树毫发无损。 |
 | **autopilot 档** | 自动化的梯度：`--supervised`（只出建议）→ `--auto-exec`（沙箱跑 safe 子步骤）→ `--decide`（派三方收敛）→ `--autonomous`（攒够证据后机械推进）。越往后放权越多，但每升一级都要更多证据。 |
 | **resume vs recap** | `resume` 给 **AI** 拉上下文（git head / task 状态）；`recap` 给 **人** 看的人话回顾（当初要做啥、做到哪、还剩啥）。 |
+| **`.lto/` 目录** | 本项目所有 LTO run 的落盘地。**am（animem）没装时，它就是这个项目的本地记忆层**——每个 run 一个子目录，记着目标/阶段/任务/证据/handoff。`lto runs` 列出全部。 |
+
+## 进项目第一件事：看 `.lto/` 了解 LTO 历史
+
+你（agent）接手一个项目时，**先跑 `lto runs`**——它列出本项目所有 LTO run
+（目标 / 阶段 / 任务进度 / 哪个是 current），让你一眼知道这里以前用 LTO 做过
+什么、做到哪。
+
+```bash
+lto runs                    # 本项目所有 run 概览（newest first）
+lto resume                  # 拉当前 run 的上下文（给 AI）
+lto recap                   # 当前 run 的人话回顾（给人）
+lto recap --mine            # 跨 run 模式：哪个 model/phase 在这项目里好用
+# 想看某个具体 run：读 .lto/<run-id>/{state.json, handoff.md, run-state.md}
+```
+
+**为什么这是第一步**：LTO 的记忆有两层——装了 am（animem）时，run 成果会
+publish 到 am 做跨项目长期记忆；**没装 am 时，`.lto/` 就是全部记忆**，且永远
+是本项目的真源（am 只是它的投影下游）。不看 `.lto/` 就开工，等于丢掉了这个
+项目所有历史 run 的经验，会重复踩前面踩过的坑。
 
 ## 它解决什么（你为什么要装它）
 
@@ -75,20 +95,24 @@ python3 <skill-root>/scripts/lto_run.py --repo <目标仓库> <子命令> [参�
 
 跨 runtime 当宿主的专项坑（沙箱、派工、preflight）见 `cross-runtime-host-notes.md`——不同家差异大，派工前先读。
 
-## 16 个命令速查
+## 22 个命令速查
 
-> 16 个子命令（`audit --discover-risks` 是 audit 的变体，不单独计数）。
+> 22 个子命令（`audit --discover-risks` 是 audit 的变体，与主命令同计）。
 
 | 命令 | 干什么 | 阶段 |
 |---|---|---|
 | `start --goal "..."` | 创建 `.lto/<run-id>/`，记下目标、宿主、HEAD | 开工 |
+| `runs` | **列本项目所有 LTO run**（目标/阶段/进度/current）。am 没装时 `.lto/` 就是本地记忆，进项目先跑这个 | 接续 |
 | `resume` | 跨 session 拉回上下文胶囊（目标/进度/上次失败/下一步） | 接续 |
 | `memory export/resume/publish` | 可选 artifact memory：导出 redacted projection / 发现历史 run / 显式发布到 sink | 接续 |
 | `next` | **事实简报**：分析状态 → 给下一步 primitive 建议或决策简报 | 导航 |
 | `check [--strict] [--to implementation\|closed] [--json]` | 校验状态完整性；只读输出 phase-entry 证据 | 自检 |
 | `preflight` | 探活环境（sandbox/network/git/mcp/tmux） | 自检 |
 | `task-add --task-id T1 --title "..."` | 给当前 run 加一个 task（runner/next 的操作对象） | 开工 |
+| `task-update --task-id T1 --status done` | 改 task 状态/证据/touched_files，**不跑 subprocess**（标记完成别滥用 runner --command true） | 执行 |
+| `phase [--set audit]` | 看 / 推进 run 的 current_phase（轻量，无 evidence 闸门；正式收尾走 check --to/closeout） | 导航 |
 | `runner --task-id T1 --command "..."` | 执行单 task（跑命令）+ 落证据 | 执行 |
+| `collect-agent-run --task-id T1 --runner codex --reply r.md` | 把 delegate.sh 手动派工的产物（reply+token sidecar）登记进 agent_runs，让 recap 看见 | 执行 |
 | `parallel --phase X` | 并发批量跑多 task 的 shell 校验命令 | 执行 |
 | `pipeline --stages "..." "..."` | 每 task 串行过多 stage（item 间并发） | 执行 |
 | `judge --phase X [--rerun-tests]` | 只读审查 + YAML verdict | 审查 |

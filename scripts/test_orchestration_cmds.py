@@ -379,6 +379,45 @@ def test_collect_agent_run(repo: Path) -> None:
         (repo / f).unlink(missing_ok=True)
 
 
+def test_runs_overview(repo: Path) -> None:
+    """`lto runs` lists real runs (with state.json) so an agent entering a
+    project sees its LTO history — the local memory when am isn't installed.
+    Ad-hoc dirs under .lto/ without state.json are filtered out."""
+    lto = _lto_factory(repo)
+    # no runs yet
+    r = lto("runs")
+    ok(r.returncode == 0 and "hasn't run LTO" in r.stdout or "no runs yet" in r.stdout
+       or "0 total" in r.stdout, f"runs: empty project handled (got {r.stdout[:60]})")
+
+    r = lto("start", "--goal", "first run for runs overview", "--host", "codex", "--force")
+    ok(r.returncode == 0, f"runs: start rc=0 (got {r.returncode})")
+    run_id = r.stdout.strip().split("/")[-1]
+    lto("task-add", "--task-id", "T1", "--title", "step one")
+    lto("task-update", "--task-id", "T1", "--status", "done")
+
+    # an ad-hoc scratch dir under .lto/ without state.json must NOT appear
+    scratch = repo / ".lto" / "scratch-replies"
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "note.md").write_text("not a run\n", encoding="utf-8")
+
+    r = lto("runs")
+    ok(r.returncode == 0, f"runs: list rc=0 (got {r.returncode})")
+    ok("first run for runs overview" in r.stdout, "runs: shows the run's goal")
+    ok(run_id in r.stdout, "runs: shows the run id")
+    ok("←current" in r.stdout, "runs: marks the current run")
+    ok("local memory" in r.stdout, "runs: explains .lto is local memory")
+    ok("scratch-replies" not in r.stdout, "runs: filters out non-run dirs (no state.json)")
+    ok("unreadable" not in r.stdout, "runs: no unreadable noise from scratch dirs")
+
+    r = lto("runs", "--json")
+    ok(r.returncode == 0, "runs: --json rc=0")
+    data = json.loads(r.stdout)
+    ok(data["count"] == 1 and data["current"] == run_id,
+       f"runs: json count=1 current matches (got count={data['count']})")
+    import shutil
+    shutil.rmtree(scratch, ignore_errors=True)
+
+
 def test_recap(repo: Path) -> None:
     """recap 基本路径：rc=0 + 六问输出齐全（给人看的回顾）。"""
     lto = _lto_factory(repo)
@@ -578,6 +617,8 @@ def main() -> int:
         test_task_update_and_phase(_make_repo(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         test_collect_agent_run(_make_repo(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_runs_overview(_make_repo(Path(tmp)))
 
     if FAIL:
         print(f"\n{len(FAIL)} FAILURES", file=sys.stderr)

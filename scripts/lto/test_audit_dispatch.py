@@ -12,7 +12,7 @@ from pathlib import Path
 from lto import agent_exec
 from lto import state as st
 from lto.agent_job import AgentJob, Budget, Pattern
-from lto.auditors import _parse_structured_reply, _pick_auditors
+from lto.auditors import _parse_structured_reply, _pick_auditors, readonly_intent_policy
 from lto.commands.audit import _build_brief, _discover_risks, _do_collect, _is_high_risk
 
 
@@ -147,6 +147,10 @@ def run() -> tuple[int, int]:
                 output_schema=schema,
                 budget=Budget(timeout_sec=30),
                 parent_pattern=Pattern.ADVERSARIAL.value,
+                # match production (audit.py): per-runner read-only intent —
+                # agy/gemini get workspace-write (their lowest enforceable), not
+                # a bare read-only that fail-closes since W4.
+                permission_policy=readonly_intent_policy(a),
             )
             for a in _pick_auditors("claude")
         ]
