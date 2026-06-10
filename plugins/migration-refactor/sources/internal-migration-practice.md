@@ -1,6 +1,6 @@
 # Source note: Batched migration/refactor with regression gates
 
-URL: internal:agent-skills/lto-release/practices/migration-refactor-2026
+URL: internal:host-private-repo/practices/migration-refactor-2026
 Captured: 2026-06-10
 
 ## Problem

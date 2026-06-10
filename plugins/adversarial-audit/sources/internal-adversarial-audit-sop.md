@@ -1,7 +1,7 @@
 # Internal SOP: Heterogeneous Adversarial Audit
 
 > Source type: internal operational distillation  
-> Origin: repeated multi-agent audit sessions (agent-skills repo, LTO Phase 5–6)  
+> Origin: repeated multi-agent audit sessions (private host repo, LTO Phase 5–6)  
 > Status: experimental — claims unverified at scale
 
 ## Core rules

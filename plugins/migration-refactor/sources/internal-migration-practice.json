@@ -1,7 +1,7 @@
 {
   "id": "note.internal.migration-practice.2026-06-10",
   "title": "Batched Migration/Refactor with Regression Gates — Internal Practice",
-  "url": "internal:agent-skills/lto-release/practices/migration-refactor-2026",
+  "url": "internal:host-private-repo/practices/migration-refactor-2026",
   "captured_at": "2026-06-10",
   "claims": [
     {
