@@ -202,6 +202,53 @@ def _load_mount_lock(path: Path, run_id: str) -> dict[str, Any]:
 
 
 
+def affordance_facts(repo: Path, run_id: str | None = None) -> dict[str, Any]:
+    """机械列出本机插件 affordance——感知面，不是路由。
+
+    零 LLM、零推荐：只陈列「有什么可挂、挂了什么」的事实，语义匹配
+    （哪个适合当前任务形态）永远归 host agent（读 workflow-playbook 判断）。
+    供 next / resume / start 在决策点重注入——长任务几十轮后 SKILL.md 早出
+    context 窗口，插件不在决策点可见就是死数据（2026-06-10 感知链路诊断）。
+
+    任何单插件解析失败都跳过，不抛——本函数绝不能弄崩调用它的简报命令。
+    """
+    available: list[dict[str, Any]] = []
+    for pdir in discover_plugins(repo):
+        try:
+            manifest = json.loads((pdir / "plugin.json").read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                continue
+            intents: list[str] = []
+            for rel in (manifest.get("provides", {}) or {}).get("paths", []) or []:
+                try:
+                    pdata = json.loads((pdir / str(rel)).read_text(encoding="utf-8"))
+                    intent = str(pdata.get("intent") or pdata.get("id") or "").strip()
+                    if intent:
+                        intents.append(intent[:80])
+                except (json.JSONDecodeError, OSError, ValueError):
+                    continue
+            available.append({
+                "id": _str(manifest.get("id")) or pdir.name,
+                "dir": str(pdir),
+                "description": _str(manifest.get("description"))[:160],
+                "path_intents": intents,
+            })
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
+    mounted: list[str] = []
+    if run_id:
+        try:
+            lock = _load_mount_lock(mount_lock_path(repo, run_id), run_id)
+            mounted = [
+                str(m.get("plugin_id"))
+                for m in lock.get("mounts", [])
+                if isinstance(m, dict) and m.get("plugin_id")
+            ]
+        except ValueError:
+            mounted = []
+    return {"available": available, "mounted": mounted}
+
+
 def render_profile(plugin_dir: Path, profile_id: str, input_path: Path, output_path: Path) -> dict[str, Any]:
     from .plugin_extra import render_profile as _render_profile
     return _render_profile(plugin_dir, profile_id, input_path, output_path)

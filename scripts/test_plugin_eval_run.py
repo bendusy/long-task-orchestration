@@ -586,3 +586,13 @@ def test_negative_case_unsupported_outcome_fails(tmp_path: Path) -> None:
     case = report["cases"][0]
     assert case["ok"] is False
     assert "unsupported negative expected_outcome" in case.get("error", "")
+
+
+def test_json_parses_preamble_before_fence() -> None:
+    """导语 + ```json fence 必须判可机读（claude 实测复发样本形态）；
+    裸导语无 fence 仍 False；非 JSON 代码块不误抓。"""
+    f = plugin_eval_run._json_parses
+    assert f('两个文件都已读取。指令要求纯 JSON 输出。\n\n```json\n[{"severity":"high"}]\n```') is True
+    assert f('Preamble.\n```\n[1, 2]\n```') is True
+    assert f('Preamble only, no fence, not json') is False
+    assert f('看这段 shell：\n```\necho hi\n```') is False

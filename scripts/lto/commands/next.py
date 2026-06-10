@@ -244,6 +244,30 @@ def build_decision_brief(facts: dict, state: dict, repo: Path | None = None) -> 
         lines.append("- ✅ All gates clear")
     lines.append("")
 
+    # ── Harness Affordances（感知面：机械事实，不是推荐；语义匹配归 host）──
+    # 长任务里 SKILL.md 早出 context 窗口，插件不在决策点可见就是死数据。
+    if repo is not None:
+        try:
+            from .. import plugins as plg
+            aff = plg.affordance_facts(repo, state.get("run_id"))
+            if aff["available"]:
+                lines.append("### Harness Affordances (facts only — matching them to "
+                             "your task shape is YOUR job; priors: references/workflow-playbook.md)")
+                lines.append("")
+                mounted = set(aff["mounted"])
+                lines.append(f"- Mounted plugins (this run): "
+                             f"{', '.join(sorted(mounted)) if mounted else 'none'}")
+                unmounted = [p for p in aff["available"] if p["id"] not in mounted]
+                if unmounted:
+                    lines.append("- Local plugins not mounted "
+                                 "(`lto plugin mount <dir> --run-id <id>` to use):")
+                    for p in unmounted:
+                        intents = f" (paths: {'; '.join(p['path_intents'])})" if p["path_intents"] else ""
+                        lines.append(f"  - `{p['id']}` — {p['description']}{intents}")
+                lines.append("")
+        except Exception:
+            pass  # 感知层绝不弄崩简报
+
     # ── Blocked Tasks ──
     if facts["blocked"]:
         lines.append("## Blocked Tasks")

@@ -604,18 +604,30 @@ def _sandbox_exceeds(snapshot: dict[str, Any] | str, approved: str) -> bool:
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
+# 退化路径：fence 前有导语时 search 第一个 fence（要求 json 标注或紧跟 [/{，
+# 避免误抓回复里引用的非 JSON 代码块）
+_FENCE_SEARCH_RE = re.compile(r"```json\s*\n(.*?)\n```|```\s*\n([\[{].*?)\n```", re.DOTALL)
 
 
 def _json_parses(text: str) -> bool:
-    """G: 用正则精确提取 ```json fence 内容，而非 strip('`')（会从两端剥所有反引号）。"""
+    """G: 用正则精确提取 ```json fence 内容，而非 strip('`')（会从两端剥所有反引号）。
+
+    fence 不在开头时退化 search 第一个 fence：prompt 已声明 fence 是可接受
+    形式，模型在 fence 前加导语是高频行为（claude 实测复发），导语+fence
+    仍是确定性可机读——指标度量「可机读性」，不是格式洁癖。裸文本（无 fence
+    且整体非 JSON）仍判 False。
+    """
     text = text.strip()
     if not text:
         return False
     m = _FENCE_RE.match(text)
     if m:
-        text = m.group(1).strip()
+        candidate = m.group(1).strip()
+    else:
+        s = _FENCE_SEARCH_RE.search(text)
+        candidate = ((s.group(1) or s.group(2) or "").strip() or text) if s else text
     try:
-        json.loads(text)
+        json.loads(candidate)
         return True
     except (json.JSONDecodeError, ValueError):
         return False

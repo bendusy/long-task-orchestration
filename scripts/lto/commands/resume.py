@@ -160,6 +160,23 @@ def _print_capsule(repo: Path, run_id: str, state: dict, warnings: list[str], re
     if revalidate:
         print(f"\n⚠ {len(revalidate)} tasks require revalidation: {', '.join(revalidate[:5])}")
 
+    # 感知面：跨 session 回来的第一个命令必须重注入 affordance 事实——
+    # SKILL.md 早出 context 窗口，插件不在这里可见就是死数据。零推荐，匹配归 host。
+    try:
+        from .. import plugins as plg
+        aff = plg.affordance_facts(repo, run_id)
+        if aff["available"]:
+            mounted = set(aff["mounted"])
+            names = ", ".join(
+                f"{p['id']}{' (mounted)' if p['id'] in mounted else ''}"
+                for p in aff["available"]
+            )
+            print(f"Plugins: {names}")
+            print("  → 任务形态先验见 references/workflow-playbook.md；"
+                  "细节 `lto plugin list`；挂载 `lto plugin mount <dir> --run-id <id>`")
+    except Exception:
+        pass  # 感知层绝不弄崩 capsule
+
     # 长 gap 提醒：人类侧 goal drift。距上次活动 >24h 时，提示给用户跑 recap。
     # capsule 本身是给 AI 的（git head/dirty），但隔了很久回来的人可能忘了在做什么。
     gap_hours = _max_session_gap_hours(state)

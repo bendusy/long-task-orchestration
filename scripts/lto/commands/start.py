@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import argparse, hashlib, re
+import argparse, hashlib, re, sys
 from datetime import datetime
 from pathlib import Path
 
@@ -125,6 +125,23 @@ def run(args: argparse.Namespace) -> int:
     )
 
     print(target_dir)
+
+    # 感知面：开工即陈列本机 affordance 事实（stderr，不污染 stdout 的 run 目录）。
+    # 零推荐——任务形态与插件的匹配由 host 读 workflow-playbook 判断。
+    try:
+        from .. import plugins as plg
+        aff = plg.affordance_facts(repo)
+        if aff["available"]:
+            ids = ", ".join(p["id"] for p in aff["available"])
+            print(
+                f"[lto] {len(aff['available'])} 个本机插件可挂载：{ids}\n"
+                "[lto] 任务形态先验见 references/workflow-playbook.md；"
+                "细节 `lto plugin list`，挂载 `lto plugin mount <dir> --run-id <id>`",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass  # 感知层绝不弄崩 start
+
     return 0
 
 
