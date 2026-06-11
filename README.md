@@ -49,7 +49,7 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 **跨天回来接着干**：`$L resume`（给 AI 拉上下文）或 `$L recap`（给人看人话回顾）。
 
-> 想看全部 16 个命令、它们的先后关系、autopilot 自动化怎么用——别在这儿翻，去 **[onboarding.md](./references/onboarding.md)**，那是给 agent 读的完整手册。
+> 想看全部 22 个命令、它们的先后关系、autopilot 自动化怎么用——别在这儿翻，去 **[onboarding.md](./references/onboarding.md)**，那是给 agent 读的完整手册。
 
 ## v0.3.0 新增（2026-06-09）
 

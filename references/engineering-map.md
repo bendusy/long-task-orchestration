@@ -74,6 +74,8 @@
 **harness primitive 底层模块**（不直接走 CLI，是 host agent 可组合的能力）：
 `agent_job.py`（AgentJob/AgentResult 数据合同）/ `scheduler.py`（并发+退出码三元判定+退避+healthcheck）/ `agent_exec.py`（spawn 原语）/ `worktree_exec.py`（autopilot 沙箱，17 攻击向量拦截）/ `progress.py`（推进检测+stall 闸门，防伪推进博弈）/ `decision.py`+`decision_brief.py`（双轨收敛引擎：direction 投票 / review union 合并，被 `autopilot --decide` 调用 spawn 三方）。
 
+host agent 在 CLI 命令之外高频用到的模块：`auditors.py`（readonly_intent_policy 唯一入口）/ `state.py`（所有命令的状态层）/ `llm_judge.py`（judge 底层）/ `artifacts.py`（artifact 真源）/ `events.py`+`telemetry.py`（Phase 1 事件层）/ `interventions.py`。（其余见 `scripts/lto/*.py`，共 26 个核心模块）
+
 ## 四、为什么这些步骤不脚本化（边界声明）
 
 - **S1/G1 刹车**：「现在真需要 X 吗」「可以写代码了吗」是价值判断，没有确定性输入→输出函数。G1 的证据采集可脚本化，但最终批准仍由人拍板；脚本不能输出“ready/approved”。

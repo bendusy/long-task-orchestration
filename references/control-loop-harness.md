@@ -35,7 +35,7 @@ Primary outcomes:
 | Plant | Real work being done in repo, docs, tests, deployment | Messy external system. |
 | Sensors | `state.json`, `artifacts.json`, runner stdout/stderr, tests, git state, issue/finding logs | Sensors can be noisy. |
 | Observer / estimator | `check`, `judge`, `audit`, privacy scan, schema parsers | Estimates truth; never truth itself. |
-| Advisory brief (host-decided) | `next`, `recap`, `autopilot --supervised` | Surfaces signals and candidate facts; host decides. |
+| Advisory brief (host-decided) | `next`, `recap`, `autopilot --supervised`, `autopilot --decide` | Surfaces signals and candidate facts; host decides. `--decide` escalates to three-way heterogeneous agents and returns a convergence brief, still host-decided. |
 | Actuators | `runner`, `parallel`, `pipeline`, delegate runners, worktree exec | Must be bounded. |
 | Actuator limiter | `PermissionPolicy`, worktree sandbox, budget, timeout, concurrency, human approval | Prevents runaway action. |
 | Supervisor | Human + host agent | Final authority. |

@@ -94,7 +94,7 @@ LTO 是 **A harness for every task**：它给主 agent 一套任务操作系统�
 - `lto runner --task-id <id> --kind test --command "..."`
 - `lto next`
 - `lto autopilot --supervised`
-- 必要时手动或通过 agent-delegate fan-out 多个独立诊断假设。
+- 必要时手动或通过 repo 自带 `scripts/delegate/` fan-out 多个独立诊断假设。
 
 期望 artifact：
 

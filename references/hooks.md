@@ -63,7 +63,7 @@ artifact memory publish 是可选增强，不是核心 hook：
   warning 或 retry artifact，不能阻断本地 `.lto` 状态写入；
 - `lto resume` 和 `lto memory resume` 都必须保持只读，不触发 publish。
 
-没装 ANIMEM 或未配置 `MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 时，LTO hook 仍应正常工作。
+publish 默认走 am-cli sink（am 0.7.0+），`MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 为 legacy-rest 兜底。没装 ANIMEM 或未配置上述环境变量时，LTO hook 仍应正常工作。
 
 ## 安装（opt-in，2026-06-03 改）
 

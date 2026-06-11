@@ -5,7 +5,7 @@
 > **命名诚实说明**：LTO 的 `parallel`/`pipeline` 借用了 pi-dynamic-workflows 的**命令名**，但**语义不同**。
 > pi-dynamic-workflows 编排的单元是 `agent(prompt)`——拉独立子 agent 跑 LLM 任务（fan-out + 隔离 + 沙箱确定性）。
 > LTO 编排的单元是 **shell 命令**（`pytest`/`lint` 等批量校验），跑在同一个 repo cwd、共享 git HEAD。
-> 这是**命令批处理**，不是 agent fan-out。需要真正的多 agent 分工请走 `agent-delegate`（codex/pi/agy）。
+> 这是**命令批处理**，不是 agent fan-out。需要真正的多 agent 分工走 `lto audit --auto-dispatch`（Python 路径，scheduler 派异构审计方）或 repo 自带 `scripts/delegate/`（codex/pi/agy 手动 fan-out）。
 
 ## parallel
 

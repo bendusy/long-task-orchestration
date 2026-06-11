@@ -68,7 +68,7 @@ publish 到 am 做跨项目长期记忆；**没装 am 时，`.lto/` 就是全部
 ### 前提
 - Python 3.10+、bash。
 - 纯标准库，无第三方依赖（核心命令）。
-- 可选：`agent-delegate` skill（提供 codex/pi/agy/claude 的 runner 脚本，`lto audit --auto-dispatch` 和 spawn agent 要用它）。没有它，审计走手动派工路径仍可用。
+- 异构派工 runner：repo 自带 `scripts/delegate/`（runners/codex.sh、pi.sh、agy.sh、claude.sh + healthcheck.sh），`lto audit --auto-dispatch` 和 spawn agent 直接用它，无需外部 skill。前提是本机至少装好其中两家 CLI。
 - 可选：ANIMEM / memory-flow。没装也能完整使用 LTO 核心命令；它只增强跨项目 artifact memory。
 
 ### 找到入口

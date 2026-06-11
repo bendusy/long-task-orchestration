@@ -10,7 +10,7 @@
 |---|---|---|---|
 | 代码层 | git HEAD + commit 内容 | `git log --oneline -8 && git rev-parse HEAD` | 代码改动真落了没 |
 | 运行层 | 服务 pid + health + bin mtime | `ssh <prod-host> 'ss -tlnp \| grep <port>; stat -c %y <bin-path>'` | 生产真在跑哪个版本 |
-| 落盘层 | 按精确 slug 读里程碑 | `experience_read <slug>` | 这事真做完没（落盘是完成标志） |
+| 落盘层 | 读 run 的 artifact 真源 | `lto resume`（打印 recent artifacts）/ 直接读 `.lto/<run-id>/artifacts.json` | 这事真做完没（落盘是完成标志） |
 
 **冲突时信证据**：续会话指令描述的状态比一手证据旧 → 信证据，拒绝重做。
 
@@ -18,13 +18,15 @@
 
 ### run-state 文件是恢复锚点
 
-新开长任务时，跑 `../scripts/lto_run.py start --goal <goal>`（默认 `--profile minimal` 只创建 `run-state.md`；`--profile audit` 加 `audit-ledger.md`；`--profile deploy` 在 audit 基础上再落一份 preflight 环境快照进 `state.json`）。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `../scripts/lto_run.py check [--strict]`；要判断能否进写码/收尾，再跑 `../scripts/lto_run.py check --to implementation|closed [--strict]` 读 phase-entry evidence。之后按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
+新开长任务时，跑 `scripts/lto_run.py start --goal <goal>`（默认 `--profile minimal` 只创建 `run-state.md`；`--profile audit` 加 `audit-ledger.md`；`--profile deploy` 在 audit 基础上再落一份 preflight 环境快照进 `state.json`）。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `scripts/lto_run.py check [--strict] [--json]`；要判断能否进写码/收尾，再跑 `scripts/lto_run.py check --to implementation|closed [--strict]` 读 phase-entry evidence——注意 `check --to` 出的报告带 `human_gate_required: true`，不自动放行；真正推进 phase 用 `scripts/lto_run.py phase --set <phase>`。之后按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
 
 ## 二、后台派工不阻塞 + 等待期挖地基
 
-- **派**：审计/调研用 `Workflow`（后台）或 `triad.sh`（tmux window）跑，主对话立刻去做别的。
-- **不空等**：完成会主动通知（task-notification）。**别轮询**——harness 会叫醒你。
-- **设兜底心跳**：用 `ScheduleWakeup` 设长心跳（1200s+）防 workflow 挂死。注意：短心跳轮询已完成的后台任务是浪费——只设长兜底。
+> 本节的 `Workflow` / `task-notification` / `ScheduleWakeup` 是**宿主 agent 平台**（如 Claude Code harness）的能力，不是 LTO 命令；`scripts/delegate/triad.sh` 才是 repo 自带的 tmux 派工脚本。下面描述的是「主 agent 在宿主环境里怎么用 LTO」的工作模式。
+
+- **派**：审计/调研用宿主的 `Workflow`（后台）或 repo 自带 `scripts/delegate/triad.sh`（tmux window）跑，主对话立刻去做别的。
+- **不空等**：完成会主动通知（宿主的 task-notification）。**别轮询**——harness 会叫醒你。
+- **设兜底心跳**：用宿主的 `ScheduleWakeup` 设长心跳（1200s+）防后台任务挂死。注意：短心跳轮询已完成的后台任务是浪费——只设长兜底。
 - **等待期做什么**：趁等待**挖下一步需要的事实地基**（真实代码 / 真实分布 / 真实配置），不靠记忆。等结果回来时，地基已备好可立刻校验子代理产出。
 - **回收即记**：后台任务返回后，把 reply 路径、exit、字节数、采纳/否决状态写回 run-state；否则下一次 resume 只剩口头印象。
 

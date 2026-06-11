@@ -295,7 +295,7 @@ eval pack 与现有三插件同合同：
   审计方之间出现非事实性矛盾。
 - 可用 primitive：分歧分类（证据可裁决 vs 品味/方向）；
   证据可裁决→异构核验裁决；品味/方向→升级人类（异构意见仅 advisory）；
-  决策档落 `.codestable` / decision log 类位置。
+  决策档落 decision log 类位置（见 `decision-logging.md`）。
 - 期望 artifact：分歧分类记录、各方立场与证据、决策档（含理由）。
 - 停止条件：证据分歧被证据裁决；品味分歧由人类拍板并落档；
   任一审计方 needs_human 即升级，不被多数票否决。

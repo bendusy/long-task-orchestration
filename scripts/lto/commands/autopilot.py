@@ -1,14 +1,17 @@
-"""lto autopilot — 自驱动 orchestrator（分阶段实现）。
+"""lto autopilot — 自驱动 orchestrator（梯度自动化，三档已实现）。
 
-当前阶段（spec 阶段 3）：仅 --supervised 的"增强 brief"形态。
-- 读状态 → analyze → 出富决策简报 + 候选动作 + 路由建议 → 回吐宿主 LLM。
-- **此阶段不自动执行任何命令**。自动执行档（阶段 5）需 worktree 沙箱
-  四件套验收红线全绿才开（spec 强制规则）。
-- 集成 G4 progress 做 stall 提示（与上一次 autopilot 快照比）。
+三档自动化（按权限递增，每升一级多一层证据/沙箱约束）：
+- --supervised：读状态 → analyze → 出富决策简报 + 候选动作 + 路由建议 → 回吐
+  宿主 LLM。不自动执行任何命令。集成 G4 progress 做 stall 提示。
+- --supervised --auto-exec：在 worktree 沙箱内跑被判定 safe 的子步骤
+  （沙箱四件套红线为前置闸门）。
+- --autonomous：受数据驱动证据闸门（_autonomous_gate）约束，攒够跨 run 真实
+  派工样本才解锁；过闸后默认开 auto-exec 连续推进。**绝不 spawn 决策 agent**——
+  只做机械证据闸门 + 机械执行，反思/决策永远归宿主 LLM。
 
 设计契约（三方两轮复核定）：
-- 决策权留宿主 LLM；autopilot 只整理事实 + 建议，不替宿主决定。
-- --autonomous 档（spawn 决策 agent）不进本期。
+- 决策权留宿主 LLM；autopilot 只整理事实 + 建议（或机械推进 safe 子步骤），
+  不替宿主决定。autonomous 不是 LTO 自主决策回路，是受闸的机械推进。
 """
 
 from __future__ import annotations
@@ -446,5 +449,7 @@ def add_parser(subparsers) -> None:
                    help="approx token budget for --decide (default 50000; pass 0 to force "
                         "needs_human without spawning; engine degrades gracefully if insufficient)")
     p.add_argument("--autonomous", action="store_true",
-                   help="autonomous mode (NOT YET IMPLEMENTED — spec phase 6)")
+                   help="autonomous mode: evidence-gated mechanical auto-exec "
+                        "(gate requires cross-run agent_runs samples to unlock; "
+                        "never spawns a decision agent — reflection stays with host)")
     p.set_defaults(func=run)

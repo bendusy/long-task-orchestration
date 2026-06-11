@@ -10,7 +10,7 @@ description: >-
 metadata:
   tier: agent-driven
   domain: infra
-  optional_integrations: [memory-flow]
+  optional_integrations: [am, memory-flow]
   status: active
 allowed-tools: [Bash, Read, Write, Edit, Task, AskUserQuestion]
 ---
@@ -28,7 +28,7 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 - **Primitive 优先于产品命令**：先组合 `runner`、`audit`、`judge`、`next`、`autopilot`、`recap`；只有真实重复路径自然沉淀，才抽最薄 CLI。
 - **外部观点先进插件，不进 core**：有趣文章先做 `source_note → experimental path plugin → eval → promote/reject`，详见 `references/plugin-boundary.md`。插件只编译到现有 primitive，不替 host 规划、不自带升权。
 - **自动化是梯度**：brief → supervised → sandboxed auto-exec → human gate。每一级都必须保留证据、可恢复状态和人工刹车。
-- **运行中可见、用量可查**：每个派工的输出边跑边写进 `.lto/<run-id>/live/<job-id>.log`，卡住时 `tail` 就能看（学 tmux-autopilot 可观测精髓但不用 tmux，scheduler 仍是确定性 subprocess）。token 用量按 runner 计量（codex/pi/claude 三家真实，agy 无 CLI 用量诚实标 unmetered），`recap`/`closeout` 汇总「这次 run 烧了多少 token」。
+- **运行中可见、用量可查**：每个派工的输出边跑边写进 `.lto/<run-id>/live/<job-id>.log`，卡住时 `tail` 就能看（学 tmux-autopilot 可观测精髓但不用 tmux，scheduler 仍是确定性 subprocess）。token 用量按 runner 计量（四家 runner 中 codex/pi/claude 有真实计量，agy 无 CLI 用量诚实标 unmetered），`recap`/`closeout` 汇总「这次 run 烧了多少 token」。
 - **`.lto/` 是本地记忆，进项目先看**：装了 am（animem）时 run 成果 publish 到 am 做长期记忆；**没装 am 时 `.lto/` 就是全部记忆**（永远是本项目真源，am 只是下游投影）。接手项目第一件事跑 `lto runs`——列出本项目所有历史 run（目标/阶段/进度），别丢掉前人经验重复踩坑。
 
 ## 三个核心原则
@@ -252,7 +252,7 @@ $LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 t
 - `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper
 - `references/onboarding.md` — **给 agent 读一份就懂怎么装载 LTO**（跨 runtime）
 - `references/workflow-playbook.md` — `review/debug/migration/claim-verify/research` 调度先验
-- `references/run-state-workflow.md` — 18 命令详细用法手册
+- `references/run-state-workflow.md` — 完整命令详细用法手册
 - `references/execution-loop.md` — runner/judge/parallel/pipeline + agent 执行层
 - `references/hooks.md` — pre-commit/pre-deploy/pre-closeout 边界 hook（opt-in）
 - `references/sharing-guide.md` — 怎么装、怎么给朋友用、项目级注入

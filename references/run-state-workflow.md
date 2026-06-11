@@ -22,6 +22,12 @@ python3 scripts/lto_run.py start \
   --host codex \
   --with-audit
 
+# deploy profile: audit 超集，额外落 preflight 环境快照进 state.json
+python3 scripts/lto_run.py start \
+  --goal "deploy task" \
+  --host codex \
+  --profile deploy
+
 # opt-in: install LTO pre-commit gate into .git/hooks (skips if husky/pre-commit detected)
 #   add --install-hooks ; NOT installed by default
 ```
@@ -45,8 +51,8 @@ lto --repo /path/to/target/repo start --goal "short task goal" --host codex
 lto check --repo /path/to/target/repo
 ```
 
-The wrapper is sentinel-managed and points at the current `agent-skills`
-checkout. If the repo moves, rerun `scripts/install.sh`.
+The wrapper is sentinel-managed and points at the current
+`long-task-orchestration` checkout. If the repo moves, rerun `scripts/install.sh`.
 
 This creates `.lto/<run-id>/` with:
 - `state.json` — machine-readable state (source of truth)

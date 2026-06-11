@@ -195,7 +195,7 @@ For plugin-influenced jobs, host should verify (✅ = checked by `eval-run` dete
 
 - useful for adversarial framing;
 - require output contract gate because some runs produce pointer-only replies;
-- v0 write tasks should remain disabled unless separately proven.
+- v0 write tasks should remain disabled unless separately proven. agy/gemini 无法兑现 read-only（agy 无 read-only 档），scheduler validate 时 fail-closed 拒绝其 read-only 审计。
 
 ### Claude
 

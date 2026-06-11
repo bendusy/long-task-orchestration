@@ -13,7 +13,7 @@
 | ⑥ | **跨 run 数据挖掘 → 进化**（按 runner模型×status×时间 聚合，挖真实有效性喂回 host） | ★★★ 最高 | **P0-next** | ✅ 已实现 | **① 的下游闭环**：双源(agent_runs+events)合一 brief；distinct-run 闸门；codex 审 6 条修 |
 | ⑦ | **`AgentResult` 落 `model` 字段**（让 ⑥ 区分同 runner 不同 model） | ★★ 高 | **P1** | ✅ 已实现 | scheduler 单点回填 job.model；⑥ 挖掘出 model 分布；向后兼容 |
 | ③ | `autopilot --autonomous` 机械闸门+机械执行（不 spawn 决策 agent） | ★ 中 | P2 | ✅ 已实现 | 证据闸门读⑥；codex 审 2BLOCKER+3HIGH 修；与 --decide 互斥 |
-| ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | 外部阻塞 | 等 am（animem）下游接口稳定 |
+| ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | ✅ 已实现 | am 0.7.0 AmCliSink 落地真跑；am 可选，无 am 优雅降级 |
 | ⑤ | `AgentJobKind.TOURNAMENT` / `LOOP` 枚举 | ☆ 低 | **P3 不做** | YAGNI | 无真实触发场景，保持占位 |
 | ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
 
@@ -22,7 +22,7 @@
 ```text
 ① events.jsonl  ──解锁──▶  ③ autonomous（要真实 escalate 数据）
                 └─喂证据──▶  ② llm_judge（评分要可复现的事件证据）
-④ memory_sink ◀──阻塞── am 开发中（外部）
+④ memory_sink  ── ✅ 已实现（AmCliSink / am 0.7.0，am 可选）
 ⑤ tournament/loop  ── 不做（YAGNI）
 ```
 
@@ -49,15 +49,14 @@
 
 ## ③ autopilot --autonomous（P2，被 ① 解锁）
 
-- **是什么**：escalate 时自动 spawn 决策 agent + 自动执行回路（当前 `--supervised` / `--auto-exec` / `--decide` 已实现）。
+- **是什么**：机械证据闸门（`_autonomous_gate`）+ 机械执行 safe 子步骤，**绝不 spawn 决策 agent**（与 `--decide` 互斥，运行时强制清掉）；反思/决策永远归宿主 LLM（当前 `--supervised` / `--auto-exec` / `--decide` 已实现）。
 - **为何延后**：spec 明说「先攒 supervised 真实 escalate 数据再决定值不值」——而数据正来自 ①。在 ① 落地、攒够真实 escalate 样本前做它=赌。
-- **锚点**：`scripts/lto/commands/autopilot.py:47`、`SKILL.md` autopilot 档位说明。
+- **锚点**：`scripts/lto/commands/autopilot.py` 的 `_autonomous_gate` 函数 / `run()` 里 autonomous mode 分支、`SKILL.md` autopilot 档位说明。
 
-## ④ memory_sink（P2，外部阻塞）
+## ④ memory_sink（P2）
 
-- **是什么**：`scripts/lto/memory_sink.py` 两个 `NotImplementedError` —— 记忆回写落地。
-- **为何延后**：下游 am（animem）正在开发，接口未定，现在实现=对着移动靶。
-- **解除条件**：am 回写接口稳定后接入，留 stub。
+- **是什么**：`scripts/lto/memory_sink.py` 记忆回写落地。
+- **现状**：✅ 已实现（am 0.7.0，AmCliSink 落地真跑）。`AmCliSink.publish()` 调 `am ingest -f - --json` 吃整个信封，`AmCliSink.resume()` 调 `am search`，两个方法均有完整实现；基类 `MemorySink` 的两个 `NotImplementedError` 是抽象方法占位符（非缺口），子类 `AmCliSink` / `LegacyMemoryFlowSink` 均已覆盖。am 是可选项——没装 am 时 `_require_binary` 优雅降级，`.lto/` 仍是真源。
 
 ## ⑤ TOURNAMENT / LOOP 枚举（P3，不做）
 
