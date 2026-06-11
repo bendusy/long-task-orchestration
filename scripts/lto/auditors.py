@@ -11,10 +11,10 @@ from .agent_job import PermissionPolicy
 
 _VALID_SEVERITIES = {"critical", "high", "medium", "low"}
 
-# yh 质检 cap（gov-doc-verify / govdocx-qc / chengpi-gate）按约定输出中文
-# severity（"严重"/"警告"/"提示"），由 LTO 侧自映射到四档。映射保守：yh 的
-# "警告"不全等于 LTO 的 high（yh 阈值偏宽，chengpi-gate 曾 22 violations 仍
-# pass），但归一后由 LTO 自己的 --high/--critical 闸门决定收敛标准。
+# 外部质检 / 评审工具常输出中文 severity（"严重"/"警告"/"提示"等），由 LTO
+# 侧归一到四档。映射保守：外部工具的阈值口径不一定等于 LTO 的分级（有些工具
+# 阈值偏宽），归一只统一字段，最终收敛标准由 LTO 自己的 --high/--critical
+# 闸门决定，不照搬外部工具的 pass/fail。
 _SEVERITY_ALIASES = {
     "严重": "critical", "致命": "critical", "阻断": "critical", "blocker": "critical",
     "警告": "high", "高危": "high", "高风险": "high",
@@ -24,7 +24,7 @@ _SEVERITY_ALIASES = {
 
 
 def _normalize_severity(value) -> str:
-    """Map a raw severity (English or yh's Chinese) to LTO's four-tier scale.
+    """Map a raw severity (English or Chinese) to LTO's four-tier scale.
     Unknown values pass through lowercased so _is_findings_list can reject them."""
     raw = str(value or "").strip()
     low = raw.lower()
@@ -35,7 +35,7 @@ def _normalize_severity(value) -> str:
 
 def _normalize_finding(item: dict) -> dict:
     """Normalize one finding in place-ish: map severity to LTO scale and lift
-    yh's nested location.{file,...} up to a top-level `file` for ledger use.
+    a nested location.{file,...} up to a top-level `file` for ledger use.
     Returns a new dict; original is not mutated."""
     out = dict(item)
     out["severity"] = _normalize_severity(item.get("severity"))
@@ -63,7 +63,7 @@ _FAMILY = {
 
 def _is_findings_list(data) -> bool:
     """Return True when data is a non-empty findings list with valid severities.
-    Severity is normalized first so yh's Chinese severities (严重/警告/提示) pass."""
+    Severity is normalized first so Chinese severities (严重/警告/提示) pass."""
     if not isinstance(data, list) or len(data) == 0:
         return False
     for item in data:
@@ -76,8 +76,8 @@ def _is_findings_list(data) -> bool:
 
 def _findings_from_any(data) -> list[dict] | None:
     """Extract a findings list from either a bare array or an object that wraps
-    one under a `findings` key (yh质检 cap 的 --json 输出是 {pass, issues,
-    findings:[...], summary})."""
+    one under a `findings` key (some quality-gate tools emit
+    {pass, issues, findings:[...], summary} rather than a bare array)."""
     if _is_findings_list(data):
         return [_normalize_finding(item) for item in data]
     if isinstance(data, dict):
@@ -91,8 +91,9 @@ def parse_findings_text(text: str) -> list[dict] | None:
     """Parse structured JSON findings from text.
 
     Accepts a bare JSON findings list, an object wrapping one under `findings`
-    (yh质检 cap output), or the first valid ```json ... ``` block. Empty arrays
-    intentionally return None to preserve existing audit fallback behavior.
+    (some quality-gate tools wrap it), or the first valid ```json ... ``` block.
+    Empty arrays intentionally return None to preserve existing audit fallback
+    behavior.
     """
     if not text:
         return None

@@ -116,33 +116,34 @@ def run() -> tuple[int, int]:
     c.ok("```json" in brief, "S5a JSON code block present")
     c.ok('"severity"' in brief and '"claim"' in brief, "S5b schema fields present")
 
-    print("\n[S11] yh质检 cap findings adapter (Chinese severity + object wrap)")
-    # yh gov-doc-verify --json 输出：顶层对象裹 findings[]，severity 中文，
-    # location 是对象。LTO 侧自映射到四档 + 提 location.file 到顶层。
-    yh_output = json.dumps({
+    print("\n[S11] external quality-gate findings adapter (Chinese severity + object wrap)")
+    # Some external quality-gate tools emit --json as an object wrapping
+    # findings[] with Chinese severity and a nested `location` object. LTO
+    # normalizes severity to the four-tier scale and lifts location.file up.
+    gate_output = json.dumps({
         "pass": False,
-        "issues": [{"type": "标题序号", "severity": "严重"}],
+        "issues": [{"type": "rule-a", "severity": "严重"}],
         "findings": [
-            {"severity": "严重", "claim": "标题序号层级错",
-             "location": {"file": "doc.docx", "paragraph": 3}, "source_cap": "gov-doc-verify", "rule": "标题序号"},
-            {"severity": "警告", "claim": "混淆字",
-             "location": {"file": "doc.docx", "paragraph": 12}, "source_cap": "gov-doc-verify", "rule": "混淆字"},
-            {"severity": "提示", "claim": "建议补落款",
-             "location": {"file": "doc.docx"}, "source_cap": "gov-doc-verify", "rule": "落款"},
+            {"severity": "严重", "claim": "blocking defect",
+             "location": {"file": "report.md", "paragraph": 3}, "source_cap": "quality-gate", "rule": "rule-a"},
+            {"severity": "警告", "claim": "likely issue",
+             "location": {"file": "report.md", "paragraph": 12}, "source_cap": "quality-gate", "rule": "rule-b"},
+            {"severity": "提示", "claim": "minor suggestion",
+             "location": {"file": "report.md"}, "source_cap": "quality-gate", "rule": "rule-c"},
         ],
         "summary": {"严重": 1, "警告": 1, "提示": 1},
     }, ensure_ascii=False)
-    yf = parse_findings_text(yh_output) or []
-    c.ok(len(yf) == 3, "S11a yh object-wrapped findings extracted (3)")
-    c.ok([f["severity"] for f in yf] == ["critical", "high", "low"],
+    gf = parse_findings_text(gate_output) or []
+    c.ok(len(gf) == 3, "S11a object-wrapped findings extracted (3)")
+    c.ok([f["severity"] for f in gf] == ["critical", "high", "low"],
          "S11b Chinese severity 严重/警告/提示 → critical/high/low")
-    c.ok(yf[0].get("file") == "doc.docx" and yf[2].get("file") == "doc.docx",
+    c.ok(gf[0].get("file") == "report.md" and gf[2].get("file") == "report.md",
          "S11c nested location.file lifted to top level")
-    c.ok(yf[0].get("source_cap") == "gov-doc-verify" and yf[0].get("rule") == "标题序号",
+    c.ok(gf[0].get("source_cap") == "quality-gate" and gf[0].get("rule") == "rule-a",
          "S11d source_cap/rule passthrough for ledger")
-    # yh output inside a ```json fence (agent may wrap it)
-    fenced = "审计：\n```json\n" + yh_output + "\n```\n"
-    c.ok(len(parse_findings_text(fenced) or []) == 3, "S11e yh object inside fence parsed")
+    # gate output inside a ```json fence (agent may wrap it)
+    fenced = "审计：\n```json\n" + gate_output + "\n```\n"
+    c.ok(len(parse_findings_text(fenced) or []) == 3, "S11e object inside fence parsed")
     # empty findings object stays None (preserve text fallback)
     c.ok(parse_findings_text(json.dumps({"pass": True, "findings": []})) is None,
          "S11f empty findings object returns None")

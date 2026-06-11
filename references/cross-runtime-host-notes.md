@@ -41,7 +41,7 @@ pi --provider deepseek --model deepseek-v4-pro
 
 # 会话管理
 pi -c                            # 续最近会话
-pi --name "lto-chengpi-audit"    # 命名会话
+pi --name "lto-review-audit"     # 命名会话
 pi --fork <session-id>           # fork 会话到新文件
 ```
 

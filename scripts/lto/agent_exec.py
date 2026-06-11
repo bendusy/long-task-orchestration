@@ -423,7 +423,7 @@ def _run_selftest() -> int:
     print("  A3: non-ASCII reply → state.json preserves Unicode")
     st.save_state(state_path, {"run_id": run_id, "phase": "test"})
     set_control({
-        "ta3_cn": {"exit_code": 0, "output": "这是中文回复内容 —— 呈批件已审核通过 ✓"},
+        "ta3_cn": {"exit_code": 0, "output": "这是中文回复内容 —— 任务已审核通过 ✓"},
     })
     spawn_agents(repo, run_id, [make_job("ta3_cn")], persist=True, runners_dir=runners_dir)
 
