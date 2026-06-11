@@ -1,0 +1,33 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["severity", "category", "layer", "redline", "claim", "evidence", "recommendation", "confidence"],
+    "properties": {
+      "severity": {"enum": ["critical", "high", "medium", "low"]},
+      "category": {
+        "enum": ["requirements", "architecture", "data-model", "interface-contract", "implementation", "testing", "operations-observability", "security", "migration-rollback", "acceptance", "direction-disagreement"],
+        "description": "Enterprise audit finding category. Use direction-disagreement only for taste or strategy disputes that evidence cannot settle."
+      },
+      "layer": {
+        "enum": ["requirements", "architecture", "data-model", "interface-contract", "implementation", "testing", "operations-observability", "security", "migration-rollback", "acceptance"],
+        "description": "The enterprise gate layer being audited or blocked."
+      },
+      "redline": {
+        "type": "boolean",
+        "description": "True when the finding blocks the layer gate until fixed, falsified with evidence, or human-overridden."
+      },
+      "claim": {"type": "string"},
+      "evidence": {
+        "type": "string",
+        "description": "Must be path:line or verbatim command output. Free-text LLM assertion does not qualify."
+      },
+      "recommendation": {"type": "string"},
+      "confidence": {"enum": ["high", "medium", "low"]},
+      "unsupported": {
+        "type": "boolean",
+        "description": "Set true when evidence does not meet path:line or command-output standard. Auto-classified low severity."
+      }
+    }
+  }
+}

@@ -29,7 +29,7 @@ RULES:
   opened, and why no redline applies.
 - No rubber-stamp PASS. A bare "looks good" is a failed audit.
 
-OUTPUT: JSON array only, matching schemas/findings.json:
+OUTPUT: JSON array only, matching schemas/enterprise-findings.json:
 [
   {
     "severity": "critical|high|medium|low",

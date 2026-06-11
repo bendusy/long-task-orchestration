@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LTO = ROOT / "scripts" / "lto_run.py"
 SAMPLE = ROOT / "plugins" / "deep-agent-profiles"
+DEV_WORKFLOW = ROOT / "plugins" / "dev-workflow"
 
 
 def ok(cond: bool, msg: str) -> int:
@@ -60,6 +61,29 @@ def main() -> int:
     errors += ok(r.returncode == 0, f"plugin static eval rc=0 (got {r.returncode})")
     eval_data = json.loads(r.stdout)
     errors += ok(eval_data.get("ok") is True and eval_data.get("evals"), "plugin static eval ok")
+
+    errors += ok(DEV_WORKFLOW.exists(), "dev-workflow plugin exists")
+    r = run("plugin", "validate", str(DEV_WORKFLOW), "--json")
+    errors += ok(r.returncode == 0, f"dev-workflow validate rc=0 (got {r.returncode}; {r.stderr.strip()[:120]})")
+    r = run("plugin", "eval", str(DEV_WORKFLOW), "--json")
+    errors += ok(r.returncode == 0, f"dev-workflow static eval rc=0 (got {r.returncode}; {r.stderr.strip()[:120]})")
+    enterprise_profile = json.loads((DEV_WORKFLOW / "profiles" / "enterprise-layer-auditor-v1.json").read_text(encoding="utf-8"))
+    errors += ok(
+        enterprise_profile.get("output_schema_ref") == "schemas/enterprise-findings.json",
+        "enterprise auditor uses strict enterprise schema",
+    )
+    enterprise_schema = json.loads((DEV_WORKFLOW / "schemas" / "enterprise-findings.json").read_text(encoding="utf-8"))
+    enterprise_required = set((enterprise_schema.get("items") or {}).get("required") or [])
+    errors += ok(
+        {"category", "layer", "redline", "confidence"}.issubset(enterprise_required),
+        "enterprise schema requires layer/redline contract fields",
+    )
+    shared_schema = json.loads((DEV_WORKFLOW / "schemas" / "findings.json").read_text(encoding="utf-8"))
+    shared_required = set((shared_schema.get("items") or {}).get("required") or [])
+    errors += ok(
+        "layer" not in shared_required and "redline" not in shared_required,
+        "shared findings schema stays compatible with non-enterprise profiles",
+    )
 
     with tempfile.TemporaryDirectory(prefix="lto_source_note_") as td:
         copy = Path(td) / "plugin"

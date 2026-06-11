@@ -5,7 +5,7 @@
   "intent": "audit",
   "description": "Read-only enterprise layer auditor for high-risk work. runner/family are defaults only: the host selects non-host-family runners and should assemble at least 3 distinct families for mandatory all-layer review. Auditors may be assigned disjoint layers or overlapping redline checks.",
   "prompt_suffix_ref": "prompts/enterprise-layer-audit.md",
-  "output_schema_ref": "schemas/findings.json",
+  "output_schema_ref": "schemas/enterprise-findings.json",
   "permission": {"sandbox": "read-only"},
   "runner_constraints": {"exclude_host_family": true, "min_distinct_families": 3},
   "budget": {"timeout_sec": 600},
