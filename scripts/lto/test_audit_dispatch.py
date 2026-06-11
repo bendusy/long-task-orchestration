@@ -107,6 +107,71 @@ def _run_discover_case(reply: str) -> tuple[int, list[dict]]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _run_discover_failover_case(
+    *, unhealthy: tuple[str, ...], good_reply: str,
+) -> tuple[int, list[dict], str | None]:
+    """Drive _discover_risks with host=claude and a runner pool where some
+    candidates are unhealthy. Returns (rc, risks, chosen_runner).
+
+    healthcheck.sh reports every runner OK *except* those in ``unhealthy``.
+    Each runner touches ``<name>.called`` when actually dispatched, so the
+    test can assert which runner was chosen (fallthrough target).
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="lto_audit_failover_"))
+    try:
+        repo = _git_repo(tmp)
+        runners = tmp / "runners"
+        runners.mkdir()
+        called_dir = tmp / "called"
+        called_dir.mkdir()
+        fake = tmp / "fake_runner.py"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "reply_file = sys.argv[2]\n"
+            f"open(reply_file, 'w').write({good_reply!r})\n"
+            "sys.exit(0)\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        for name in ("codex", "pi", "agy"):
+            sh = runners / f"{name}.sh"
+            sh.write_text(
+                "#!/usr/bin/env bash\n"
+                f'touch "{called_dir}/{name}.called"\n'
+                f'exec python3 "{fake}" "$@"\n',
+                encoding="utf-8",
+            )
+            sh.chmod(0o755)
+        # healthcheck: OK for all but the unhealthy set.
+        verdicts = ",".join(
+            '{{"agent":"{n}","verdict":"{v}"}}'.format(
+                n=n, v=("ERROR" if n in unhealthy else "OK"))
+            for n in ("codex", "pi", "agy")
+        )
+        hc = runners / "healthcheck.sh"
+        hc.write_text(f"#!/usr/bin/env bash\necho '[{verdicts}]'\nexit 0\n", encoding="utf-8")
+        hc.chmod(0o755)
+
+        run_id = "failover-run"
+        state = _risk_state(run_id)
+        state["host_runtime"] = "claude"  # _pick_auditors → [codex, pi, agy]
+        state_dir = _state_dir(repo, run_id, state)
+        rc = _discover_risks(
+            repo, run_id, state_dir, state, argparse.Namespace(discover_risks=True),
+            _runners_dir=runners,
+        )
+        reloaded = st.load_state(state_dir / "state.json") or {}
+        chosen = None
+        for name in ("codex", "pi", "agy"):
+            if (called_dir / f"{name}.called").exists():
+                chosen = name
+                break
+        return rc, reloaded.get("risk_points", []), chosen
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run() -> tuple[int, int]:
     c = _Counter()
 
@@ -190,5 +255,24 @@ def run() -> tuple[int, int]:
     rc_bad, risks_bad = _run_discover_case("No risks here.")
     c.ok(rc_bad != 0, f"S9a non-JSON returns non-zero (got {rc_bad})")
     c.ok(risks_bad == [], "S9b no risk points added on bad reply")
+
+    print("\n[S10] risk discovery falls through unhealthy discoverer to next runner")
+    rc_fo, risks_fo, chosen_fo = _run_discover_failover_case(
+        unhealthy=("codex",), good_reply=json.dumps([
+            {"claim": "ssrf in fetch", "evidence_to_check": "f.py:9", "severity": "critical"},
+        ]),
+    )
+    # host=claude → _pick_auditors=[codex,pi,agy]; codex unhealthy must NOT be
+    # the discoverer (old bug: auditors[0]=codex, single-point fail, rc=2, no risks).
+    c.ok(rc_fo == 0, f"S10a fallthrough returns 0 (got {rc_fo})")
+    c.ok(len(risks_fo) == 1, f"S10b risk from healthy fallback runner (got {len(risks_fo)})")
+    c.ok(chosen_fo == "pi", f"S10c discoverer fell through to pi, not codex (got {chosen_fo})")
+
+    print("\n[S10-all-unhealthy] risk discovery skips when no healthy heterogeneous runner")
+    rc_none, risks_none, _ = _run_discover_failover_case(
+        unhealthy=("codex", "pi", "agy"), good_reply="[]",
+    )
+    c.ok(rc_none == 1, f"S10d all-unhealthy skips with rc=1 (got {rc_none})")
+    c.ok(risks_none == [], "S10e no risks written when discovery skipped")
 
     return c.passed, c.total

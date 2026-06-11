@@ -396,6 +396,33 @@ def _build_risk_brief(state: dict) -> str:
     return "\n".join(lines)
 
 
+def _pick_healthy_discoverer(
+    repo: Path, auditors: list[str], host: str, *, runners_dir: Path | None = None
+) -> str | None:
+    """从异构 auditor 池里逐个 healthcheck，选第一个**健康的**做 risk discoverer。
+
+    auditors 已由 _pick_auditors 剔除同族。对它们跑一次批量 healthcheck，
+    按池子原有优先序返回第一个 healthy 的——codex unhealthy 时自动 fallthrough
+    到 pi/agy，不再单点死在 auditors[0]。
+
+    healthcheck 不可用（脚本缺失/异常）时**降级为返回 auditors[0]**：保持改前的
+    旧行为（派第一家试运气），不因健康探测本身失败而比修复前更保守。
+    """
+    if not auditors:
+        return None
+    from ..scheduler import Scheduler
+    try:
+        sched = Scheduler(repo, runners_dir=runners_dir)
+        health = sched.healthcheck(auditors)
+    except Exception:
+        return auditors[0]
+    for r in auditors:
+        if health.get(r, False):
+            return r
+    # 全不健康：无健康异构可用，交由调用方按 None 跳过 risk discovery。
+    return None
+
+
 def _discover_risks(repo: Path, run_id: str, target_dir: Path, state: dict, args: argparse.Namespace,
                     *, _runners_dir: Path | None = None) -> int:
     """派一个独立 agent 读 state + git diff，主动发现 risk point，
@@ -412,7 +439,16 @@ def _discover_risks(repo: Path, run_id: str, target_dir: Path, state: dict, args
               "cannot run risk discovery (self-audit has no adversarial value)")
         return 1
 
-    discoverer = auditors[0]
+    # 逐个 healthcheck 选第一个**健康的**异构 discoverer，而不是死取 auditors[0]。
+    # 旧逻辑只派 auditors[0]（host=claude 时即 codex），codex unhealthy 时单点失败
+    # 直接 return，不 fallthrough pi/agy——丢掉整个 risk discovery。对齐 llm_judge
+    # 的 _pick_healthy_judge_runner：池子里只要还有一家健康异构就用它。
+    discoverer = _pick_healthy_discoverer(repo, auditors, host, runners_dir=_runners_dir)
+    if discoverer is None:
+        print(f"warning: no healthy heterogeneous discoverer in {auditors} "
+              f"(host={host}); risk discovery skipped — all candidates "
+              "unhealthy or same-family")
+        return 1
     if _same_family(discoverer, host):
         print(f"warning: discoverer {discoverer} same family as host {host}; "
               "risk discovery would have no adversarial value, skipping")
