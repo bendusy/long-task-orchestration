@@ -68,6 +68,19 @@
         "Item C routes to evidence adjudication / union processing (decidable by checking file existence).",
         "Item D escalates to the human: a single needs_human cannot be overruled by the 2/3 majority — must cite the path's needs_human rule."
       ]
+    },
+    {
+      "id": "enterprise-audit-layer-coverage",
+      "runner": "codex",
+      "profile": "enterprise-layer-auditor-v1",
+      "sandbox": "read-only",
+      "parallelizable": true,
+      "brief": "Adopt a refute-first posture. Read plugins/dev-workflow/paths/enterprise-audit-gate.json and plugins/dev-workflow/prompts/enterprise-layer-audit.md from the repo. Verify that both artifacts cover the same ten layers and that the path preserves LTO's host-planner boundary: scope triage before fanout, union-merge findings, no vote-away redlines, human override only with residual risk. Evidence must be path:line on both sides. Output JSON findings only.",
+      "expected_findings": [
+        "If the artifacts are consistent: an empty findings array with explicit proof-of-read (both files listed with line counts).",
+        "Any missing or mismatched layer between path and prompt must be reported with category matching the affected layer.",
+        "Any instruction that turns the path into a mandatory committee or allows majority vote to drop a blocker must be reported as a high-severity finding."
+      ]
     }
   ]
 }

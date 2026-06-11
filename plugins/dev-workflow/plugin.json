@@ -1,22 +1,26 @@
 {
   "id": "dev-workflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "stage": "experimental",
   "kind": "path-plugin",
   "description": "Feature development lifecycle playbook: specify -> dispatch -> impl-audit -> converge -> acceptance -> release, with docs-sync and direction-review side paths.",
   "source_notes": [
     "sources/internal-dev-workflow-sop.json",
-    "sources/internal-dev-workflow-sop.md"
+    "sources/internal-dev-workflow-sop.md",
+    "sources/internal-enterprise-audit-sop.json",
+    "sources/internal-enterprise-audit-sop.md"
   ],
   "provides": {
     "paths": [
       "paths/feature-dev-main.json",
       "paths/docs-sync-loop.json",
-      "paths/direction-review.json"
+      "paths/direction-review.json",
+      "paths/enterprise-audit-gate.json"
     ],
     "profiles": [
       "profiles/spec-refuter-heterogeneous-v1.json",
-      "profiles/docs-drift-auditor-v1.json"
+      "profiles/docs-drift-auditor-v1.json",
+      "profiles/enterprise-layer-auditor-v1.json"
     ],
     "evals": [
       "eval/dev-workflow-cases.json"

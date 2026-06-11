@@ -1,0 +1,64 @@
+{
+  "id": "note.internal.enterprise-audit-sop.2026-06-11",
+  "title": "Layered Enterprise Audit Gate SOP - Internal Operational Distillation",
+  "url": "internal:host-provided-layered-audit-model/enterprise-audit-sop",
+  "captured_at": "2026-06-11",
+  "provenance": "Host-provided layered audit model plus recurring review failures observed in local development sessions. Patterns only: no project names, no conversation excerpts, no filesystem paths.",
+  "claims": [
+    {
+      "id": "c1",
+      "text": "High-risk engineering work benefits from explicit layer coverage: requirements, architecture, data model, interface contract, implementation, testing, operations/observability, security, migration/rollback, and acceptance.",
+      "status": "unverified"
+    },
+    {
+      "id": "c2",
+      "text": "A generic implementation review prompt often misses upstream and downstream failures such as requirements drift, schema safety, API compatibility, observability, rollback, and acceptance evidence.",
+      "status": "unverified"
+    },
+    {
+      "id": "c3",
+      "text": "The layer model should stay a host-agent scheduling prior. Turning it into a mandatory committee for every change increases ceremony and cost without improving evidence quality on small fixes.",
+      "status": "unverified"
+    },
+    {
+      "id": "c4",
+      "text": "Redlines should be union-merged and verified first-hand by the host; majority vote should never drop a cited blocker.",
+      "status": "unverified"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h1",
+      "text": "Layer-assigned heterogeneous auditors find more HIGH/CRITICAL blockers on high-risk changes than a single generic implementation audit prompt.",
+      "metrics": ["blocker_quality", "false_positive_rate", "parse_rate"]
+    },
+    {
+      "id": "h2",
+      "text": "A scope matrix with explicit layer exemptions lowers unnecessary audit cost on small fixes without hiding redlines on high-risk changes.",
+      "metrics": ["false_positive_rate", "timeout_rate"]
+    }
+  ],
+  "anti_patterns": [
+    {
+      "id": "ap1",
+      "name": "ceremonial-all-layers",
+      "description": "Running all ten layers on tiny changes without scope triage or exemptions."
+    },
+    {
+      "id": "ap2",
+      "name": "committee-as-router",
+      "description": "Letting the audit path choose the workflow instead of the host agent."
+    },
+    {
+      "id": "ap3",
+      "name": "vote-away-redlines",
+      "description": "Using majority agreement to drop a cited blocker."
+    },
+    {
+      "id": "ap4",
+      "name": "exit-code-acceptance",
+      "description": "Treating exit code 0 as acceptance without reading artifacts and contracts first-hand."
+    }
+  ],
+  "lto_status": "experimental; not a core guarantee"
+}

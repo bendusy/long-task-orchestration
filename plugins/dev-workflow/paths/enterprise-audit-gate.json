@@ -1,0 +1,98 @@
+{
+  "id": "enterprise-audit-gate-v1",
+  "intent": "enterprise-audit",
+  "description": "Layered enterprise-grade review gate for high-risk work: requirements -> architecture -> data model -> interface contract -> implementation -> tests -> operations/observability -> security -> migration/rollback -> acceptance. It is a scheduling prior for the host agent, not a standing committee or a mandatory command path.",
+  "layers": [
+    "requirements",
+    "architecture",
+    "data-model",
+    "interface-contract",
+    "implementation",
+    "testing",
+    "operations-observability",
+    "security",
+    "migration-rollback",
+    "acceptance"
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "label": "scope-triage",
+      "primitive": "judge",
+      "description": "Host maps the work to the ten audit layers and declares which layers are mandatory for this run. High-risk changes default to all ten layers; small fixes may explicitly exempt irrelevant layers with a reason and evidence.",
+      "expected_artifact": "layer-scope matrix with mandatory/exempt status and exemption reasons",
+      "stop_condition": "every layer is either mandatory or explicitly exempted before dispatch"
+    },
+    {
+      "step": 2,
+      "label": "layer-fanout",
+      "primitive": "audit",
+      "parallelizable": true,
+      "profiles": [
+        "enterprise-layer-auditor-v1"
+      ],
+      "description": "Dispatch independent read-only auditors against disjoint or deliberately overlapping layer assignments. For high-risk work, use at least three distinct model families across the review squad and exclude the host family. Each auditor must read the real artifact/repo state and return structured findings.",
+      "expected_artifact": "per-layer findings JSON plus proof-of-read for layers with no findings",
+      "stop_condition": "every mandatory layer has at least one auditor report or a recorded dispatch failure"
+    },
+    {
+      "step": 3,
+      "label": "redline-gate",
+      "primitive": "audit",
+      "description": "Union-merge findings and classify redlines. Redlines are blocking by default: unresolved user need contradiction, undefined cross-module architecture boundary, unsafe or destructive data migration, interface contract drift, implementation/spec mismatch, missing regression test for changed behavior, missing observability for a new module, auth/secret/permission flaw, no executable rollback for irreversible change, or unverifiable acceptance.",
+      "expected_artifact": "redline register with severity, layer, evidence, and owner",
+      "stop_condition": "all redlines are registered; none are dropped by vote or deduplication"
+    },
+    {
+      "step": 4,
+      "label": "host-synthesis",
+      "primitive": "judge",
+      "description": "Host verifies every cited blocker first-hand. Adopt real blockers, reject false positives only with a falsification note, and route direction disputes to direction-review. Findings are union-merged; this path never votes away minority blockers.",
+      "expected_artifact": "host triage record: adopt/reject/needs-info/routed-to-direction-review",
+      "stop_condition": "every finding has a disposition backed by first-hand evidence"
+    },
+    {
+      "step": 5,
+      "label": "remediation-loop",
+      "primitive": "runner",
+      "description": "Fix adopted blockers, pin each changed invariant with tests or acceptance evidence, rerun only the affected layers, and repeat until HIGH+CRITICAL redlines reach zero or the human explicitly overrides with recorded residual risk.",
+      "expected_artifact": "fix evidence, test-pin evidence, refreshed layer findings, audit ledger rows",
+      "stop_condition": "zero open HIGH/CRITICAL redlines, or explicit human override with residual risk"
+    },
+    {
+      "step": 6,
+      "label": "acceptance-record",
+      "primitive": "judge",
+      "description": "Write the final layer gate record. It must show each layer as passed, exempted, or human-overridden; include the commands/artifacts read; and link to the audit ledger and release/privacy gates when relevant.",
+      "expected_artifact": "enterprise-audit-gate record referenced from run state",
+      "stop_condition": "all mandatory layers pass, all exemptions have reasons, all overrides are human-approved"
+    }
+  ],
+  "redline_policy": [
+    "requirements: no done_when/acceptance criteria, or implementation contradicts an explicit user requirement",
+    "architecture: cross-module boundary, ownership, lifecycle, or dependency direction is undefined for shared state",
+    "data-model: schema/persistence change lacks invariant, migration safety, or data-loss analysis",
+    "interface-contract: request/response shape, pagination, error, enum, or compatibility contract drift is untested",
+    "implementation: code path contradicts spec, swallows errors, widens side effects, or has uncontrolled concurrency",
+    "testing: changed behavior or audit-raised invariant lacks a passing regression/contract test",
+    "operations-observability: new module has no structured logs, doctor/healthcheck entry, or failure-query path",
+    "security: auth bypass, tenant isolation break, secret leak, unsafe permission widening, or command injection risk",
+    "migration-rollback: irreversible step has no dry-run, backup, rollback, or staged rollout evidence",
+    "acceptance: final verdict relies on remembered success, exit code only, or missing human gate for irreversible actions"
+  ],
+  "stop_conditions": [
+    "scope matrix covers all ten layers before auditors run",
+    "mandatory layers have heterogeneous read-only audit evidence",
+    "findings are union-merged, never majority-voted away",
+    "every HIGH/CRITICAL redline is fixed, falsified with evidence, or human-overridden",
+    "each audit-raised invariant is pinned by a test, contract check, command output, or explicit acceptance artifact",
+    "final layer gate record is referenced from the run state before closeout"
+  ],
+  "anti_patterns": [
+    "ap1:ceremonial-all-layers — running ten layers on a tiny change without scope triage or exemptions",
+    "ap2:committee-as-router — letting the path choose the workflow instead of the host agent",
+    "ap3:vote-away-redlines — treating 2/3 approval as permission to drop a cited blocker",
+    "ap4:single-auditor-all-layers — one model audits every layer and the result is called independent review",
+    "ap5:exit-code-acceptance — passing acceptance because scripts exited 0 while artifacts and contracts were not read"
+  ]
+}

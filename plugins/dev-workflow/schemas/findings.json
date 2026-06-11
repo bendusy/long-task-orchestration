@@ -6,8 +6,16 @@
     "properties": {
       "severity": {"enum": ["critical", "high", "medium", "low"]},
       "category": {
-        "enum": ["spec-error", "spec-missing", "direction-disagreement", "doc-drift", "intentional"],
-        "description": "spec-error/spec-missing are union-processed; direction-disagreement routes to the direction-review path; doc-drift is a real doc-vs-code mismatch; intentional marks a divergence covered by a drift-ok annotation."
+        "enum": ["spec-error", "spec-missing", "direction-disagreement", "doc-drift", "intentional", "requirements", "architecture", "data-model", "interface-contract", "implementation", "testing", "operations-observability", "security", "migration-rollback", "acceptance"],
+        "description": "spec-error/spec-missing are union-processed; direction-disagreement routes to the direction-review path; doc-drift is a real doc-vs-code mismatch; intentional marks a divergence covered by a drift-ok annotation. Enterprise audit categories map to the ten layer gate in paths/enterprise-audit-gate.json."
+      },
+      "layer": {
+        "enum": ["requirements", "architecture", "data-model", "interface-contract", "implementation", "testing", "operations-observability", "security", "migration-rollback", "acceptance"],
+        "description": "Enterprise audit layer. Optional for non-enterprise profiles."
+      },
+      "redline": {
+        "type": "boolean",
+        "description": "True when the finding blocks the layer gate until fixed, falsified with evidence, or human-overridden."
       },
       "claim": {"type": "string"},
       "evidence": {
