@@ -79,7 +79,9 @@ def _read_field(content: str, field: str) -> str:
 
 def default_state(goal: str, host: str, repo: str, request: str, phase: str,
                   head: str, branch: str, auditors: str, timeout: str,
-                  why: str = "", done_when: str = "") -> dict[str, Any]:
+                  why: str = "", done_when: str = "",
+                  max_turns: int | None = None, max_tokens: int | None = None,
+                  hard_deadline: str | None = None) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": "",
@@ -120,6 +122,16 @@ def default_state(goal: str, host: str, repo: str, request: str, phase: str,
             "exit_criteria": {},
             "autopilot_last_digest": {},
             "progress_high_water": {"done": 0, "verified_risks": 0},
+        },
+        # Run 级预算契约（全可选，缺省 None = 无限 → 老 run 零破坏）。
+        # turns_used 只数 autopilot 自动推进调用，人手动操作不计。分级刹车：
+        # warn_ratio 软警告（next/recap 事实层）→ 100% 硬刹车（autopilot fail-closed）。
+        "budget": {
+            "max_turns": max_turns,
+            "max_tokens": max_tokens,
+            "hard_deadline": hard_deadline,
+            "turns_used": 0,
+            "warn_ratio": 0.8,
         },
         "last_failure": None,
         "user_decisions": [],

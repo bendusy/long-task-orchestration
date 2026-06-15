@@ -191,6 +191,9 @@ LTO="python3 scripts/lto_run.py"
 
 $LTO start --goal "做用户登录" \
   --why "降低登录失败率" --done-when "失败率<5%，三端覆盖"
+#   预算契约（全可选，缺省无限）：--max-turns / --max-tokens / --deadline
+#   超 80% next/recap 软警告，超 100% autopilot 硬刹车（NEEDS_CONFIRM）。
+#   解除靠 `lto budget extend`。turn 只数 autopilot 自动推进，人手动操作不计。
 
 # 续接（上次 compact 之后，或新 session 恢复）
 $LTO resume        # 给接手的 AI 拉上下文
@@ -211,6 +214,10 @@ $LTO autopilot --supervised   # 出 brief 回吐你判断
 #   --auto-exec：safe/reversible 子步骤在 worktree 沙箱自动跑（dangerous 停下等确认）
 #   --decide：escalate 时派三方异构 agent 讨论收敛（opt-in 烧 token，决策权仍归你）
 
+# 预算（可选；查用量 / 人显式抬上限解除刹车）
+$LTO budget check                       # 各维度 used/limit/status
+$LTO budget extend --max-tokens 2000000 # 抬上限（不能收紧到已用量以下，防自锁）
+
 # 完成
 $LTO closeout --summary "做了什么，验证了什么"      # 默认写 CHANGELOG.md
 $LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 tracked dirt
@@ -224,6 +231,8 @@ $LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 t
 > `--json` 输出单个 JSON 对象给其他 host 接手读取。
 >
 > **autopilot 档位**：`--supervised`（出 brief，默认）、`--auto-exec`（worktree 沙箱跑 safe 子步骤）、`--decide`（escalate 时 opt-in 派三方异构 agent 收敛，决策权仍归你）、`--autonomous`（机械证据闸门 + 机械执行）均已实现。**autonomous 不 spawn 决策 agent、不替你反思**——它只做两件机械的事：读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够诚实退回 supervised），过闸后在 worktree 沙箱机械推进 safe 子步骤。escalate / dangerous / git push（含 `git -C . push` 等变体）/ 网络副作用一律停人类，反思永远归你。与 `--decide` 互斥（autonomous 不派决策 agent）。
+>
+> **budget 刹车**：若 `start` 设了 `--max-turns/--max-tokens/--deadline`，每次 autopilot 推进先过 budget gate——任一维度超 100% 即 fail-closed `NEEDS_CONFIRM`（turn 只数 autopilot 调用，人手动操作不计），解除靠 `lto budget extend` 或重 start。缺省无限 → 老 run 零影响。软警告（80%）只在 next/recap 事实层出现，不阻断。
 
 ## 什么情况下不要用 LTO
 
@@ -247,7 +256,7 @@ $LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 t
 ## Resources
 
 **入口与文档**
-- `scripts/lto_run.py` — 22 命令薄入口（分发到 `lto/commands/`）
+- `scripts/lto_run.py` — 23 命令薄入口（分发到 `lto/commands/`）
 - `scripts/write_decision.py` — ADR-first 决策落盘 helper（写 `docs/decisions/` + state + artifact manifest）
 - `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper
 - `references/onboarding.md` — **给 agent 读一份就懂怎么装载 LTO**（跨 runtime）

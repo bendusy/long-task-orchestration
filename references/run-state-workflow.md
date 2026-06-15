@@ -36,6 +36,10 @@ python3 scripts/lto_run.py start \
 opt-in (default off). `--with-audit` only creates `audit-ledger.md`; the actual
 adversarial audit + convergence runs via the `audit` command.
 
+Optional **budget caps** (all default unlimited → zero break for runs that omit
+them): `--max-turns N` / `--max-tokens N` / `--deadline ISO8601`. See the Budget
+section below for the graded-brake semantics.
+
 When the target repo is not current directory, call this script by absolute path:
 
 ```bash
@@ -326,6 +330,32 @@ $L recap --artifacts  # same recap plus recent artifact paths
 Unlike `resume` (feeds the AI: git head / task ids), `recap` is for **humans** —
 plain-language answers after a long gap. Uses `state.json` + `--why`/`--done-when`.
 Artifact paths are opt-in to keep the default human recap low-noise.
+
+## Budget (run-level contract)
+
+```bash
+$L budget check                        # per-dimension used/limit/status
+$L budget extend --max-tokens 2000000  # raise a cap (human action)
+```
+
+Run-level budget caps are an **optional contract** set at `start`
+(`--max-turns` / `--max-tokens` / `--deadline`); all default unlimited, so runs
+that omit them behave exactly as before. Enforcement is **graded**:
+
+- **Soft warning** at `warn_ratio` (default 0.8): a `⚠️ budget: …` fact line
+  appears in `next`'s Decision Brief and `recap`. Zero block — it is a fact, not
+  a recommendation; matching it to your decision stays the host's job.
+- **Hard brake** at 100%: `autopilot` runs a budget gate before every
+  auto-advance. Any dimension over limit → fail-closed `NEEDS_CONFIRM`, no
+  auto-exec. Unlock only by explicit `lto budget extend` or re-`start`.
+
+`turns_used` counts **autopilot auto-advance calls only** — human manual ops
+(`runner`/`audit`/`next`) never consume a turn; the contract constrains
+automation, not the human. `budget extend` cannot shrink a cap below the
+already-used amount (anti self-lock). Measurement lives in `budget.py`
+(pure: token total + current time injected by the caller); autopilot executes
+the brake — measurement and enforcement stay separated, like `next` (facts) vs
+`autopilot` (action).
 
 ## Artifact Manifest
 

@@ -131,6 +131,10 @@ def main() -> int:
         ("events",        [sys.executable, str(SCRIPTS_DIR / "test_events.py")],            False),
         ("telemetry",     [sys.executable, str(SCRIPTS_DIR / "test_telemetry.py")],         False),
         ("autonomous_gate", [sys.executable, str(SCRIPTS_DIR / "test_autonomous_gate.py")], False),
+        ("budget",          [sys.executable, str(SCRIPTS_DIR / "test_budget.py")],          False),
+        ("budget_gate",     [sys.executable, str(SCRIPTS_DIR / "test_budget_gate.py")],     False),
+        ("budget_softwarn", [sys.executable, str(SCRIPTS_DIR / "test_budget_softwarn.py")], False),
+        ("budget_cmd",      [sys.executable, str(SCRIPTS_DIR / "test_budget_cmd.py")],      False),
     ]
     for name, argv, needs_pp in module_tests:
         proc = subprocess.run(
