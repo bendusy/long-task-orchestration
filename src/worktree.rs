@@ -2,6 +2,7 @@ use crate::effect::{EffectClass, EffectLevel, classify_effect};
 use crate::process;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -74,11 +75,11 @@ pub fn add_persistent_worktree(
     process::git(
         repo,
         [
-            "worktree",
-            "add",
-            "--detach",
-            path.to_str().unwrap_or_default(),
-            "HEAD",
+            OsStr::new("worktree"),
+            OsStr::new("add"),
+            OsStr::new("--detach"),
+            path.as_os_str(),
+            OsStr::new("HEAD"),
         ],
     )?;
     Ok(WorktreeHandle {
@@ -98,10 +99,10 @@ pub fn prune_worktree(repo: &Path, handle: &WorktreeHandle) -> Result<(), Worktr
         let _ = process::git(
             repo,
             [
-                "worktree",
-                "remove",
-                "--force",
-                handle.path.to_str().unwrap_or_default(),
+                OsStr::new("worktree"),
+                OsStr::new("remove"),
+                OsStr::new("--force"),
+                handle.path.as_os_str(),
             ],
         );
     }
@@ -159,11 +160,11 @@ pub fn run_in_ephemeral_worktree(
     process::git(
         repo,
         [
-            "worktree",
-            "add",
-            "--detach",
-            wt.to_str().unwrap_or_default(),
-            "HEAD",
+            OsStr::new("worktree"),
+            OsStr::new("add"),
+            OsStr::new("--detach"),
+            wt.as_os_str(),
+            OsStr::new("HEAD"),
         ],
     )?;
     let mut env = sandboxed_env(&wt);
@@ -185,10 +186,10 @@ pub fn run_in_ephemeral_worktree(
     let _ = process::git(
         repo,
         [
-            "worktree",
-            "remove",
-            "--force",
-            wt.to_str().unwrap_or_default(),
+            OsStr::new("worktree"),
+            OsStr::new("remove"),
+            OsStr::new("--force"),
+            wt.as_os_str(),
         ],
     );
     let _ = process::git(repo, ["worktree", "prune"]);

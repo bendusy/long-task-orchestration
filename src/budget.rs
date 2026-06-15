@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDateTime};
+use chrono::{DateTime, NaiveDateTime, ParseError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -61,66 +61,128 @@ pub fn deadline_status(
     now: &str,
     warn_ratio: f64,
 ) -> DeadlineStatus {
+    deadline_status_with_warnings(deadline, started_at, now, warn_ratio).0
+}
+
+fn deadline_status_with_warnings(
+    deadline: Option<&str>,
+    started_at: &str,
+    now: &str,
+    warn_ratio: f64,
+) -> (DeadlineStatus, Vec<String>) {
     let Some(deadline) = deadline.filter(|s| !s.is_empty()) else {
-        return DeadlineStatus {
-            limit: None,
-            used: now.to_string(),
-            ratio: None,
-            status: BudgetStatus::Ok,
-        };
+        return (
+            DeadlineStatus {
+                limit: None,
+                used: now.to_string(),
+                ratio: None,
+                status: BudgetStatus::Ok,
+            },
+            Vec::new(),
+        );
     };
-    let dl = parse_iso_naive(deadline);
-    let nw = parse_iso_naive(now);
+    let mut warnings = Vec::new();
+    let dl = match parse_iso_naive(deadline) {
+        Ok(value) => value,
+        Err(err) => {
+            warnings.push(format!(
+                "budget: invalid hard_deadline {deadline:?} ignored: {err}"
+            ));
+            return (
+                DeadlineStatus {
+                    limit: Some(deadline.to_string()),
+                    used: now.to_string(),
+                    ratio: None,
+                    status: BudgetStatus::Ok,
+                },
+                warnings,
+            );
+        }
+    };
+    let nw = match parse_iso_naive(now) {
+        Ok(value) => value,
+        Err(err) => {
+            warnings.push(format!("budget: invalid now {now:?} ignored: {err}"));
+            return (
+                DeadlineStatus {
+                    limit: Some(deadline.to_string()),
+                    used: now.to_string(),
+                    ratio: None,
+                    status: BudgetStatus::Ok,
+                },
+                warnings,
+            );
+        }
+    };
     if nw >= dl {
-        return DeadlineStatus {
-            limit: Some(deadline.to_string()),
-            used: now.to_string(),
-            ratio: Some(1.0),
-            status: BudgetStatus::Exceeded,
-        };
+        return (
+            DeadlineStatus {
+                limit: Some(deadline.to_string()),
+                used: now.to_string(),
+                ratio: Some(1.0),
+                status: BudgetStatus::Exceeded,
+            },
+            warnings,
+        );
     }
     let st = if started_at.is_empty() {
         None
     } else {
-        Some(parse_iso_naive(started_at))
+        match parse_iso_naive(started_at) {
+            Ok(value) => Some(value),
+            Err(err) => {
+                warnings.push(format!(
+                    "budget: invalid started_at {started_at:?} ignored: {err}"
+                ));
+                None
+            }
+        }
     };
     let Some(st) = st else {
-        return DeadlineStatus {
-            limit: Some(deadline.to_string()),
-            used: now.to_string(),
-            ratio: Some(0.0),
-            status: BudgetStatus::Ok,
-        };
+        return (
+            DeadlineStatus {
+                limit: Some(deadline.to_string()),
+                used: now.to_string(),
+                ratio: Some(0.0),
+                status: BudgetStatus::Ok,
+            },
+            warnings,
+        );
     };
     if dl <= st {
-        return DeadlineStatus {
-            limit: Some(deadline.to_string()),
-            used: now.to_string(),
-            ratio: Some(0.0),
-            status: BudgetStatus::Ok,
-        };
+        return (
+            DeadlineStatus {
+                limit: Some(deadline.to_string()),
+                used: now.to_string(),
+                ratio: Some(0.0),
+                status: BudgetStatus::Ok,
+            },
+            warnings,
+        );
     }
     let ratio = (nw - st).num_seconds() as f64 / (dl - st).num_seconds() as f64;
-    DeadlineStatus {
-        limit: Some(deadline.to_string()),
-        used: now.to_string(),
-        ratio: Some(ratio),
-        status: if ratio >= warn_ratio {
-            BudgetStatus::Warn
-        } else {
-            BudgetStatus::Ok
+    (
+        DeadlineStatus {
+            limit: Some(deadline.to_string()),
+            used: now.to_string(),
+            ratio: Some(ratio),
+            status: if ratio >= warn_ratio {
+                BudgetStatus::Warn
+            } else {
+                BudgetStatus::Ok
+            },
         },
-    }
+        warnings,
+    )
 }
 
-fn parse_iso_naive(value: &str) -> NaiveDateTime {
+fn parse_iso_naive(value: &str) -> Result<NaiveDateTime, ParseError> {
     let normalized = value.replace('Z', "+00:00");
     if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized) {
-        return dt.naive_local();
+        return Ok(dt.naive_local());
     }
     NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
         .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S"))
-        .unwrap_or_else(|err| panic!("invalid ISO datetime {value:?}: {err}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -177,7 +239,7 @@ pub fn check_budget(
         token_total as f64,
         warn_ratio,
     );
-    let deadline = deadline_status(
+    let (deadline, mut deadline_warnings) = deadline_status_with_warnings(
         budget.hard_deadline.as_deref(),
         started_at,
         now_iso,
@@ -190,6 +252,7 @@ pub fn check_budget(
         .unwrap_or(BudgetStatus::Ok);
 
     let mut warnings = Vec::new();
+    warnings.append(&mut deadline_warnings);
     push_warning(
         &mut warnings,
         "turns",
@@ -291,5 +354,40 @@ mod tests {
             "2026-06-15T11:00:00",
         );
         assert_eq!(got.overall, BudgetStatus::Exceeded);
+    }
+
+    #[test]
+    fn invalid_deadline_is_warning_not_panic() {
+        let budget = RunBudget {
+            hard_deadline: Some("not-a-date".to_string()),
+            ..RunBudget::default()
+        };
+        let got = check_budget(
+            Some(&budget),
+            "2026-06-15T00:00:00",
+            0,
+            "2026-06-15T01:00:00",
+        );
+        assert_eq!(got.overall, BudgetStatus::Ok);
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.contains("invalid hard_deadline"))
+        );
+    }
+
+    #[test]
+    fn invalid_started_at_is_warning_not_panic() {
+        let budget = RunBudget {
+            hard_deadline: Some("2026-06-15T10:00:00".to_string()),
+            ..RunBudget::default()
+        };
+        let got = check_budget(Some(&budget), "bad-start", 0, "2026-06-15T01:00:00");
+        assert_eq!(got.overall, BudgetStatus::Ok);
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.contains("invalid started_at"))
+        );
     }
 }

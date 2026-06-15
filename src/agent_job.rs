@@ -251,6 +251,18 @@ impl PermissionPolicy {
     }
 }
 
+pub fn readonly_intent_to_policy(runner: &str) -> PermissionPolicy {
+    if runner == "agy" {
+        return PermissionPolicy {
+            sandbox: Sandbox::WorkspaceWrite,
+            reason: "agy has no read-only sandbox; workspace-write is the minimal enforceable level to keep agy's heterogeneous review lens".to_string(),
+            user_approved: false,
+            tools: Vec::new(),
+        };
+    }
+    PermissionPolicy::default()
+}
+
 pub fn readonly_tool_allowlist(runner: &str) -> &'static [&'static str] {
     match runner {
         "claude" => &["Glob", "Grep", "Read", "WebFetch"],
@@ -455,6 +467,18 @@ mod tests {
             policy.validate_for_runner("agy", &BTreeMap::new()),
             Err(AgentJobError::CannotEnforceReadOnly { .. })
         ));
+    }
+
+    #[test]
+    fn readonly_intent_translates_agy_to_workspace_write() {
+        let policy = readonly_intent_to_policy("agy");
+        assert_eq!(policy.sandbox, Sandbox::WorkspaceWrite);
+        assert!(policy.reason.contains("no read-only"));
+        assert!(policy.validate_for_runner("agy", &BTreeMap::new()).is_ok());
+
+        let codex = readonly_intent_to_policy("codex");
+        assert_eq!(codex.sandbox, Sandbox::ReadOnly);
+        assert!(codex.validate_for_runner("codex", &BTreeMap::new()).is_ok());
     }
 
     #[test]

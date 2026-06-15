@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, Output};
 use thiserror::Error;
@@ -37,32 +37,47 @@ pub fn ensure_git_repo(repo: &Path) -> Result<(), GitCommandError> {
     }
 }
 
-pub fn git<const N: usize>(repo: &Path, args: [&str; N]) -> Result<(), GitCommandError> {
-    let output = git_output(repo, args)?;
+pub fn git<I, S>(repo: &Path, args: I) -> Result<(), GitCommandError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args = collect_args(args);
+    let output = git_output_args(repo, &args)?;
     if output.status.success() {
         Ok(())
     } else {
         Err(GitCommandError::NonZero {
-            args: args.join(" "),
+            args: display_args(&args),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         })
     }
 }
 
-pub fn git_stdout<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String, GitCommandError> {
-    let output = git_output(repo, args)?;
+pub fn git_stdout<I, S>(repo: &Path, args: I) -> Result<String, GitCommandError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args = collect_args(args);
+    let output = git_output_args(repo, &args)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         Err(GitCommandError::NonZero {
-            args: args.join(" "),
+            args: display_args(&args),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         })
     }
 }
 
-pub fn git_output<const N: usize>(repo: &Path, args: [&str; N]) -> Result<Output, std::io::Error> {
-    Command::new("git").args(args).current_dir(repo).output()
+pub fn git_output<I, S>(repo: &Path, args: I) -> Result<Output, std::io::Error>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args = collect_args(args);
+    git_output_args(repo, &args)
 }
 
 pub fn command_with_args<I, S>(program: &str, args: I) -> Command
@@ -73,4 +88,25 @@ where
     let mut cmd = Command::new(program);
     cmd.args(args);
     cmd
+}
+
+fn collect_args<I, S>(args: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    args.into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect()
+}
+
+fn git_output_args(repo: &Path, args: &[OsString]) -> Result<Output, std::io::Error> {
+    Command::new("git").args(args).current_dir(repo).output()
+}
+
+fn display_args(args: &[OsString]) -> String {
+    args.iter()
+        .map(|arg| arg.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ")
 }

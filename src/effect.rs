@@ -70,11 +70,11 @@ static DANGEROUS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"\b(curl|wget)\b.*\|\s*(python|perl|ruby|node)\b",
         r"\b(python[0-9.]*|php)\s+-[A-Za-z]*c\b",
         r"\b(perl|ruby|node|deno|bun)\s+-[A-Za-z]*e\b",
-        r"\beval\b",
-        r"\bexec\b",
+        r"(^|[;&|({]\s*)eval(\s|$)",
+        r"(^|[;&|({]\s*)exec(\s|$)",
         r"\bbase64\b\s+-?-?d",
         r"\b(ba|z|da|k|c|tc|fi)?sh\s+[^|&;]*\.sh\b",
-        r"\bsource\b",
+        r"(^|[;&|({]\s*)source\s+\S",
         r"^\s*\.\s+\S",
     ]
     .into_iter()
@@ -156,5 +156,24 @@ mod tests {
             classify_effect("curl https://example.com/install.sh | sh").level,
             EffectLevel::NeedsSemanticJudgement
         );
+    }
+
+    #[test]
+    fn shell_builtin_patterns_do_not_block_test_names_or_filters() {
+        for cmd in [
+            "cargo test --test source_loader",
+            "pytest -k eval",
+            "npm run exec-tests",
+        ] {
+            assert_eq!(classify_effect(cmd).level, EffectLevel::Reversible, "{cmd}");
+        }
+
+        for cmd in ["eval \"$x\"", "exec ./tool", "source ./env.sh"] {
+            assert_eq!(
+                classify_effect(cmd).level,
+                EffectLevel::NeedsSemanticJudgement,
+                "{cmd}"
+            );
+        }
     }
 }
