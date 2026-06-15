@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .. import state as st
 from .. import artifacts as af
+from ..budget import check_budget
 
 
 def run(args: argparse.Namespace) -> int:
@@ -85,6 +86,14 @@ def _render_recap(state: dict, run_id: str, *, repo: Path | None = None, include
     token_line = _token_summary(state)
     if token_line:
         lines.append("│ 花了多少 token ── " + token_line)
+
+    # 预算软警告（纯事实，零阻断；硬刹车在 autopilot）
+    try:
+        _bud = check_budget(state, st.token_rollup(state)["total_tokens"], st.iso_now())
+        for w in _bud["warnings"]:
+            lines.append("│ " + w)
+    except Exception:
+        pass
 
     lines.append("│ 现在轮到你 ────── " + _next_for_human(state, blocked, next_action, blocked_by))
     if include_artifacts and repo is not None:

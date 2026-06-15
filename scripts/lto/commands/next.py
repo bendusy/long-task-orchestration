@@ -25,6 +25,7 @@ from .. import state as st
 from .. import git_state as gs
 from .. import interventions as iv
 from ..agent_job import Pattern
+from ..budget import check_budget
 from .audit import _is_high_risk
 
 
@@ -227,6 +228,16 @@ def build_decision_brief(facts: dict, state: dict, repo: Path | None = None) -> 
     if facts["last_failure"]:
         lines.append(f"- **Last failure**: {facts['last_failure']}")
     lines.append("")
+
+    # ── Budget（软警告：纯事实，零阻断；硬刹车在 autopilot）──
+    try:
+        _bud = check_budget(state, st.token_rollup(state)["total_tokens"], st.iso_now())
+        for w in _bud["warnings"]:
+            lines.append(w)
+        if _bud["warnings"]:
+            lines.append("")
+    except Exception:
+        pass  # 事实层绝不弄崩简报
 
     # ── Gate Status ──
     gs_info = facts["gates"]
