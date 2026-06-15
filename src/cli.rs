@@ -53,6 +53,10 @@ pub enum Commands {
         #[arg(long)]
         run_id: Option<String>,
         #[arg(long)]
+        strict: bool,
+        #[arg(long = "to", value_parser = ["implementation", "closed"])]
+        to_phase: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     Closeout {
@@ -368,27 +372,21 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             assert_command_count();
             println!("SELFTEST OK");
         }
-        Commands::Check { run_id, json } => {
-            let run_id = run_id
-                .or_else(|| current_run_id(&args.repo))
-                .unwrap_or_default();
-            let path = state::state_path(&args.repo, &run_id);
-            let state = state::load_state(&path)?;
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "run_id": state.run_id,
-                        "current_phase": state.current_phase,
-                        "goal": state.goal,
-                        "rust_v2": true
-                    }))?
-                );
-            } else {
-                println!("run_id: {}", state.run_id);
-                println!("phase: {}", state.current_phase);
-                println!("goal: {}", state.goal);
-            }
+        Commands::Check {
+            run_id,
+            strict,
+            to_phase,
+            json,
+        } => {
+            ops::cmd_check(
+                &args.repo,
+                ops::CheckOptions {
+                    run_id,
+                    strict,
+                    to_phase,
+                    json,
+                },
+            )?;
         }
         Commands::Budget {
             command: BudgetCommand::Check { run_id, tokens },
@@ -443,13 +441,20 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
         Commands::Runs => {
             let lto = args.repo.join(".lto");
             if !lto.exists() {
+                println!("# LTO runs in this project (0 total)");
                 return Ok(());
             }
+            let mut runs = Vec::new();
             for entry in std::fs::read_dir(lto)? {
                 let entry = entry?;
                 if entry.file_type()?.is_dir() && entry.path().join("state.json").exists() {
-                    println!("{}", entry.file_name().to_string_lossy());
+                    runs.push(entry.file_name().to_string_lossy().to_string());
                 }
+            }
+            runs.sort();
+            println!("# LTO runs in this project ({} total)", runs.len());
+            for run_id in runs {
+                println!("{run_id}");
             }
         }
         Commands::Audit {
@@ -780,6 +785,13 @@ mod tests {
     fn audit_flags_are_registered() {
         Args::try_parse_from(["lto-rs", "audit", "--auto-dispatch"]).unwrap();
         Args::try_parse_from(["lto-rs", "audit", "--discover-risks"]).unwrap();
+    }
+
+    #[test]
+    fn check_flags_are_registered() {
+        Args::try_parse_from(["lto-rs", "check", "--strict", "--to", "closed", "--json"]).unwrap();
+        Args::try_parse_from(["lto-rs", "check", "--to", "implementation"]).unwrap();
+        assert!(Args::try_parse_from(["lto-rs", "check", "--to", "deploy"]).is_err());
     }
 
     #[test]

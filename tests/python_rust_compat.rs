@@ -102,8 +102,8 @@ fn python_written_run_is_readable_by_rust_recap_resume_and_check() {
     );
     let json: Value = serde_json::from_str(&check).unwrap();
     assert_eq!(json["run_id"], "compat-run");
-    assert_eq!(json["goal"], "compatibility run");
-    assert_eq!(json["rust_v2"], true);
+    assert!(json["check"]["errors"].as_array().unwrap().is_empty());
+    assert!(json["check"]["warnings"].is_array());
 }
 
 fn init_git_repo(repo: &Path) {

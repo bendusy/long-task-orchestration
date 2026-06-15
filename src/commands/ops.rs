@@ -8,7 +8,7 @@ use crate::scheduler::Scheduler;
 use crate::worktree;
 use anyhow::Context;
 use serde_json::{Map, Value, json};
-use sha2::Digest;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -20,6 +20,29 @@ use std::time::Duration;
 pub struct PreflightOptions {
     pub run_id: Option<String>,
     pub record: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CheckOptions {
+    pub run_id: Option<String>,
+    pub strict: bool,
+    pub to_phase: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CheckOutcome {
+    pub run_id: String,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub phase_report: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct LedgerCheck {
+    has_rounds: bool,
+    verdict: Option<util::LedgerVerdict>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -248,6 +271,564 @@ pub fn cmd_preflight(repo: &Path, options: PreflightOptions) -> anyhow::Result<(
     }
 }
 
+pub fn cmd_check(repo: &Path, options: CheckOptions) -> anyhow::Result<()> {
+    let outcome = collect_check(repo, &options);
+    if options.json {
+        println!("{}", serde_json::to_string_pretty(&outcome_json(&outcome))?);
+    } else {
+        for warning in &outcome.warnings {
+            eprintln!("WARN {warning}");
+        }
+        for error in &outcome.errors {
+            eprintln!("ERROR {error}");
+        }
+        if let Some(report) = &outcome.phase_report {
+            print_phase_report(report);
+        }
+        if outcome.errors.is_empty() {
+            let run_id = if outcome.run_id.is_empty() {
+                "(unknown)"
+            } else {
+                &outcome.run_id
+            };
+            println!("OK {}", repo.join(".lto").join(run_id).display());
+        }
+    }
+    if !outcome.errors.is_empty() {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+pub(crate) fn collect_check(repo: &Path, options: &CheckOptions) -> CheckOutcome {
+    let mut outcome = CheckOutcome::default();
+    let run_id = match util::resolve_run_id(repo, options.run_id.as_deref()) {
+        Ok(run_id) => run_id,
+        Err(err) => {
+            outcome.errors.push(err.to_string());
+            options.run_id.clone().unwrap_or_default()
+        }
+    };
+    outcome.run_id = run_id.clone();
+    let run_dir = repo.join(".lto").join(&run_id);
+    let state_path = run_dir.join("state.json");
+    let mut state = None;
+    if !state_path.exists() {
+        outcome
+            .errors
+            .push(format!("missing {}", state_path.display()));
+    } else {
+        match crate::state::load_state(&state_path) {
+            Ok(loaded) => {
+                collect_state_checks(repo, &run_dir, &loaded, options.strict, &mut outcome);
+                state = Some(loaded);
+            }
+            Err(err) => outcome
+                .errors
+                .push(format!("cannot parse {}: {err}", state_path.display())),
+        }
+    }
+
+    let md_path = run_dir.join("run-state.md");
+    if !md_path.exists() && !state_path.exists() {
+        outcome.errors.push(format!(
+            "missing both {} and {}",
+            state_path.display(),
+            md_path.display()
+        ));
+    }
+
+    let ledger_status = collect_ledger_check(&run_dir, options.strict, &mut outcome);
+    if let (Some(target), Some(state)) = (options.to_phase.as_deref(), state.as_ref()) {
+        let report = phase_report(repo, &run_dir, state, target, ledger_status.as_ref());
+        if options.strict {
+            for check in report
+                .get("checks")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+            {
+                let required = check
+                    .get("required")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let missing = check.get("status").and_then(Value::as_str) == Some("missing");
+                if required && missing {
+                    outcome.errors.push(format!(
+                        "phase evidence missing: {}: {}",
+                        check.get("id").and_then(Value::as_str).unwrap_or("?"),
+                        check.get("detail").and_then(Value::as_str).unwrap_or("")
+                    ));
+                }
+            }
+        }
+        outcome.phase_report = Some(report);
+    }
+    outcome
+}
+
+fn outcome_json(outcome: &CheckOutcome) -> Value {
+    let mut output = outcome.phase_report.clone().unwrap_or_else(|| {
+        json!({
+            "run_id": outcome.run_id,
+        })
+    });
+    output["check"] = json!({
+        "errors": outcome.errors,
+        "warnings": outcome.warnings,
+    });
+    output
+}
+
+fn collect_state_checks(
+    repo: &Path,
+    run_dir: &Path,
+    state: &crate::state::LtoState,
+    strict: bool,
+    outcome: &mut CheckOutcome,
+) {
+    if !util::VALID_PHASES.contains(&state.current_phase.as_str()) {
+        outcome
+            .errors
+            .push(format!("invalid current_phase: {}", state.current_phase));
+    }
+    collect_git_anchor_checks(repo, state, strict, outcome);
+    if dirty_outside_lto(repo) {
+        let msg = "worktree has uncommitted changes outside .lto".to_string();
+        if strict {
+            outcome.errors.push(msg);
+        } else {
+            outcome.warnings.push(msg);
+        }
+    }
+    if state.current_phase == "closed" && !non_empty_file(&run_dir.join("handoff.md")) {
+        outcome
+            .errors
+            .push("closed run missing non-empty handoff.md".to_string());
+    }
+}
+
+fn collect_git_anchor_checks(
+    repo: &Path,
+    state: &crate::state::LtoState,
+    strict: bool,
+    outcome: &mut CheckOutcome,
+) {
+    if crate::process::ensure_git_repo(repo).is_err() {
+        let msg = "strict check requires a git worktree".to_string();
+        if strict {
+            outcome.errors.push(msg);
+        } else {
+            outcome.warnings.push("not a git worktree".to_string());
+        }
+        return;
+    }
+    let recorded = state.workspace.head.as_str();
+    let actual = util::git_status(repo).head;
+    if recorded.is_empty() || recorded == "unknown" || actual.is_empty() || actual == "unknown" {
+        let msg = "strict check requires a real git HEAD anchor".to_string();
+        if strict {
+            outcome.errors.push(msg);
+        } else {
+            outcome
+                .warnings
+                .push("missing real git HEAD anchor".to_string());
+        }
+        return;
+    }
+    if !util::commit_exists(repo, recorded) {
+        let msg = format!("recorded git HEAD not a commit: {recorded}");
+        if strict {
+            outcome.errors.push(msg);
+        } else {
+            outcome.warnings.push(msg);
+        }
+        return;
+    }
+    if state.current_phase != "closed" && recorded != actual {
+        let drift = util::head_drift(repo, recorded, &actual);
+        let msg = format!(
+            "git HEAD {drift}: {} -> {}",
+            truncate(recorded, 8),
+            truncate(&actual, 8)
+        );
+        if strict {
+            outcome.errors.push(msg);
+        } else {
+            outcome.warnings.push(msg);
+        }
+    }
+}
+
+fn collect_ledger_check(
+    run_dir: &Path,
+    strict: bool,
+    outcome: &mut CheckOutcome,
+) -> Option<LedgerCheck> {
+    let ledger_path = run_dir.join("audit-ledger.md");
+    if !ledger_path.exists() {
+        outcome.warnings.push("no audit-ledger.md".to_string());
+        return None;
+    }
+    let status = match fs::read_to_string(&ledger_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|text| util::parse_ledger(&text))
+    {
+        Ok(rounds) => {
+            if rounds.is_empty() {
+                LedgerCheck {
+                    has_rounds: false,
+                    verdict: None,
+                    error: None,
+                }
+            } else {
+                LedgerCheck {
+                    has_rounds: true,
+                    verdict: Some(util::evaluate_ledger(&rounds, strict)),
+                    error: None,
+                }
+            }
+        }
+        Err(err) => LedgerCheck {
+            has_rounds: false,
+            verdict: None,
+            error: Some(err.to_string()),
+        },
+    };
+    match (&status.error, &status.verdict, status.has_rounds) {
+        (Some(err), _, _) => {
+            let msg = format!("ledger check failed: {err}");
+            if strict {
+                outcome.errors.push(msg);
+            } else {
+                outcome.warnings.push(msg);
+            }
+        }
+        (None, None, false) => outcome
+            .warnings
+            .push("ledger exists but has no filled rounds".to_string()),
+        (None, Some(verdict), true) if *verdict != util::LedgerVerdict::Converged => {
+            let msg = format!("ledger not converged: {}", verdict.as_str());
+            if strict {
+                outcome.errors.push(msg);
+            } else {
+                outcome.warnings.push(msg);
+            }
+        }
+        _ => {}
+    }
+    Some(status)
+}
+
+fn phase_report(
+    repo: &Path,
+    run_dir: &Path,
+    state: &crate::state::LtoState,
+    target: &str,
+    ledger_status: Option<&LedgerCheck>,
+) -> Value {
+    let current = state.current_phase.as_str();
+    let mut checks = Vec::new();
+    add_phase_check(
+        &mut checks,
+        "phase_direction",
+        if phase_direction(current, target) == "backward" {
+            "warn"
+        } else {
+            "ok"
+        },
+        false,
+        format!(
+            "{current} -> {target} ({})",
+            phase_direction(current, target)
+        ),
+    );
+    let unresolved = unresolved_blocks(state);
+    let open_risks = open_unverified_risks(state);
+    match target {
+        "implementation" => {
+            let count = unresolved.len() + open_risks.len();
+            add_phase_check(
+                &mut checks,
+                "no_unresolved_blocks",
+                if count == 0 { "ok" } else { "missing" },
+                true,
+                if count == 0 {
+                    "none".to_string()
+                } else {
+                    format!("{count} unresolved item(s)")
+                },
+            );
+            add_ledger_phase_check(&mut checks, run_dir, ledger_status, false);
+            let tasks = util::json_array(&state.tasks);
+            add_phase_check(
+                &mut checks,
+                "tasks_present",
+                if tasks.is_empty() { "warn" } else { "ok" },
+                false,
+                if tasks.is_empty() {
+                    "no tasks found".to_string()
+                } else {
+                    format!("{} task(s)", tasks.len())
+                },
+            );
+        }
+        "closed" => {
+            let open_tasks = util::json_array(&state.tasks)
+                .iter()
+                .filter(|task| {
+                    !matches!(
+                        task.get("status").and_then(Value::as_str),
+                        Some("done" | "skipped")
+                    )
+                })
+                .count();
+            add_phase_check(
+                &mut checks,
+                "no_open_tasks",
+                if open_tasks == 0 { "ok" } else { "missing" },
+                true,
+                if open_tasks == 0 {
+                    "none".to_string()
+                } else {
+                    format!("{open_tasks} open task(s)")
+                },
+            );
+            add_phase_check(
+                &mut checks,
+                "no_unresolved_blocks",
+                if unresolved.is_empty() {
+                    "ok"
+                } else {
+                    "missing"
+                },
+                true,
+                if unresolved.is_empty() {
+                    "none".to_string()
+                } else {
+                    format!("{} unresolved gate block(s)", unresolved.len())
+                },
+            );
+            add_phase_check(
+                &mut checks,
+                "risk_points_verified",
+                if open_risks.is_empty() {
+                    "ok"
+                } else {
+                    "missing"
+                },
+                true,
+                if open_risks.is_empty() {
+                    "none".to_string()
+                } else {
+                    format!("{} open unverified risk point(s)", open_risks.len())
+                },
+            );
+            add_ledger_phase_check(&mut checks, run_dir, ledger_status, true);
+            let handoff = run_dir.join("handoff.md");
+            add_phase_check(
+                &mut checks,
+                "handoff_exists",
+                if non_empty_file(&handoff) {
+                    "ok"
+                } else {
+                    "missing"
+                },
+                true,
+                if non_empty_file(&handoff) {
+                    "exists".to_string()
+                } else {
+                    "missing non-empty handoff.md".to_string()
+                },
+            );
+            let manifest = run_dir.join("artifacts.json");
+            add_phase_check(
+                &mut checks,
+                "artifact_manifest_exists",
+                if manifest.exists() { "ok" } else { "warn" },
+                false,
+                util::repo_relative_path(repo, &manifest)
+                    .unwrap_or_else(|_| "missing artifacts.json".to_string()),
+            );
+        }
+        _ => {}
+    }
+    let evidence_status = if checks.iter().any(|check| {
+        matches!(
+            check.get("status").and_then(Value::as_str),
+            Some("missing" | "warn")
+        )
+    }) {
+        "attention_required"
+    } else {
+        "all_required_present"
+    };
+    json!({
+        "run_id": state.run_id,
+        "target_phase": target,
+        "current_phase": current,
+        "phase_direction": phase_direction(current, target),
+        "evidence_status": evidence_status,
+        "human_gate_required": true,
+        "checks": checks,
+    })
+}
+
+fn add_phase_check(
+    checks: &mut Vec<Value>,
+    id: &str,
+    status: &str,
+    required: bool,
+    detail: String,
+) {
+    checks.push(json!({
+        "id": id,
+        "status": status,
+        "required": required,
+        "detail": util::single_line(&detail),
+    }));
+}
+
+fn add_ledger_phase_check(
+    checks: &mut Vec<Value>,
+    run_dir: &Path,
+    ledger_status: Option<&LedgerCheck>,
+    required: bool,
+) {
+    let (status, detail) = match ledger_status {
+        None => ("warn", "no audit-ledger.md".to_string()),
+        Some(LedgerCheck {
+            error: Some(err), ..
+        }) => ("warn", err.clone()),
+        Some(LedgerCheck {
+            has_rounds: false, ..
+        }) => ("warn", "ledger exists but has no filled rounds".to_string()),
+        Some(LedgerCheck {
+            verdict: Some(verdict),
+            ..
+        }) if *verdict == util::LedgerVerdict::Converged => {
+            ("ok", "audit-ledger.md: CONVERGED".to_string())
+        }
+        Some(LedgerCheck {
+            verdict: Some(verdict),
+            ..
+        }) => (
+            if required { "missing" } else { "warn" },
+            format!(
+                "{}: {}",
+                run_dir.join("audit-ledger.md").display(),
+                verdict.as_str()
+            ),
+        ),
+        _ => ("warn", "unknown ledger status".to_string()),
+    };
+    add_phase_check(
+        checks,
+        "audit_ledger_converged_if_present",
+        status,
+        false,
+        detail,
+    );
+}
+
+fn print_phase_report(report: &Value) {
+    println!(
+        "=== LTO Phase Evidence: {} ({}) ===",
+        report
+            .get("target_phase")
+            .and_then(Value::as_str)
+            .unwrap_or("?"),
+        report
+            .get("evidence_status")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+    );
+    for check in report
+        .get("checks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let status = match check
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("warn")
+        {
+            "ok" => "OK",
+            "missing" => "MISSING",
+            _ => "WARN",
+        };
+        let scope = if check
+            .get("required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            "required"
+        } else {
+            "advisory"
+        };
+        println!(
+            "  {status} {scope} {}: {}",
+            check.get("id").and_then(Value::as_str).unwrap_or("?"),
+            check.get("detail").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+    println!("  HUMAN human_gate_required: true");
+}
+
+fn phase_direction(current: &str, target: &str) -> &'static str {
+    let rank = |phase: &str| {
+        util::VALID_PHASES
+            .iter()
+            .position(|item| *item == phase)
+            .unwrap_or(usize::MAX)
+    };
+    let current_rank = rank(current);
+    let target_rank = rank(target);
+    if current_rank == usize::MAX || target_rank == usize::MAX {
+        "unknown"
+    } else if current_rank < target_rank {
+        "forward"
+    } else if current_rank == target_rank {
+        "same"
+    } else {
+        "backward"
+    }
+}
+
+fn unresolved_blocks(state: &crate::state::LtoState) -> Vec<Value> {
+    state
+        .gates
+        .get("unresolved_blocks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn open_unverified_risks(state: &crate::state::LtoState) -> Vec<Value> {
+    util::json_array(&state.risk_points)
+        .iter()
+        .filter(|risk| {
+            risk.get("disposition").and_then(Value::as_str) == Some("open")
+                && !risk.get("verified_by").is_some_and(|value| {
+                    value.as_str().is_some_and(|text| !text.trim().is_empty())
+                        || value.as_bool() == Some(true)
+                })
+        })
+        .cloned()
+        .collect()
+}
+
+fn dirty_outside_lto(repo: &Path) -> bool {
+    !util::tracked_dirty_paths(repo).is_empty() || !util::untracked_paths(repo).is_empty()
+}
+
+fn non_empty_file(path: &Path) -> bool {
+    fs::read_to_string(path)
+        .map(|text| !text.trim().is_empty())
+        .unwrap_or(false)
+}
+
 pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
@@ -375,6 +956,14 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
             return Ok(());
         }
     }
+    let curr_digest = progress_digest(&ctx);
+    let prev_digest = ctx
+        .state
+        .gates
+        .get("autopilot_last_digest")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let (progressed, progress_reason) = has_progressed(&prev_digest, &curr_digest);
     let facts = analyze_state(repo, &ctx.state);
     let route = route_next(&facts);
     println!("{}", decision_brief(&ctx.state, &facts));
@@ -388,10 +977,19 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
         }
     );
     println!(
+        "  progress since last check: {} ({progress_reason})",
+        if progressed { "YES" } else { "STALLED" }
+    );
+    println!(
         "  route: {}",
         route["action"].as_str().unwrap_or("escalate")
     );
     println!("  reason: {}", route["reason"].as_str().unwrap_or(""));
+    if !progressed && !prev_digest.as_object().is_none_or(Map::is_empty) {
+        println!("AUTOPILOT_STATUS: STALLED");
+        update_autopilot_digest(&mut ctx)?;
+        return Ok(());
+    }
     if options.auto_exec || options.autonomous {
         auto_exec_tasks(repo, &mut ctx, options.timeout, options.autonomous)?;
     } else {
@@ -401,6 +999,7 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
         );
         println!("AUTOPILOT_STATUS: NEEDS_HOST");
     }
+    update_autopilot_digest(&mut ctx)?;
     util::save_run(&ctx)?;
     Ok(())
 }
@@ -513,6 +1112,7 @@ pub fn cmd_task_add(repo: &Path, options: TaskAddOptions) -> anyhow::Result<()> 
         "blockers": [],
         "assumptions": [],
         "retry_count": 0,
+        "retry_by_command": {},
     });
     if let Some(command) = options.command {
         task["commands_run"] = json!([command]);
@@ -806,18 +1406,22 @@ fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
     append_string(task, "commands_run", &command);
     if rc == 0 {
         task["status"] = json!("done");
-        task["blockers"] = json!([]);
+        resolve_blockers(task, &evidence);
         if options.kind == "test" {
             ctx.state.gates["last_tested_head"] = json!(head_after);
         }
     } else {
+        let retry_count = bump_retry(task, &command);
         task["status"] = json!(options.status_on_fail);
         util::append_to_object_array(
             task,
             "blockers",
             json!({"reason": format!("command failed (rc={rc})"), "command": command, "evidence_kind": options.kind, "at": util::iso_now()}),
         );
-        ctx.state.last_failure = json!(format!("{task_id}: {} rc={rc}", options.kind));
+        ctx.state.last_failure = json!(format!(
+            "{task_id}: {} rc={rc} (retry {retry_count})",
+            options.kind
+        ));
     }
     task["last_update"] = json!(util::iso_now());
     util::save_run(&ctx)?;
@@ -1175,6 +1779,8 @@ fn auto_exec_tasks(
 ) -> anyhow::Result<()> {
     let mut executed = 0;
     let mut held = 0;
+    let mut failed = 0;
+    let mut retry_blocked = 0;
     for task in util::json_array_mut(&mut ctx.state.tasks) {
         let status = task
             .get("status")
@@ -1193,6 +1799,13 @@ fn auto_exec_tasks(
         let Some(command) = command else {
             continue;
         };
+        let retry_count = task.get("retry_count").and_then(Value::as_u64).unwrap_or(0);
+        if retry_count >= 3 {
+            retry_blocked += 1;
+            let id = task.get("id").and_then(Value::as_str).unwrap_or("?");
+            println!("    [{id}] SKIP -- retry_count={retry_count} >= 3 (needs human)");
+            continue;
+        }
         let result = worktree::run_in_ephemeral_worktree(
             repo,
             &command,
@@ -1221,14 +1834,282 @@ fn auto_exec_tasks(
                 "ended_at": util::iso_now(),
             }),
         );
-        task["status"] = json!(if rc == 0 { "done" } else { "blocked" });
+        if rc == 0 {
+            task["status"] = json!("done");
+            let evidence = task
+                .get("evidence")
+                .and_then(Value::as_array)
+                .and_then(|items| items.last())
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            resolve_blockers(task, &evidence);
+        } else {
+            failed += 1;
+            bump_retry(task, &command);
+            task["status"] = json!("blocked");
+        }
     }
     println!(
         "AUTOPILOT_STATUS: {}",
-        if held > 0 { "NEEDS_CONFIRM" } else { "DONE" }
+        if retry_blocked > 0 {
+            "NEEDS_HUMAN"
+        } else if failed > 0 {
+            "NEEDS_HOST"
+        } else if held > 0 {
+            "NEEDS_CONFIRM"
+        } else {
+            "DONE"
+        }
     );
-    println!("auto-exec: executed={executed} held={held}");
+    println!(
+        "auto-exec: executed={executed} held={held} failed={failed} retry_blocked={retry_blocked}"
+    );
     Ok(())
+}
+
+fn update_autopilot_digest(ctx: &mut util::RunContext) -> anyhow::Result<()> {
+    let digest = progress_digest(ctx);
+    ctx.state.gates["autopilot_last_digest"] = digest.clone();
+    let gates = util::json_object_mut(&mut ctx.state.gates);
+    let high_water = gates
+        .entry("progress_high_water".to_string())
+        .or_insert_with(|| json!({"done": 0, "verified_risks": 0}));
+    let high_water = util::json_object_mut(high_water);
+    let done = digest.get("done").and_then(Value::as_u64).unwrap_or(0);
+    let verified = digest
+        .get("verified_risks")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let prev_done = high_water.get("done").and_then(Value::as_u64).unwrap_or(0);
+    let prev_verified = high_water
+        .get("verified_risks")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    high_water.insert("done".to_string(), json!(prev_done.max(done)));
+    high_water.insert(
+        "verified_risks".to_string(),
+        json!(prev_verified.max(verified)),
+    );
+    util::save_run(ctx)
+}
+
+fn progress_digest(ctx: &util::RunContext) -> Value {
+    let tasks = util::json_array(&ctx.state.tasks);
+    let done = tasks
+        .iter()
+        .filter(|task| task.get("status").and_then(Value::as_str) == Some("done"))
+        .count();
+    let blocked = tasks
+        .iter()
+        .filter(|task| task.get("status").and_then(Value::as_str) == Some("blocked"))
+        .collect::<Vec<_>>();
+    let blocked_fp = blocked
+        .iter()
+        .filter_map(|task| {
+            let id = task.get("id").and_then(Value::as_str)?;
+            Some((id.to_string(), json!(failure_fingerprint(task))))
+        })
+        .collect::<Map<_, _>>();
+    let rc0_evidence = tasks
+        .iter()
+        .filter_map(|task| {
+            let id = task.get("id").and_then(Value::as_str)?;
+            let count = task
+                .get("evidence")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|evidence| evidence.get("rc").and_then(Value::as_i64) == Some(0))
+                        .count()
+                })
+                .unwrap_or(0);
+            Some((id.to_string(), json!(count)))
+        })
+        .collect::<Map<_, _>>();
+    let ledger_blockers = ctx
+        .state
+        .gates
+        .get("ledger_blockers")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let verified_risks = util::json_array(&ctx.state.risk_points)
+        .iter()
+        .filter(|risk| {
+            risk.get("disposition").and_then(Value::as_str) == Some("verified")
+                || risk
+                    .get("verified_by")
+                    .is_some_and(|value| !value.is_null())
+        })
+        .count();
+    let projection = json!({
+        "phase": ctx.state.current_phase,
+        "tasks": tasks.iter().map(task_digest_projection).collect::<Vec<_>>(),
+        "unresolved_blocks": unresolved_blocks(&ctx.state),
+        "risk_points": ctx.state.risk_points,
+        "ledger_blockers": ledger_blockers,
+    });
+    let artifact_hash = fs::read(ctx.run_dir.join("artifacts.json"))
+        .map(|bytes| format!("{:x}", Sha256::digest(&bytes)))
+        .unwrap_or_default();
+    json!({
+        "state_hash": format!("{:x}", Sha256::digest(serde_json::to_vec(&projection).unwrap_or_default())),
+        "artifact_hash": artifact_hash,
+        "done": done,
+        "blocked_count": blocked.len(),
+        "blocked_fp": blocked_fp,
+        "rc0_evidence": rc0_evidence,
+        "ledger_blockers": ledger_blockers,
+        "verified_risks": verified_risks,
+    })
+}
+
+fn task_digest_projection(task: &Value) -> Value {
+    json!({
+        "id": task.get("id").cloned().unwrap_or(Value::Null),
+        "status": task.get("status").cloned().unwrap_or(Value::Null),
+        "commands_run": task.get("commands_run").cloned().unwrap_or(Value::Null),
+        "blockers": task.get("blockers").cloned().unwrap_or(Value::Null),
+        "retry_count": task.get("retry_count").cloned().unwrap_or(Value::Null),
+        "failure_fp": failure_fingerprint(task),
+        "rc0_count": task
+            .get("evidence")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter(|evidence| evidence.get("rc").and_then(Value::as_i64) == Some(0)).count())
+            .unwrap_or(0),
+    })
+}
+
+fn has_progressed(prev: &Value, curr: &Value) -> (bool, String) {
+    let Some(prev_obj) = prev.as_object() else {
+        return (true, "first step (no baseline)".to_string());
+    };
+    if prev_obj.is_empty() {
+        return (true, "first step (no baseline)".to_string());
+    }
+    let prev_done = json_u64_field(prev, "done");
+    let curr_done = json_u64_field(curr, "done");
+    if curr_done > prev_done {
+        return (true, format!("done {prev_done}->{curr_done}"));
+    }
+    let prev_ledger = json_u64_field(prev, "ledger_blockers");
+    let curr_ledger = json_u64_field(curr, "ledger_blockers");
+    if curr_ledger < prev_ledger {
+        return (
+            true,
+            format!("ledger blockers {prev_ledger}->{curr_ledger}"),
+        );
+    }
+    let prev_risks = json_u64_field(prev, "verified_risks");
+    let curr_risks = json_u64_field(curr, "verified_risks");
+    if curr_risks > prev_risks {
+        return (true, format!("verified risks {prev_risks}->{curr_risks}"));
+    }
+    let prev_blocked = json_u64_field(prev, "blocked_count");
+    let curr_blocked = json_u64_field(curr, "blocked_count");
+    if curr_blocked < prev_blocked && blocked_task_got_success(prev, curr) {
+        return (
+            true,
+            format!("blocked {prev_blocked}->{curr_blocked} with passing evidence"),
+        );
+    }
+    if failure_fingerprints_changed(prev, curr) {
+        return (true, "failure fingerprint changed".to_string());
+    }
+    if prev.get("artifact_hash").and_then(Value::as_str)
+        != curr.get("artifact_hash").and_then(Value::as_str)
+    {
+        return (true, "artifact manifest changed".to_string());
+    }
+    (
+        false,
+        "no monotone improvement; same progress digest".to_string(),
+    )
+}
+
+fn blocked_task_got_success(prev: &Value, curr: &Value) -> bool {
+    let prev_blocked = prev
+        .get("blocked_fp")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let curr_blocked = curr
+        .get("blocked_fp")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for id in prev_blocked
+        .keys()
+        .filter(|id| !curr_blocked.contains_key(*id))
+    {
+        let prev_count = prev
+            .get("rc0_evidence")
+            .and_then(|value| value.get(id))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let curr_count = curr
+            .get("rc0_evidence")
+            .and_then(|value| value.get(id))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if curr_count > prev_count {
+            return true;
+        }
+    }
+    false
+}
+
+fn failure_fingerprints_changed(prev: &Value, curr: &Value) -> bool {
+    let prev_blocked = prev
+        .get("blocked_fp")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let curr_blocked = curr
+        .get("blocked_fp")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    prev_blocked.iter().any(|(id, prev_fp)| {
+        curr_blocked
+            .get(id)
+            .is_some_and(|curr_fp| curr_fp != prev_fp)
+    })
+}
+
+fn failure_fingerprint(task: &Value) -> String {
+    let Some(failed) = task
+        .get("evidence")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .rev()
+                .find(|evidence| evidence.get("rc").and_then(Value::as_i64).unwrap_or(0) != 0)
+        })
+    else {
+        return String::new();
+    };
+    let rc = failed.get("rc").and_then(Value::as_i64).unwrap_or(1);
+    let stderr_tail = failed
+        .get("stderr_tail")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{rc}\n{stderr_tail}").as_bytes())
+    )
+}
+
+fn json_u64_field(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
 fn autonomous_gate(repo: &Path) -> (bool, String) {
@@ -1793,6 +2674,62 @@ fn append_string(task: &mut Value, key: &str, value: &str) {
     util::json_array_mut(slot).push(json!(value));
 }
 
+fn resolve_blockers(task: &mut Value, evidence: &Value) {
+    let blockers = task
+        .get("blockers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if blockers.is_empty() {
+        task["blockers"] = json!([]);
+        return;
+    }
+    let ended_at = evidence
+        .get("ended_at")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    for blocker in blockers {
+        let mut resolved = blocker;
+        if let Some(object) = resolved.as_object_mut() {
+            object.insert("resolved_at".to_string(), json!(ended_at));
+            object.insert("resolved_by".to_string(), json!("runner_success"));
+            object.insert(
+                "superseded_by".to_string(),
+                json!({
+                    "kind": evidence.get("kind").cloned().unwrap_or(Value::Null),
+                    "command": evidence.get("command").cloned().unwrap_or(Value::Null),
+                    "ended_at": ended_at,
+                }),
+            );
+        }
+        util::append_to_object_array(task, "resolved_blockers", resolved);
+    }
+    task["blockers"] = json!([]);
+}
+
+fn bump_retry(task: &mut Value, command: &str) -> u64 {
+    let fingerprint = command_fingerprint(command);
+    let object = task.as_object_mut().expect("task object");
+    let retry_map = object
+        .entry("retry_by_command".to_string())
+        .or_insert_with(|| json!({}));
+    let retry_object = util::json_object_mut(retry_map);
+    let current = retry_object
+        .get(&fingerprint)
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .saturating_add(1);
+    retry_object.insert(fingerprint, json!(current));
+    object.insert("retry_count".to_string(), json!(current));
+    current
+}
+
+fn command_fingerprint(command: &str) -> String {
+    let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{:x}", Sha256::digest(normalized.as_bytes()))
+}
+
 fn absolutize(repo: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -2011,6 +2948,235 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("invalid --part"));
+    }
+
+    #[test]
+    fn collect_check_reports_all_strict_closed_errors_without_early_return() {
+        let h = Harness::new();
+        h.init_git();
+        let mut state = base_state();
+        state.workspace.head = util::git_status(&h.repo).head;
+        state.tasks = json!([{"id": "T1", "status": "pending"}]);
+        state.gates = json!({"unresolved_blocks": [{"id": "B1"}]});
+        state.risk_points = json!([{"id": "R1", "disposition": "open"}]);
+        h.write_state(state);
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("r1".into()),
+                strict: true,
+                to_phase: Some("closed".into()),
+                json: true,
+            },
+        );
+        let joined = outcome.errors.join("\n");
+        assert!(joined.contains("no_open_tasks"));
+        assert!(joined.contains("no_unresolved_blocks"));
+        assert!(joined.contains("risk_points_verified"));
+        assert!(joined.contains("handoff_exists"));
+    }
+
+    #[test]
+    fn collect_check_accepts_clean_closed_run_with_handoff() {
+        let h = Harness::new();
+        h.init_git();
+        let mut state = base_state();
+        state.current_phase = "closed".to_string();
+        state.workspace.head = util::git_status(&h.repo).head;
+        state.tasks = json!([{"id": "T1", "status": "done"}]);
+        state.gates = json!({});
+        state.risk_points = json!([]);
+        h.write_state(state);
+        fs::write(h.repo.join(".lto").join("r1").join("handoff.md"), "done\n").unwrap();
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("r1".into()),
+                strict: true,
+                to_phase: Some("closed".into()),
+                json: true,
+            },
+        );
+        assert_eq!(outcome.errors, Vec::<String>::new());
+    }
+
+    #[test]
+    fn runner_failure_increments_retry_by_command_fingerprint() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "commands_run": ["exit 7"],
+            "evidence": [],
+            "blockers": [],
+            "retry_count": 0,
+            "retry_by_command": {}
+        }]);
+        h.write_state(state);
+
+        for _ in 0..3 {
+            let err = cmd_runner(
+                &h.repo,
+                RunnerOptions {
+                    run_id: Some("r1".into()),
+                    task_id: Some("T1".into()),
+                    kind: "test".into(),
+                    command: Some("exit 7".into()),
+                    cwd: None,
+                    timeout: 5,
+                    touch: Vec::new(),
+                    note: None,
+                    status_on_fail: "blocked".into(),
+                    runner: "codex".into(),
+                    prompt: None,
+                    prompt_file: None,
+                    job_file: None,
+                    job_id: None,
+                },
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("runner command failed"));
+        }
+        let state = h.state();
+        let task = &util::json_array(&state.tasks)[0];
+        assert_eq!(task["retry_count"], json!(3));
+        let retries = task["retry_by_command"].as_object().unwrap();
+        assert_eq!(retries.len(), 1);
+        assert_eq!(retries.values().next().unwrap(), &json!(3));
+    }
+
+    #[test]
+    fn runner_success_moves_active_blockers_to_resolved_blockers() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "blocked",
+            "commands_run": ["true"],
+            "evidence": [],
+            "blockers": [{"reason": "previous failure"}],
+            "retry_count": 1,
+            "retry_by_command": {}
+        }]);
+        h.write_state(state);
+
+        cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                run_id: Some("r1".into()),
+                task_id: Some("T1".into()),
+                kind: "test".into(),
+                command: Some("true".into()),
+                cwd: None,
+                timeout: 5,
+                touch: Vec::new(),
+                note: None,
+                status_on_fail: "blocked".into(),
+                runner: "codex".into(),
+                prompt: None,
+                prompt_file: None,
+                job_file: None,
+                job_id: None,
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        let task = &util::json_array(&state.tasks)[0];
+        assert_eq!(task["status"], json!("done"));
+        assert!(task["blockers"].as_array().unwrap().is_empty());
+        assert_eq!(task["resolved_blockers"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            task["resolved_blockers"][0]["resolved_by"],
+            "runner_success"
+        );
+    }
+
+    #[test]
+    fn autopilot_skips_auto_exec_when_retry_limit_reached() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "commands_run": ["true"],
+            "evidence": [],
+            "blockers": [],
+            "retry_count": 3,
+            "retry_by_command": {}
+        }]);
+        h.write_state(state);
+
+        cmd_autopilot(
+            &h.repo,
+            AutopilotOptions {
+                run_id: Some("r1".into()),
+                auto_exec: true,
+                autonomous: false,
+                timeout: 5,
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        let task = &util::json_array(&state.tasks)[0];
+        assert!(task["evidence"].as_array().unwrap().is_empty());
+        assert_eq!(task["status"], "pending");
+    }
+
+    #[test]
+    fn autopilot_stall_digest_blocks_auto_exec_on_second_same_state() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "commands_run": ["touch SHOULD_NOT_EXIST"],
+            "evidence": [],
+            "blockers": [],
+            "retry_count": 0,
+            "retry_by_command": {}
+        }]);
+        h.write_state(state);
+        let mut ctx = util::load_run(&h.repo, Some("r1")).unwrap();
+        ctx.state.gates["autopilot_last_digest"] = progress_digest(&ctx);
+        util::save_run(&ctx).unwrap();
+
+        cmd_autopilot(
+            &h.repo,
+            AutopilotOptions {
+                run_id: Some("r1".into()),
+                auto_exec: true,
+                autonomous: false,
+                timeout: 5,
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        let task = &util::json_array(&state.tasks)[0];
+        assert!(task["evidence"].as_array().unwrap().is_empty());
+        assert!(!h.repo.join("SHOULD_NOT_EXIST").exists());
+    }
+
+    #[test]
+    fn progress_digest_treats_same_failed_task_as_stalled() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "blocked",
+            "commands_run": ["false"],
+            "evidence": [{"rc": 1, "stderr_tail": ["same failure"]}],
+            "blockers": [{"reason": "failed"}],
+            "retry_count": 1,
+            "retry_by_command": {}
+        }]);
+        h.write_state(state);
+        let ctx = util::load_run(&h.repo, Some("r1")).unwrap();
+        let digest = progress_digest(&ctx);
+        let (progressed, reason) = has_progressed(&digest, &digest);
+        assert!(!progressed, "{reason}");
     }
 
     #[test]
