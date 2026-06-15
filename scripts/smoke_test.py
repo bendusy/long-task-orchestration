@@ -22,6 +22,23 @@ SKILL_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = SKILL_DIR / "scripts"
 
 
+def parse_rust_commands(help_text: str) -> list[str]:
+    commands: list[str] = []
+    in_commands = False
+    for line in help_text.splitlines():
+        if line == "Commands:":
+            in_commands = True
+            continue
+        if in_commands and line == "Options:":
+            break
+        if not in_commands or not line.startswith("  "):
+            continue
+        parts = line.strip().split()
+        if parts and parts[0] != "help":
+            commands.append(parts[0])
+    return commands
+
+
 def check(condition: bool, msg: str) -> int:
     if not condition:
         print(f"FAIL {msg}", file=sys.stderr)
@@ -248,12 +265,13 @@ def main() -> int:
     commands_doc = SKILL_DIR / "COMMANDS.md"
     errors += check(commands_doc.exists(), "COMMANDS.md exists")
 
-    help_result = subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "lto_run.py"), "--help"],
+    rust_help = subprocess.run(
+        ["cargo", "run", "--quiet", "--", "--help"],
+        cwd=str(SKILL_DIR),
         capture_output=True, text=True, timeout=10,
     )
-    match = re.search(r"\{([^}]+)\}", help_result.stdout)
-    actual_cmds = [x.strip() for x in match.group(1).split(",")] if match else []
+    actual_cmds = parse_rust_commands(rust_help.stdout) if rust_help.returncode == 0 else []
+    errors += check(rust_help.returncode == 0, "Rust CLI help is available for COMMANDS.md check")
     if commands_doc.exists():
         commands_text = commands_doc.read_text(encoding="utf-8")
         claimed = re.search(r"Command count:\s*(\d+)", commands_text)
@@ -261,12 +279,12 @@ def main() -> int:
         if claimed:
             errors += check(
                 int(claimed.group(1)) == len(actual_cmds),
-                f"COMMANDS.md command count matches help ({len(actual_cmds)})",
+                f"COMMANDS.md command count matches Rust help ({len(actual_cmds)})",
             )
         documented_cmds = re.findall(r"^\|\s*`([^` ]+)", commands_text, flags=re.MULTILINE)
         errors += check(
             sorted(documented_cmds) == sorted(actual_cmds),
-            "COMMANDS.md command names match lto_run.py help",
+            "COMMANDS.md command names match Rust help",
         )
         errors += check("COMMANDS.md" in readme, "README points command readers to COMMANDS.md")
 
