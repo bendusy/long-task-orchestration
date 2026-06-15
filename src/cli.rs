@@ -1,8 +1,9 @@
 use crate::audit_dispatch;
 use crate::budget;
+use crate::commands::{closeout, ops, recap, resume};
 use crate::plugin;
 use crate::state::{self, LtoState};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 pub const COMMANDS: &[&str] = &[
@@ -55,19 +56,42 @@ pub enum Commands {
     },
     Closeout {
         #[arg(long)]
-        summary: Option<String>,
+        run_id: Option<String>,
+        #[arg(long)]
+        summary: String,
+        #[arg(long, default_value = "none")]
+        next_action: String,
+        #[arg(long, default_value = "none")]
+        blocked_by: String,
+        #[arg(long)]
+        allow_dirty: bool,
+        #[arg(long)]
+        no_changelog: bool,
+        #[arg(long)]
+        force: bool,
     },
     Resume {
         #[arg(long)]
         run_id: Option<String>,
     },
-    Preflight,
-    Runner,
-    Judge,
-    Hook,
+    Preflight {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        record: bool,
+    },
+    Runner(RunnerCommand),
+    Judge(JudgeCommand),
+    Hook {
+        gate: String,
+        #[arg(long)]
+        force: bool,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
     SelfTest,
-    Parallel,
-    Pipeline,
+    Parallel(ParallelCommand),
+    Pipeline(PipelineCommand),
     Audit {
         #[arg(long)]
         run_id: Option<String>,
@@ -78,23 +102,232 @@ pub enum Commands {
         #[arg(long)]
         allow_same_family: bool,
     },
-    Next,
-    Autopilot,
-    Recap,
+    Next {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Autopilot {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        supervised: bool,
+        #[arg(long)]
+        auto_exec: bool,
+        #[arg(long)]
+        autonomous: bool,
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
+    Recap {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        artifacts: bool,
+    },
     Budget {
         #[command(subcommand)]
         command: BudgetCommand,
     },
-    Release,
-    TaskAdd,
-    TaskUpdate,
-    Phase,
-    CollectAgentRun,
+    Release {
+        #[arg(long, default_value = "minor")]
+        part: String,
+        #[arg(long)]
+        date: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    TaskAdd {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        phase: Option<String>,
+        #[arg(long)]
+        command: Option<String>,
+    },
+    TaskUpdate {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        phase: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        touch: Vec<String>,
+    },
+    Phase {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long = "set")]
+        set_phase: Option<String>,
+    },
+    CollectAgentRun {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        runner: String,
+        #[arg(long)]
+        reply: PathBuf,
+        #[arg(long)]
+        meta: Option<PathBuf>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        elapsed_sec: Option<f64>,
+        #[arg(long)]
+        note: Option<String>,
+    },
     Runs,
-    Memory,
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
+    },
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
+    },
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct RunnerCommand {
+    #[arg(long)]
+    run_id: Option<String>,
+    #[arg(long)]
+    task_id: Option<String>,
+    #[arg(long, default_value = "test")]
+    kind: String,
+    #[arg(long)]
+    command: Option<String>,
+    #[arg(long)]
+    cwd: Option<PathBuf>,
+    #[arg(long, default_value_t = 300)]
+    timeout: u64,
+    #[arg(long)]
+    touch: Vec<String>,
+    #[arg(long)]
+    note: Option<String>,
+    #[arg(long, default_value = "blocked")]
+    status_on_fail: String,
+    #[arg(long, default_value = "codex")]
+    runner: String,
+    #[arg(long)]
+    prompt: Option<String>,
+    #[arg(long)]
+    prompt_file: Option<PathBuf>,
+    #[arg(long)]
+    job_file: Option<PathBuf>,
+    #[arg(long)]
+    job_id: Option<String>,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct JudgeCommand {
+    #[arg(long)]
+    run_id: Option<String>,
+    #[arg(long)]
+    task_id: Option<String>,
+    #[arg(long)]
+    phase: Option<String>,
+    #[arg(long, default_value = "codex")]
+    runner: String,
+    #[arg(long)]
+    rerun_tests: bool,
+    #[arg(long)]
+    case_dir: Option<PathBuf>,
+    #[arg(long)]
+    brief: Option<PathBuf>,
+    #[arg(long)]
+    baseline_reply: Option<PathBuf>,
+    #[arg(long)]
+    candidate_reply: Option<PathBuf>,
+    #[arg(long)]
+    candidate_runner: Option<String>,
+    #[arg(long)]
+    judge_runner: Option<String>,
+    #[arg(long)]
+    execute: bool,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct ParallelCommand {
+    #[arg(long)]
+    run_id: Option<String>,
+    #[arg(long)]
+    task_ids: Vec<String>,
+    #[arg(long)]
+    phase: Option<String>,
+    #[arg(long, default_value = "test")]
+    kind: String,
+    #[arg(long)]
+    command: Option<String>,
+    #[arg(long, default_value_t = 300)]
+    timeout: u64,
+    #[arg(long, default_value_t = 4)]
+    concurrency: usize,
+    #[arg(long)]
+    job_file: Option<PathBuf>,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct PipelineCommand {
+    #[arg(long)]
+    run_id: Option<String>,
+    #[arg(long)]
+    task_ids: Vec<String>,
+    #[arg(long)]
+    phase: Option<String>,
+    #[arg(long)]
+    stages: Vec<String>,
+    #[arg(long, default_value = "test")]
+    kind: String,
+    #[arg(long, default_value_t = 300)]
+    timeout: u64,
+    #[arg(long, default_value_t = 4)]
+    concurrency: usize,
+    #[arg(long)]
+    continue_on_error: bool,
+    #[arg(long)]
+    job_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MemoryCommand {
+    Export {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Publish {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        am_bin: Option<String>,
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
+    },
+    Resume {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        am_bin: Option<String>,
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
     },
 }
 
@@ -233,10 +466,250 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             };
             println!("{}", serde_json::to_string_pretty(&state)?);
         }
-        _ => {
-            println!(
-                "Rust v2 command surface is registered; this command still delegates to Python truth source until parity verification."
-            );
+        Commands::Recap { run_id, artifacts } => {
+            recap::cmd_recap(&args.repo, recap::RecapOptions { run_id, artifacts })?;
+        }
+        Commands::Resume { run_id } => {
+            resume::cmd_resume(&args.repo, resume::ResumeOptions { run_id })?;
+        }
+        Commands::Closeout {
+            run_id,
+            summary,
+            next_action,
+            blocked_by,
+            allow_dirty,
+            no_changelog,
+            force,
+        } => {
+            closeout::cmd_closeout(
+                &args.repo,
+                closeout::CloseoutOptions {
+                    run_id,
+                    summary,
+                    next_action,
+                    blocked_by,
+                    allow_dirty,
+                    no_changelog,
+                    force,
+                },
+            )?;
+        }
+        Commands::Preflight { run_id, record } => {
+            ops::cmd_preflight(&args.repo, ops::PreflightOptions { run_id, record })?;
+        }
+        Commands::Runner(cmd) => {
+            ops::cmd_runner(
+                &args.repo,
+                ops::RunnerOptions {
+                    run_id: cmd.run_id,
+                    task_id: cmd.task_id,
+                    kind: cmd.kind,
+                    command: cmd.command,
+                    cwd: cmd.cwd,
+                    timeout: cmd.timeout,
+                    touch: cmd.touch,
+                    note: cmd.note,
+                    status_on_fail: cmd.status_on_fail,
+                    runner: cmd.runner,
+                    prompt: cmd.prompt,
+                    prompt_file: cmd.prompt_file,
+                    job_file: cmd.job_file,
+                    job_id: cmd.job_id,
+                },
+            )?;
+        }
+        Commands::Judge(cmd) => {
+            ops::cmd_judge(
+                &args.repo,
+                ops::JudgeOptions {
+                    run_id: cmd.run_id,
+                    task_id: cmd.task_id,
+                    phase: cmd.phase,
+                    runner: cmd.runner,
+                    rerun_tests: cmd.rerun_tests,
+                    case_dir: cmd.case_dir,
+                    brief: cmd.brief,
+                    baseline_reply: cmd.baseline_reply,
+                    candidate_reply: cmd.candidate_reply,
+                    candidate_runner: cmd.candidate_runner,
+                    judge_runner: cmd.judge_runner,
+                    execute: cmd.execute,
+                },
+            )?;
+        }
+        Commands::Hook {
+            gate,
+            force,
+            reason,
+        } => {
+            ops::cmd_hook(
+                &args.repo,
+                ops::HookOptions {
+                    gate,
+                    force,
+                    reason,
+                },
+            )?;
+        }
+        Commands::Parallel(cmd) => {
+            ops::cmd_parallel(
+                &args.repo,
+                ops::ParallelOptions {
+                    run_id: cmd.run_id,
+                    task_ids: cmd.task_ids,
+                    phase: cmd.phase,
+                    kind: cmd.kind,
+                    command: cmd.command,
+                    timeout: cmd.timeout,
+                    concurrency: cmd.concurrency,
+                    job_file: cmd.job_file,
+                },
+            )?;
+        }
+        Commands::Pipeline(cmd) => {
+            ops::cmd_pipeline(
+                &args.repo,
+                ops::PipelineOptions {
+                    run_id: cmd.run_id,
+                    task_ids: cmd.task_ids,
+                    phase: cmd.phase,
+                    stages: cmd.stages,
+                    kind: cmd.kind,
+                    timeout: cmd.timeout,
+                    concurrency: cmd.concurrency,
+                    continue_on_error: cmd.continue_on_error,
+                    job_file: cmd.job_file,
+                },
+            )?;
+        }
+        Commands::Next { run_id, json } => {
+            ops::cmd_next(&args.repo, ops::NextOptions { run_id, json })?;
+        }
+        Commands::Autopilot {
+            run_id,
+            supervised: _,
+            auto_exec,
+            autonomous,
+            timeout,
+        } => {
+            ops::cmd_autopilot(
+                &args.repo,
+                ops::AutopilotOptions {
+                    run_id,
+                    auto_exec,
+                    autonomous,
+                    timeout,
+                },
+            )?;
+        }
+        Commands::Release {
+            part,
+            date,
+            dry_run,
+        } => {
+            ops::cmd_release(
+                &args.repo,
+                ops::ReleaseOptions {
+                    part,
+                    date,
+                    dry_run,
+                },
+            )?;
+        }
+        Commands::TaskAdd {
+            run_id,
+            task_id,
+            title,
+            phase,
+            command,
+        } => {
+            ops::cmd_task_add(
+                &args.repo,
+                ops::TaskAddOptions {
+                    run_id,
+                    task_id,
+                    title,
+                    phase,
+                    command,
+                },
+            )?;
+        }
+        Commands::TaskUpdate {
+            run_id,
+            task_id,
+            status,
+            phase,
+            note,
+            touch,
+        } => {
+            ops::cmd_task_update(
+                &args.repo,
+                ops::TaskUpdateOptions {
+                    run_id,
+                    task_id,
+                    status,
+                    phase,
+                    note,
+                    touch,
+                },
+            )?;
+        }
+        Commands::Phase { run_id, set_phase } => {
+            ops::cmd_phase(&args.repo, ops::PhaseOptions { run_id, set_phase })?;
+        }
+        Commands::CollectAgentRun {
+            run_id,
+            task_id,
+            runner,
+            reply,
+            meta,
+            model,
+            status,
+            elapsed_sec,
+            note,
+        } => {
+            ops::cmd_collect_agent_run(
+                &args.repo,
+                ops::CollectAgentRunOptions {
+                    run_id,
+                    task_id,
+                    runner,
+                    reply,
+                    meta,
+                    model,
+                    status,
+                    elapsed_sec,
+                    note,
+                },
+            )?;
+        }
+        Commands::Memory { command } => {
+            let action = match command {
+                MemoryCommand::Export { run_id, dry_run: _ } => {
+                    ops::MemoryAction::Export { run_id }
+                }
+                MemoryCommand::Publish {
+                    run_id,
+                    am_bin,
+                    timeout,
+                } => ops::MemoryAction::Publish {
+                    run_id,
+                    am_bin,
+                    timeout,
+                },
+                MemoryCommand::Resume {
+                    project,
+                    run_id,
+                    am_bin,
+                    timeout,
+                } => ops::MemoryAction::Resume {
+                    project,
+                    run_id,
+                    am_bin,
+                    timeout,
+                },
+            };
+            ops::cmd_memory(&args.repo, action)?;
         }
     }
     Ok(())

@@ -3,6 +3,7 @@ pub mod audit;
 pub mod audit_dispatch;
 pub mod budget;
 pub mod cli;
+pub mod commands;
 pub mod decision;
 pub mod dispatch;
 pub mod effect;

@@ -1,0 +1,430 @@
+use crate::commands::util;
+use serde_json::{Value, json};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct CloseoutOptions {
+    pub run_id: Option<String>,
+    pub summary: String,
+    pub next_action: String,
+    pub blocked_by: String,
+    pub allow_dirty: bool,
+    pub no_changelog: bool,
+    pub force: bool,
+}
+
+pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()> {
+    let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
+    let run_state_path = ctx.run_dir.join("run-state.md");
+    if !run_state_path.exists() {
+        anyhow::bail!("missing run-state.md: {}", run_state_path.display());
+    }
+
+    enforce_gates(repo, &ctx, &options)?;
+
+    let git = util::git_status(repo);
+    let previous_phase = ctx.state.current_phase.clone();
+    if previous_phase != "closed" {
+        util::append_phase_transition(&mut ctx.state, &previous_phase, "closed", &git.head);
+    } else {
+        ctx.state.current_phase = "closed".to_string();
+    }
+    ctx.state.workspace.head = git.head.clone();
+    ctx.state.workspace.branch = git.branch.clone();
+    ctx.state.workspace.dirty_fingerprint = if git.dirty { "dirty" } else { "clean" }.to_string();
+    ctx.state.blocked_by = json!(options.blocked_by);
+    ctx.state.next_action = json!(options.next_action);
+    util::save_run(&ctx)?;
+
+    write_closeout_section(&run_state_path, &options)?;
+    util::register_artifact(
+        repo,
+        &ctx.run_id,
+        &ctx.state_path,
+        util::ArtifactMeta {
+            kind: "state_json",
+            producer: "lto_rs.commands.closeout",
+            state: &ctx.state,
+            summary: "machine state at closeout",
+            tags: &["state"],
+        },
+    )?;
+    util::register_artifact(
+        repo,
+        &ctx.run_id,
+        &run_state_path,
+        util::ArtifactMeta {
+            kind: "run_state_md",
+            producer: "lto_rs.commands.closeout",
+            state: &ctx.state,
+            summary: "human-readable state at closeout",
+            tags: &["state"],
+        },
+    )?;
+
+    if !options.no_changelog {
+        write_changelog(repo, &ctx, &options)?;
+        util::register_artifact(
+            repo,
+            &ctx.run_id,
+            &repo.join("CHANGELOG.md"),
+            util::ArtifactMeta {
+                kind: "changelog",
+                producer: "lto_rs.commands.closeout",
+                state: &ctx.state,
+                summary: "repo changelog updated",
+                tags: &["closeout", "changelog"],
+            },
+        )?;
+    }
+
+    let artifacts = util::latest_artifacts(repo, &ctx.run_id, usize::MAX);
+    let handoff = build_handoff(&ctx, &options, &git, &artifacts);
+    let handoff_path = ctx.run_dir.join("handoff.md");
+    fs::write(&handoff_path, handoff)?;
+    util::register_artifact(
+        repo,
+        &ctx.run_id,
+        &handoff_path,
+        util::ArtifactMeta {
+            kind: "handoff",
+            producer: "lto_rs.commands.closeout",
+            state: &ctx.state,
+            summary: "closeout handoff",
+            tags: &["closeout", "handoff"],
+        },
+    )?;
+    let artifacts = util::latest_artifacts(repo, &ctx.run_id, usize::MAX);
+    fs::write(
+        &handoff_path,
+        build_handoff(&ctx, &options, &git, &artifacts),
+    )?;
+
+    println!("{}", handoff_path.display());
+    println!("interventions: none recorded by rust closeout");
+    Ok(())
+}
+
+fn enforce_gates(
+    repo: &Path,
+    ctx: &util::RunContext,
+    options: &CloseoutOptions,
+) -> anyhow::Result<()> {
+    let ledger_path = ctx.run_dir.join("audit-ledger.md");
+    if ledger_path.exists() && !options.force {
+        let text = fs::read_to_string(&ledger_path)?;
+        let rounds = util::parse_ledger(&text)?;
+        let verdict = util::evaluate_ledger(&rounds, false);
+        if verdict != util::LedgerVerdict::Converged {
+            anyhow::bail!(
+                "closeout refused: ledger verdict is {}, not CONVERGED (use --force to override)",
+                verdict.as_str()
+            );
+        }
+    }
+
+    let unresolved = ctx
+        .state
+        .gates
+        .get("unresolved_blocks")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    if unresolved > 0 && !options.force {
+        anyhow::bail!("closeout refused: {unresolved} unresolved blocks (use --force)");
+    }
+
+    if ctx.state.current_phase == "closed" && !options.force {
+        anyhow::bail!("run already closed (use --force to rewrite)");
+    }
+
+    let dirty = util::tracked_dirty_paths(repo);
+    if !dirty.is_empty() && !options.allow_dirty {
+        let sample = dirty.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+        anyhow::bail!(
+            "closeout refused: {} tracked uncommitted change(s) outside .lto (e.g. {}). Commit or stash code changes first; use --no-changelog after commit for admin closeout without new tracked dirt.",
+            dirty.len(),
+            sample
+        );
+    }
+    let untracked = util::untracked_paths(repo);
+    if !untracked.is_empty() && !options.allow_dirty {
+        let sample = untracked
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "warning: closeout: {} untracked file(s) present (e.g. {}) -- not blocking",
+            untracked.len(),
+            sample
+        );
+    }
+
+    let unverified = util::json_array(&ctx.state.risk_points)
+        .iter()
+        .filter(|risk| {
+            risk.get("disposition").and_then(Value::as_str) == Some("open")
+                && risk
+                    .get("verified_by")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .is_empty()
+        })
+        .count();
+    if unverified > 0 && !options.force {
+        anyhow::bail!(
+            "closeout refused: {unverified} risk points unverified (use --force to override)"
+        );
+    }
+
+    if has_high_risk_task(&ctx.state.tasks) && !options.force {
+        if !ledger_path.exists() {
+            anyhow::bail!(
+                "closeout refused: high-risk run has no audit-ledger.md (run lto audit first, or use --force to override)"
+            );
+        }
+        let text = fs::read_to_string(&ledger_path)?;
+        if !util::has_real_ledger_rounds(&text) {
+            anyhow::bail!(
+                "closeout refused: high-risk run has empty audit ledger (run lto audit first, or use --force to override)"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn write_closeout_section(path: &Path, options: &CloseoutOptions) -> anyhow::Result<()> {
+    let content = fs::read_to_string(path)?;
+    let head = content
+        .split("\n## Closeout\n")
+        .next()
+        .unwrap_or(content.as_str())
+        .trim_end();
+    let closeout = format!(
+        "\n\n## Closeout\n\n- closed_at: {}\n- summary: {}\n- next_action: {}\n",
+        util::iso_now(),
+        util::single_line(&options.summary),
+        util::single_line(&options.next_action)
+    );
+    fs::write(path, format!("{head}{closeout}"))?;
+    Ok(())
+}
+
+fn build_handoff(
+    ctx: &util::RunContext,
+    options: &CloseoutOptions,
+    git: &util::GitStatus,
+    artifacts: &[Value],
+) -> String {
+    let mut out = vec![
+        "# LTO Handoff".to_string(),
+        String::new(),
+        format!("- run_id: {}", ctx.run_id),
+        format!("- goal: {}", ctx.state.goal),
+        "- status: closed".to_string(),
+        format!("- closed_at: {}", util::iso_now()),
+        format!("- git_head: {}", git.head),
+        format!("- branch: {}", git.branch),
+        format!("- blocked_by: {}", util::single_line(&options.blocked_by)),
+        format!("- summary: {}", util::single_line(&options.summary)),
+        format!("- next_action: {}", util::single_line(&options.next_action)),
+        "- intervention_summary: none recorded by rust closeout".to_string(),
+        format!("- token_usage: {}", token_usage_line(&ctx.state)),
+        String::new(),
+        "## Artifacts".to_string(),
+        String::new(),
+    ];
+    if artifacts.is_empty() {
+        out.push("- none".to_string());
+    } else {
+        let mut sorted = artifacts.to_vec();
+        sorted.sort_by(|a, b| {
+            let ak = a.get("kind").and_then(Value::as_str).unwrap_or("");
+            let bk = b.get("kind").and_then(Value::as_str).unwrap_or("");
+            let ap = a.get("relative_path").and_then(Value::as_str).unwrap_or("");
+            let bp = b.get("relative_path").and_then(Value::as_str).unwrap_or("");
+            (ak, ap).cmp(&(bk, bp))
+        });
+        for entry in sorted {
+            let kind = entry.get("kind").and_then(Value::as_str).unwrap_or("other");
+            let path = entry
+                .get("relative_path")
+                .and_then(Value::as_str)
+                .or_else(|| entry.get("run_relative_path").and_then(Value::as_str))
+                .unwrap_or("?");
+            let summary = entry.get("summary").and_then(Value::as_str).unwrap_or("");
+            if summary.is_empty() {
+                out.push(format!("- `{kind}`: `{path}`"));
+            } else {
+                out.push(format!("- `{kind}`: `{path}` -- {summary}"));
+            }
+        }
+    }
+    out.push(String::new());
+    out.join("\n")
+}
+
+fn token_usage_line(state: &crate::state::LtoState) -> String {
+    let rollup = util::token_rollup(state);
+    if rollup.runs_total == 0 {
+        return "no agent runs".to_string();
+    }
+    let elapsed = if rollup.total_elapsed_sec > 0.0 {
+        format!(", {:.0}s total", rollup.total_elapsed_sec)
+    } else {
+        String::new()
+    };
+    if rollup.total_tokens == 0 {
+        return format!(
+            "unmetered ({} runs, no runner reported tokens{})",
+            rollup.runs_total, elapsed
+        );
+    }
+    let mut parts = rollup
+        .by_runner
+        .iter()
+        .filter(|(_, slot)| slot.tokens > 0)
+        .map(|(runner, slot)| (runner.clone(), slot.tokens))
+        .collect::<Vec<_>>();
+    parts.sort_by_key(|part| std::cmp::Reverse(part.1));
+    let by = parts
+        .iter()
+        .map(|(runner, tokens)| format!("{runner}={tokens}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{} total (in={}, out={}; {}/{} runs metered{}; {})",
+        rollup.total_tokens,
+        rollup.tokens_in,
+        rollup.tokens_out,
+        rollup.runs_with_tokens,
+        rollup.runs_total,
+        elapsed,
+        by
+    )
+}
+
+fn write_changelog(
+    repo: &Path,
+    ctx: &util::RunContext,
+    options: &CloseoutOptions,
+) -> anyhow::Result<()> {
+    let path = repo.join("CHANGELOG.md");
+    let mut lines = vec![
+        format!("## {}", fallback(&ctx.state.goal, "unknown")),
+        String::new(),
+        format!("- **Run ID**: `{}`", ctx.run_id),
+        format!("- **Closed**: {}", util::iso_now()),
+        format!("- **Summary**: {}", util::single_line(&options.summary)),
+        String::new(),
+    ];
+    let tasks = util::json_array(&ctx.state.tasks);
+    if !tasks.is_empty() {
+        lines.push("### Tasks".to_string());
+        lines.push(String::new());
+        for task in tasks {
+            let id = task.get("id").and_then(Value::as_str).unwrap_or("?");
+            let title = task.get("title").and_then(Value::as_str).unwrap_or(id);
+            let status = task
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            lines.push(format!("- **{id}**: {title} ({status})"));
+            for evidence in task
+                .get("evidence")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+            {
+                let kind = evidence.get("kind").and_then(Value::as_str).unwrap_or("?");
+                let summary = evidence
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .or_else(|| evidence.get("command").and_then(Value::as_str))
+                    .unwrap_or("");
+                let rc = evidence.get("rc").and_then(Value::as_i64);
+                let marker = if rc == Some(0) { "PASS" } else { "FAIL" };
+                lines.push(format!("  - {marker} [{kind}] {}", truncate(summary, 80)));
+            }
+            for blocker in task
+                .get("blockers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+            {
+                let reason = blocker
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                lines.push(format!("  - blocked: {reason}"));
+            }
+        }
+        lines.push(String::new());
+    }
+    if options.blocked_by != "none" {
+        lines.push(format!("**Blocked by**: {}", options.blocked_by));
+        lines.push(String::new());
+    }
+    if options.next_action != "none" {
+        lines.push(format!("**Next**: {}", options.next_action));
+        lines.push(String::new());
+    }
+    let section = lines.join("\n") + "\n";
+    if path.exists() {
+        let existing = fs::read_to_string(&path)?;
+        if existing.starts_with('#') {
+            if let Some(pos) = existing.find('\n') {
+                let (title, rest) = existing.split_at(pos + 1);
+                fs::write(&path, format!("{title}\n{section}{rest}"))?;
+            } else {
+                fs::write(&path, format!("{existing}\n\n{section}"))?;
+            }
+        } else {
+            fs::write(&path, format!("{section}{existing}"))?;
+        }
+    } else {
+        fs::write(&path, format!("# Changelog\n\n{section}"))?;
+    }
+    Ok(())
+}
+
+fn has_high_risk_task(tasks: &Value) -> bool {
+    let keywords = [
+        "auth",
+        "authorization",
+        "authentication",
+        "permission",
+        "secret",
+        "token",
+        "migration",
+        "database",
+        "deploy",
+        "persistence",
+        "security",
+        "payment",
+        "callback",
+        "webhook",
+        "tenant",
+    ];
+    util::json_array(tasks).iter().any(|task| {
+        let haystack = serde_json::to_string(task)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        keywords.iter().any(|keyword| haystack.contains(keyword))
+    })
+}
+
+fn fallback<'a>(value: &'a str, fallback: &'a str) -> &'a str {
+    if value.trim().is_empty() {
+        fallback
+    } else {
+        value
+    }
+}
+
+fn truncate(value: &str, max: usize) -> String {
+    value.chars().take(max).collect()
+}
