@@ -26,6 +26,7 @@ from .. import git_state as gs
 from .. import interventions as iv
 from ..agent_job import Pattern
 from ..budget import check_budget
+from ..dispatch_affordances import render_dispatch_affordances
 from .audit import _is_high_risk
 
 
@@ -258,6 +259,10 @@ def build_decision_brief(facts: dict, state: dict, repo: Path | None = None) -> 
     # ── Harness Affordances（感知面：机械事实，不是推荐；语义匹配归 host）──
     # 长任务里 SKILL.md 早出 context 窗口，插件不在决策点可见就是死数据。
     if repo is not None:
+        try:
+            lines.extend(render_dispatch_affordances(repo))
+        except Exception:
+            pass
         try:
             from .. import plugins as plg
             aff = plg.affordance_facts(repo, state.get("run_id"))

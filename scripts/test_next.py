@@ -108,6 +108,7 @@ def main():
         test_9_stderr_artifact_missing(repo)
         test_10_drift_rewrite(repo)
         test_11_high_risk_done_no_ledger(repo)
+        test_12_dispatch_modes_health_facts(repo)
 
     print(f"\n{passed} passed, {failed} failed")
     if failed == 0:
@@ -404,6 +405,44 @@ def test_11_high_risk_done_no_ledger(repo):
     # The bug was: when all_done=True, audit suggestion was skipped
     check("lto audit" in brief.lower() or "adversarial" in brief.lower(),
           "brief suggests lto audit even when all tasks done (fix: removed all_done gate)")
+
+
+# ── Test 12: dispatch modes facts are visible before choosing a scheduler ──
+
+def test_12_dispatch_modes_health_facts(repo):
+    print("Test 12: Dispatch modes + runner health facts appear in brief")
+
+    runners_dir = repo / "scripts" / "delegate" / "runners"
+    runners_dir.mkdir(parents=True, exist_ok=True)
+    healthcheck = runners_dir / "healthcheck.sh"
+    healthcheck.write_text(
+        """#!/usr/bin/env bash
+cat <<'JSON'
+[
+  {"agent":"codex","exit":"0","elapsed":"1s","bytes":"12","verdict":"OK"},
+  {"agent":"pi","exit":"124","elapsed":"5s","bytes":"0","verdict":"TIMEOUT"}
+]
+JSON
+""",
+        encoding="utf-8",
+    )
+    healthcheck.chmod(0o755)
+
+    state = _make_state(
+        tasks=[
+            _make_task("T1", "Read code and judge runner design", "pending"),
+        ]
+    )
+    facts = analyze(state, repo)
+    brief = build_decision_brief(facts, state, repo)
+
+    check("### Dispatch Modes" in brief, "brief includes Dispatch Modes section")
+    check("facts only" in brief and "YOUR job" in brief, "section preserves host decision boundary")
+    for mode in ["scheduler", "delegate.sh", "autopilot --auto-exec", "Agent subagent", "host direct code reading"]:
+        check(mode in brief, f"dispatch mode listed: {mode}")
+    check("Current runner health" in brief, "runner health heading present")
+    check("codex" in brief and "OK" in brief and "1s" in brief, "codex health fact included")
+    check("pi" in brief and "TIMEOUT" in brief and "5s" in brief, "pi health fact included")
 
 
 if __name__ == "__main__":

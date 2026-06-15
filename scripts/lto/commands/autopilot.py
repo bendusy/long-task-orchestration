@@ -168,7 +168,7 @@ def run(args: argparse.Namespace) -> int:
     progressed, why = pg.has_progressed(prev_digest, curr_digest)
 
     # 输出决策简报（复用 next 的富简报）
-    brief = next_cmd.build_decision_brief(facts, state)
+    brief = next_cmd.build_decision_brief(facts, state, repo)
     print(brief)
     print()
 
