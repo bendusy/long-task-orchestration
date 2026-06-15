@@ -367,3 +367,101 @@ fn running_jobs(repo: &Path, run_id: &str, window_sec: f64) -> Vec<String> {
 fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::LtoState;
+    use serde_json::json;
+
+    fn base_state() -> LtoState {
+        LtoState {
+            run_id: "r1".to_string(),
+            goal: "ship rust switch".to_string(),
+            why: "reduce Python wrapper risk".to_string(),
+            done_when: "cargo test passes".to_string(),
+            current_phase: "implementation".to_string(),
+            next_action: json!("run verification"),
+            blocked_by: json!("none"),
+            tasks: json!([
+                {"id": "T1", "title": "plugin mount", "status": "done"},
+                {"id": "T2", "title": "docs", "status": "pending"}
+            ]),
+            ..LtoState::default()
+        }
+    }
+
+    #[test]
+    fn render_recap_main_path_includes_human_questions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = render_recap(&base_state(), "r1", tmp.path(), false, 120.0);
+        assert!(out.contains("你当初要做什么"));
+        assert!(out.contains("ship rust switch"));
+        assert!(out.contains("为什么要做"));
+        assert!(out.contains("reduce Python wrapper risk"));
+        assert!(out.contains("已经做到哪"));
+        assert!(out.contains("还剩什么"));
+        assert!(out.contains("现在轮到你"));
+        assert!(out.contains("run: r1  phase: implementation"));
+    }
+
+    #[test]
+    fn token_summary_reports_metered_and_unmetered_runs() {
+        let mut state = base_state();
+        state.agent_runs = json!({
+            "j1": [{
+                "job_id": "j1",
+                "runner": "codex",
+                "status": "ok",
+                "cost": {"tokens_in": 1000, "tokens_out": 500, "elapsed_sec": 90.0}
+            }],
+            "j2": [{
+                "job_id": "j2",
+                "runner": "agy",
+                "status": "ok",
+                "cost": {}
+            }]
+        });
+        let summary = token_summary(&state);
+        assert!(summary.contains("约 1.5k tokens"));
+        assert!(summary.contains("1/2 次派工有计量"));
+        assert!(summary.contains("codex 1.5k"));
+        assert!(summary.contains("派工累计 1m30s"));
+
+        state.agent_runs = json!({"j3": [{"job_id": "j3", "runner": "agy", "status": "ok"}]});
+        assert!(token_summary(&state).contains("未计量"));
+    }
+
+    #[test]
+    fn done_and_remaining_summaries_cover_empty_blocked_and_done_branches() {
+        let state = LtoState {
+            phase_transitions: json!([
+                {"from": "intake", "to": "spec"},
+                {"from": "spec", "to": "implementation"}
+            ]),
+            ..LtoState::default()
+        };
+        assert!(done_summary(&[], &state).contains("走过阶段：spec → implementation"));
+
+        let done = json!([
+            {"id": "T1", "title": "one"},
+            {"id": "T2", "title": "two"},
+            {"id": "T3", "title": "three"},
+            {"id": "T4", "title": "four"},
+            {"id": "T5", "title": "five"}
+        ]);
+        assert!(done_summary(done.as_array().unwrap(), &state).contains("已完成 5 项"));
+
+        let pending = json!([{"id": "P1"}]);
+        let blocked = json!([{"id": "B1", "blockers": [{"reason": "waiting on CI logs"}]}]);
+        let remaining = remaining_summary(
+            pending.as_array().unwrap(),
+            blocked.as_array().unwrap(),
+            "green CI",
+        );
+        assert!(remaining.contains("1 项卡住"));
+        assert!(remaining.contains("1 项待做"));
+        assert!(remaining.contains("green CI"));
+        assert!(remaining_summary(&[], &[], "green CI").contains("看起来都做完了"));
+    }
+}

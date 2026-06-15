@@ -95,9 +95,9 @@ python3 <skill-root>/scripts/lto_run.py --repo <目标仓库> <子命令> [参�
 
 跨 runtime 当宿主的专项坑（沙箱、派工、preflight）见 `cross-runtime-host-notes.md`——不同家差异大，派工前先读。
 
-## 22 个命令速查
+## 24 个命令速查
 
-> 22 个子命令（`audit --discover-risks` 是 audit 的变体，与主命令同计）。
+> 参数真源摘要见仓库根目录 [COMMANDS.md](../COMMANDS.md)。下表按常用工作流排序；`audit --discover-risks` 是 audit 的重要变体，与主命令同计。
 
 | 命令 | 干什么 | 阶段 |
 |---|---|---|
@@ -118,10 +118,13 @@ python3 <skill-root>/scripts/lto_run.py --repo <目标仓库> <子命令> [参�
 | `judge --phase X [--rerun-tests]` | 只读审查 + YAML verdict | 审查 |
 | `audit [--auto-dispatch]` | **对抗审计**：派异构审计方 + 收口判收敛 | 审计 |
 | `audit --discover-risks` | 派独立 agent 主动发现漏掉的风险点 | 审计 |
+| `plugin list/validate/mount` | data-only 插件发现、校验和挂载 provenance；mount 不升权、不路由、不自动 promote | 插件 |
 | `autopilot --supervised [--auto-exec]` | **自驱动**：读状态出决策简报，可在 worktree 沙箱自动跑 safe 子步骤 | 编排 |
 | `recap` | **给人看的回顾**：你当初要做啥/为什么/跑了多久/做到哪/还剩啥/现在轮到你 | 回顾 |
+| `budget check --run-id ...` | 查 run 预算用量/状态（tokens/turn/deadline） | 闸门 |
 | `hook <pre-commit\|pre-deploy\|pre-closeout>` | 边界闸门检查 | 闸门 |
 | `closeout --summary "..."` | 闭环 + 写 handoff + CHANGELOG；已提交后可加 `--no-changelog` 避免新 tracked dirt | 收尾 |
+| `release --date ... [--dry-run]` | 打印 host-owned VERSION/CHANGELOG/git tag 发布计划；不替 host 写 `.git` | 发布 |
 | `self-test` | 离线自检（验证 LTO 自己没坏） | — |
 
 > `runner/parallel/pipeline` 编排的是 **shell 命令**（pytest/lint 批处理）。

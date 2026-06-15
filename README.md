@@ -49,7 +49,7 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 **跨天回来接着干**：`$L resume`（给 AI 拉上下文）或 `$L recap`（给人看人话回顾）。
 
-> 想看全部 22 个命令、它们的先后关系、autopilot 自动化怎么用——别在这儿翻，去 **[onboarding.md](./references/onboarding.md)**，那是给 agent 读的完整手册。
+> 想看全部 24 个命令和参数摘要，先看 **[COMMANDS.md](./COMMANDS.md)**；想看先后关系、autopilot 自动化怎么用，去 **[onboarding.md](./references/onboarding.md)**，那是给 agent 读的完整手册。
 
 ## v0.3.0 新增（2026-06-09）
 
@@ -63,12 +63,16 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 ## Rust v2 轨道（施工中）
 
-`lto-rs` 是按 2026-06-15 v2 spec 开始落地的 Rust 核心轨道。当前状态是：Rust workspace、24 命令 clap 外壳、runner event parser、state/budget、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型和契约测试已建立；Python CLI 仍是真源，未完成全量等价前不会切换 wrapper。
+`lto-rs` 是按 2026-06-15 v2 spec 开始落地的 Rust 核心轨道。当前状态是：Rust workspace、24/24 命令真实现、runner event parser、state/budget、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin mount` data-only provenance、COMMANDS.md 和回归测试已建立；默认 wrapper 仍走 Python，Rust 通过 feature flag 渐进早鸟实跑。
 
 ```bash
 cargo test
 cargo run -- self-test
 cargo run -- check --run-id <run-id> --json
+
+# 默认仍是 Python；显式开启 Rust 轨道
+LTO_USE_RUST=1 lto recap --run-id <run-id>
+lto --use-rust check --run-id <run-id> --json
 ```
 
 Rust 侧的原则是“黑盒行为对齐，内部 Rust-native”：外部兼容 `.lto/` 历史 state 和现有插件 JSON，内部用 enum/typed struct/trait/Result/serde flatten 固化不变量，不机械翻译 Python 模块边界。

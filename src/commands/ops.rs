@@ -1866,3 +1866,338 @@ fn task_command(tasks: &Value, task_id: &str) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{self, LtoState, WorkspaceSnapshot};
+    use std::process::Command;
+
+    struct Harness {
+        _tmp: tempfile::TempDir,
+        repo: PathBuf,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let repo = tmp.path().join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            Self { _tmp: tmp, repo }
+        }
+
+        fn init_git(&self) {
+            git(&self.repo, &["init"]);
+            git(&self.repo, &["config", "user.email", "lto@example.test"]);
+            git(&self.repo, &["config", "user.name", "LTO Test"]);
+            fs::write(self.repo.join("README.md"), "repo\n").unwrap();
+            git(&self.repo, &["add", "README.md"]);
+            git(&self.repo, &["commit", "-m", "init"]);
+        }
+
+        fn write_state(&self, state: LtoState) {
+            let run_dir = self.repo.join(".lto").join("r1");
+            fs::create_dir_all(&run_dir).unwrap();
+            fs::write(self.repo.join(".lto").join("current"), "r1\n").unwrap();
+            state::save_state(run_dir.join("state.json"), &state).unwrap();
+            fs::write(
+                run_dir.join("run-state.md"),
+                "- current_phase: intake\n- next_command_or_question: none\n- blocked_by: none\n",
+            )
+            .unwrap();
+        }
+
+        fn state(&self) -> LtoState {
+            state::load_state(self.repo.join(".lto").join("r1").join("state.json")).unwrap()
+        }
+    }
+
+    fn base_state() -> LtoState {
+        LtoState {
+            run_id: "r1".to_string(),
+            goal: "ops commands".to_string(),
+            current_phase: "implementation".to_string(),
+            workspace: WorkspaceSnapshot {
+                head: "unknown".to_string(),
+                ..WorkspaceSnapshot::default()
+            },
+            gates: json!({}),
+            tasks: json!([]),
+            blocked_by: json!("none"),
+            next_action: json!("continue"),
+            ..LtoState::default()
+        }
+    }
+
+    #[test]
+    fn cmd_task_add_main_path_appends_pending_task_with_command() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        cmd_task_add(
+            &h.repo,
+            TaskAddOptions {
+                run_id: Some("r1".into()),
+                task_id: "T1".into(),
+                title: "write tests".into(),
+                phase: Some("implementation".into()),
+                command: Some("cargo test".into()),
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        let task = &util::json_array(&state.tasks)[0];
+        assert_eq!(task["id"], "T1");
+        assert_eq!(task["status"], "pending");
+        assert_eq!(task["commands_run"][0], "cargo test");
+
+        let err = cmd_task_add(
+            &h.repo,
+            TaskAddOptions {
+                run_id: Some("r1".into()),
+                task_id: "T1".into(),
+                title: "duplicate".into(),
+                phase: None,
+                command: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn cmd_phase_main_path_records_transition_and_syncs_run_state() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        cmd_phase(
+            &h.repo,
+            PhaseOptions {
+                run_id: Some("r1".into()),
+                set_phase: Some("deploy".into()),
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        assert_eq!(state.current_phase, "deploy");
+        assert_eq!(util::json_array(&state.phase_transitions).len(), 1);
+        let md = fs::read_to_string(h.repo.join(".lto").join("r1").join("run-state.md")).unwrap();
+        assert!(md.contains("- current_phase: deploy"));
+    }
+
+    #[test]
+    fn cmd_release_main_path_validates_version_and_changelog_without_writing() {
+        let h = Harness::new();
+        fs::write(h.repo.join("VERSION"), "1.2.3\n").unwrap();
+        fs::write(h.repo.join("CHANGELOG.md"), "# Changelog\n").unwrap();
+        cmd_release(
+            &h.repo,
+            ReleaseOptions {
+                part: "minor".into(),
+                date: "2026-06-15".into(),
+                dry_run: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(h.repo.join("VERSION")).unwrap(),
+            "1.2.3\n"
+        );
+        let err = cmd_release(
+            &h.repo,
+            ReleaseOptions {
+                part: "bad".into(),
+                date: "2026-06-15".into(),
+                dry_run: true,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid --part"));
+    }
+
+    #[test]
+    fn cmd_memory_export_main_path_reads_local_run_without_sink() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        cmd_memory(
+            &h.repo,
+            MemoryAction::Export {
+                run_id: Some("r1".into()),
+            },
+        )
+        .unwrap();
+        let projection =
+            memory_projection(&h.repo, &util::load_run(&h.repo, Some("r1")).unwrap()).unwrap();
+        assert_eq!(projection["records"][0]["run_id"], "r1");
+        assert_eq!(projection["records"][0]["source"], "local .lto");
+    }
+
+    #[test]
+    fn cmd_judge_main_path_writes_verdict_and_review_gate() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.tasks = json!([{"id": "T1", "status": "done", "phase": "implementation"}]);
+        h.write_state(state);
+        cmd_judge(
+            &h.repo,
+            JudgeOptions {
+                run_id: Some("r1".into()),
+                task_id: None,
+                phase: Some("implementation".into()),
+                runner: "codex".into(),
+                rerun_tests: false,
+                case_dir: None,
+                brief: None,
+                baseline_reply: None,
+                candidate_reply: None,
+                candidate_runner: None,
+                judge_runner: None,
+                execute: false,
+            },
+        )
+        .unwrap();
+        let judge_dir = h.repo.join(".lto").join("r1").join("judge");
+        assert!(fs::read_dir(judge_dir).unwrap().next().is_some());
+        assert!(h.state().gates.get("last_reviewed_head").is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cmd_runner_main_path_records_pass_and_failure_evidence() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.tasks = json!([
+            {"id": "T1", "status": "pending", "commands_run": [], "evidence": [], "blockers": []},
+            {"id": "T2", "status": "pending", "commands_run": [], "evidence": [], "blockers": []}
+        ]);
+        h.write_state(state);
+        cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                run_id: Some("r1".into()),
+                task_id: Some("T1".into()),
+                kind: "test".into(),
+                command: Some("printf ok".into()),
+                cwd: None,
+                timeout: 5,
+                touch: vec!["src/lib.rs".into()],
+                note: Some("unit smoke".into()),
+                status_on_fail: "blocked".into(),
+                runner: "codex".into(),
+                prompt: None,
+                prompt_file: None,
+                job_file: None,
+                job_id: None,
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        let task = util::json_array(&state.tasks)
+            .iter()
+            .find(|task| task["id"] == "T1")
+            .unwrap();
+        assert_eq!(task["status"], "done");
+        assert_eq!(task["evidence"][0]["rc"], 0);
+        assert_eq!(task["touched_files"][0], "src/lib.rs");
+
+        let err = cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                run_id: Some("r1".into()),
+                task_id: Some("T2".into()),
+                kind: "test".into(),
+                command: Some("exit 7".into()),
+                cwd: None,
+                timeout: 5,
+                touch: Vec::new(),
+                note: None,
+                status_on_fail: "blocked".into(),
+                runner: "codex".into(),
+                prompt: None,
+                prompt_file: None,
+                job_file: None,
+                job_id: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("rc=7"));
+        let state = h.state();
+        let task = util::json_array(&state.tasks)
+            .iter()
+            .find(|task| task["id"] == "T2")
+            .unwrap();
+        assert_eq!(task["status"], "blocked");
+        assert!(
+            task["blockers"][0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("rc=7")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cmd_preflight_main_path_records_environment_snapshot() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let h = Harness::new();
+        h.init_git();
+        h.write_state(base_state());
+        let runners = h.repo.join("scripts").join("delegate").join("runners");
+        fs::create_dir_all(&runners).unwrap();
+        let script = runners.join("healthcheck.sh");
+        fs::write(
+            &script,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+shift
+printf '['
+first=1
+for runner in "$@"; do
+  if [ "$first" -eq 0 ]; then printf ','; fi
+  first=0
+  printf '{"agent":"%s","verdict":"OK"}' "$runner"
+done
+printf ']'
+"#,
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).unwrap();
+
+        cmd_preflight(
+            &h.repo,
+            PreflightOptions {
+                run_id: Some("r1".into()),
+                record: true,
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        assert_eq!(state.environment_snapshot.sandbox, "ok");
+        assert_eq!(
+            state.environment_snapshot.extra["preflight_verdict"],
+            "pass"
+        );
+        assert_eq!(
+            state.environment_snapshot.extra["checks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            util::KNOWN_RUNNERS.len() + 2
+        );
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

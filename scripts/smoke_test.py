@@ -230,15 +230,30 @@ def main() -> int:
     errors += check((SCRIPTS_DIR / "delegate" / "triad.sh").exists(), "bundled triad.sh exists")
     errors += check((SCRIPTS_DIR / "delegate" / "runners" / "healthcheck.sh").exists(), "bundled delegate runners exist")
 
+    commands_doc = SKILL_DIR / "COMMANDS.md"
+    errors += check(commands_doc.exists(), "COMMANDS.md exists")
+
     help_result = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "lto_run.py"), "--help"],
         capture_output=True, text=True, timeout=10,
     )
     match = re.search(r"\{([^}]+)\}", help_result.stdout)
     actual_cmds = [x.strip() for x in match.group(1).split(",")] if match else []
-    claimed = re.search(r"(\d+)\s*命令薄入口", content)
-    if claimed:
-        errors += check(int(claimed.group(1)) == len(actual_cmds), f"SKILL.md command count matches help ({len(actual_cmds)})")
+    if commands_doc.exists():
+        commands_text = commands_doc.read_text(encoding="utf-8")
+        claimed = re.search(r"Command count:\s*(\d+)", commands_text)
+        errors += check(claimed is not None, "COMMANDS.md declares command count")
+        if claimed:
+            errors += check(
+                int(claimed.group(1)) == len(actual_cmds),
+                f"COMMANDS.md command count matches help ({len(actual_cmds)})",
+            )
+        documented_cmds = re.findall(r"^\|\s*`([^` ]+)", commands_text, flags=re.MULTILINE)
+        errors += check(
+            sorted(documented_cmds) == sorted(actual_cmds),
+            "COMMANDS.md command names match lto_run.py help",
+        )
+        errors += check("COMMANDS.md" in readme, "README points command readers to COMMANDS.md")
 
     plugin_help = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "lto_run.py"), "plugin", "--help"],

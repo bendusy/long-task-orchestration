@@ -428,3 +428,189 @@ fn fallback<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 fn truncate(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{LtoState, WorkspaceSnapshot};
+    use serde_json::json;
+    use std::process::Command;
+
+    fn options(force: bool) -> CloseoutOptions {
+        CloseoutOptions {
+            run_id: None,
+            summary: "shipped the work".to_string(),
+            next_action: "none".to_string(),
+            blocked_by: "none".to_string(),
+            allow_dirty: false,
+            no_changelog: false,
+            force,
+        }
+    }
+
+    fn ctx(repo: &Path) -> util::RunContext {
+        let run_id = "r1".to_string();
+        let run_dir = repo.join(".lto").join(&run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        let state = LtoState {
+            run_id: run_id.clone(),
+            goal: "closeout gates".to_string(),
+            current_phase: "implementation".to_string(),
+            workspace: WorkspaceSnapshot {
+                head: "abc123".to_string(),
+                branch: "feat".to_string(),
+                ..WorkspaceSnapshot::default()
+            },
+            gates: json!({}),
+            tasks: json!([]),
+            risk_points: json!([]),
+            ..LtoState::default()
+        };
+        util::RunContext {
+            state_path: run_dir.join("state.json"),
+            run_id,
+            run_dir,
+            state,
+        }
+    }
+
+    fn unconverged_ledger() -> &'static str {
+        r#"
+## Round Summary
+
+| Round | Total | Medium | High | Critical |
+|---|---:|---:|---:|---:|
+| r1 | 1 | 0 | 1 | 0 |
+"#
+    }
+
+    #[test]
+    fn enforce_gates_rejects_unconverged_ledger() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx(tmp.path());
+        fs::write(ctx.run_dir.join("audit-ledger.md"), unconverged_ledger()).unwrap();
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+        assert!(err.to_string().contains("ledger verdict is CONVERGING"));
+    }
+
+    #[test]
+    fn enforce_gates_rejects_unresolved_blocks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.gates = json!({"unresolved_blocks": [{"id": "B1"}]});
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+        assert!(err.to_string().contains("1 unresolved blocks"));
+    }
+
+    #[test]
+    fn enforce_gates_rejects_already_closed_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.current_phase = "closed".to_string();
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+        assert!(err.to_string().contains("run already closed"));
+    }
+
+    #[test]
+    fn enforce_gates_rejects_tracked_dirty_paths_outside_lto() {
+        let tmp = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        fs::write(tmp.path().join("tracked.txt"), "changed\n").unwrap();
+        Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let ctx = ctx(tmp.path());
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+        assert!(err.to_string().contains("tracked uncommitted change"));
+    }
+
+    #[test]
+    fn enforce_gates_rejects_open_unverified_risk_points() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.risk_points = json!([{"id": "R1", "disposition": "open"}]);
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+        assert!(err.to_string().contains("risk points unverified"));
+    }
+
+    #[test]
+    fn enforce_gates_rejects_high_risk_task_without_real_audit_rounds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.tasks = json!([{"id": "T1", "title": "deploy database migration"}]);
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+        assert!(err.to_string().contains("has no audit-ledger.md"));
+
+        fs::write(ctx.run_dir.join("audit-ledger.md"), "## Round Summary\n").unwrap();
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+        assert!(err.to_string().contains("empty audit ledger"));
+    }
+
+    #[test]
+    fn force_overrides_non_dirty_closeout_gates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.current_phase = "closed".to_string();
+        ctx.state.gates = json!({"unresolved_blocks": [{"id": "B1"}]});
+        ctx.state.risk_points = json!([{"id": "R1", "disposition": "open"}]);
+        ctx.state.tasks = json!([{"id": "T1", "title": "deploy database migration"}]);
+        fs::write(ctx.run_dir.join("audit-ledger.md"), unconverged_ledger()).unwrap();
+        enforce_gates(tmp.path(), &ctx, &options(true)).unwrap();
+    }
+
+    #[test]
+    fn build_handoff_includes_tokens_and_sorted_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.agent_runs = json!({
+            "job1": [{
+                "job_id": "job1",
+                "runner": "codex",
+                "status": "ok",
+                "cost": {"tokens_in": 10, "tokens_out": 20, "elapsed_sec": 2.0}
+            }]
+        });
+        let git = util::GitStatus {
+            head: "abcdef123456".to_string(),
+            branch: "feat".to_string(),
+            dirty: false,
+        };
+        let handoff = build_handoff(
+            &ctx,
+            &options(false),
+            &git,
+            &[
+                json!({"kind": "zeta", "relative_path": "z.md", "summary": "last"}),
+                json!({"kind": "alpha", "relative_path": "a.md", "summary": "first"}),
+            ],
+        );
+        assert!(handoff.contains("- token_usage: 30 total"));
+        assert!(handoff.find("`alpha`").unwrap() < handoff.find("`zeta`").unwrap());
+    }
+
+    #[test]
+    fn write_changelog_inserts_run_summary_and_task_evidence() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CHANGELOG.md"), "# Changelog\n\nold\n").unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.tasks = json!([{
+            "id": "T1",
+            "title": "write tests",
+            "status": "done",
+            "evidence": [{"kind": "test", "summary": "cargo test", "rc": 0}],
+            "blockers": [{"reason": "none now"}]
+        }]);
+        write_changelog(tmp.path(), &ctx, &options(false)).unwrap();
+        let text = fs::read_to_string(tmp.path().join("CHANGELOG.md")).unwrap();
+        assert!(text.starts_with("# Changelog\n\n## closeout gates"));
+        assert!(text.contains("- **T1**: write tests (done)"));
+        assert!(text.contains("PASS [test] cargo test"));
+        assert!(text.contains("blocked: none now"));
+    }
+}

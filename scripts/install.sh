@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LTO_BIN_DIR_CONFIG="${LTO_BIN_DIR:-$HOME/.local/bin}"
 LTO_WRAPPER_SENTINEL="# long-task-orchestration managed lto wrapper"
 LTO_RUN_TARGET="$REPO_ROOT/scripts/lto_run.py"
+LTO_RS_TARGET="$REPO_ROOT/target/release/lto-rs"
 
 CHECK_ONLY=0
 if [ "${1:-}" = "--check" ]; then
@@ -44,8 +45,15 @@ report_lto_wrapper() {
   if grep -Fq "$LTO_WRAPPER_SENTINEL" "$wrapper" 2>/dev/null; then
     local target
     target="$(grep '^LTO_RUN=' "$wrapper" 2>/dev/null | head -n 1 | cut -d= -f2- || true)"
+    local rust_target
+    rust_target="$(grep '^LTO_RS_BIN=' "$wrapper" 2>/dev/null | head -n 1 | cut -d= -f2- || true)"
     printf "  [OK]   managed wrapper: %s\n" "$wrapper"
-    [ -n "$target" ] && printf "         target: %s\n" "$target"
+    if [ -n "$target" ]; then
+      printf "         target: %s\n" "$target"
+    fi
+    if [ -n "$rust_target" ]; then
+      printf "         rust: %s\n" "$rust_target"
+    fi
   else
     printf "  [WARN] unmanaged lto exists: %s\n" "$wrapper"
     warn=$((warn+1))
@@ -71,10 +79,24 @@ install_lto_wrapper() {
     echo "$LTO_WRAPPER_SENTINEL"
     echo "set -euo pipefail"
     printf "LTO_RUN=%q\n" "$LTO_RUN_TARGET"
+    printf "LTO_RS_BIN=%q\n" "$LTO_RS_TARGET"
     cat <<'WRAPPER'
 if [ ! -f "$LTO_RUN" ]; then
   echo "lto: repo not found at $LTO_RUN; re-run scripts/install.sh from long-task-orchestration" >&2
   exit 1
+fi
+use_rust="${LTO_USE_RUST:-0}"
+if [ "${1:-}" = "--use-rust" ]; then
+  use_rust=1
+  shift
+fi
+if [ "$use_rust" = "1" ]; then
+  if [ ! -x "$LTO_RS_BIN" ]; then
+    echo "lto: LTO_USE_RUST=1 but Rust binary is missing or not executable: $LTO_RS_BIN" >&2
+    echo "lto: build it with: cargo build --release --bin lto-rs" >&2
+    exit 1
+  fi
+  exec "$LTO_RS_BIN" "$@"
 fi
 exec python3 "$LTO_RUN" "$@"
 WRAPPER

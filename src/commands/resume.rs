@@ -273,3 +273,177 @@ fn short(value: &str) -> String {
 fn truncate(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{self, LtoState, WorkspaceSnapshot};
+    use serde_json::json;
+    use std::fs;
+    use std::process::Command;
+
+    struct GitHarness {
+        _tmp: tempfile::TempDir,
+        repo: std::path::PathBuf,
+    }
+
+    impl GitHarness {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let repo = tmp.path().join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            git(&repo, &["init"]);
+            git(&repo, &["config", "user.email", "lto@example.test"]);
+            git(&repo, &["config", "user.name", "LTO Test"]);
+            Self { _tmp: tmp, repo }
+        }
+
+        fn write_commit(&self, file: &str, text: &str, msg: &str) -> String {
+            fs::write(self.repo.join(file), text).unwrap();
+            git(&self.repo, &["add", file]);
+            git(&self.repo, &["commit", "-m", msg]);
+            head(&self.repo)
+        }
+
+        fn write_state(&self, recorded_head: &str, tasks: serde_json::Value) {
+            let run_dir = self.repo.join(".lto").join("r1");
+            fs::create_dir_all(&run_dir).unwrap();
+            fs::write(self.repo.join(".lto").join("current"), "r1\n").unwrap();
+            let state = LtoState {
+                run_id: "r1".to_string(),
+                goal: "resume drift".to_string(),
+                current_phase: "implementation".to_string(),
+                workspace: WorkspaceSnapshot {
+                    head: recorded_head.to_string(),
+                    dirty_fingerprint: "clean".to_string(),
+                    ..WorkspaceSnapshot::default()
+                },
+                tasks,
+                next_action: json!("continue"),
+                blocked_by: json!("none"),
+                ..LtoState::default()
+            };
+            state::save_state(run_dir.join("state.json"), &state).unwrap();
+        }
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn head(repo: &Path) -> String {
+        String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string()
+    }
+
+    #[test]
+    fn cmd_resume_main_path_has_no_revalidation_when_head_matches() {
+        let h = GitHarness::new();
+        let first = h.write_commit("a.txt", "a\n", "first");
+        h.write_state(
+            &first,
+            json!([{"id": "T1", "status": "done", "touched_files": ["a.txt"]}]),
+        );
+        cmd_resume(
+            &h.repo,
+            ResumeOptions {
+                run_id: Some("r1".into()),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cmd_resume_forward_drift_revalidates_related_done_tasks() {
+        let h = GitHarness::new();
+        let first = h.write_commit("a.txt", "a\n", "first");
+        h.write_state(
+            &first,
+            json!([{"id": "T1", "status": "done", "touched_files": ["a.txt"]}]),
+        );
+        h.write_commit("a.txt", "changed\n", "change touched");
+        let err = cmd_resume(
+            &h.repo,
+            ResumeOptions {
+                run_id: Some("r1".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("T1"));
+    }
+
+    #[test]
+    fn cmd_resume_rewrite_drift_revalidates_done_tasks() {
+        let h = GitHarness::new();
+        let first = h.write_commit("base.txt", "base\n", "base");
+        let main_branch = String::from_utf8(
+            Command::new("git")
+                .args(["branch", "--show-current"])
+                .current_dir(&h.repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        git(&h.repo, &["checkout", "-b", "side"]);
+        let side = h.write_commit("side.txt", "side\n", "side");
+        git(&h.repo, &["checkout", &main_branch]);
+        assert_eq!(head(&h.repo), first);
+        h.write_state(
+            &side,
+            json!([{"id": "T1", "status": "done", "touched_files": ["side.txt"]}]),
+        );
+        h.write_commit("main.txt", "main\n", "main");
+        let err = cmd_resume(
+            &h.repo,
+            ResumeOptions {
+                run_id: Some("r1".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("T1"));
+    }
+
+    #[test]
+    fn cmd_resume_unreachable_recorded_head_revalidates_non_pending_tasks() {
+        let h = GitHarness::new();
+        h.write_commit("a.txt", "a\n", "first");
+        h.write_state(
+            "1111111111111111111111111111111111111111",
+            json!([
+                {"id": "T1", "status": "done"},
+                {"id": "T2", "status": "pending"}
+            ]),
+        );
+        let err = cmd_resume(
+            &h.repo,
+            ResumeOptions {
+                run_id: Some("r1".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("T1"));
+        assert!(!err.to_string().contains("T2"));
+    }
+}

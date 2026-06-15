@@ -739,3 +739,166 @@ pub fn git_add_plan_commands(tag: &str) -> Vec<String> {
 pub fn os_strs<'a>(items: &'a [&'a str]) -> impl IntoIterator<Item = &'a OsStr> {
     items.iter().map(|item| OsStr::new(*item))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{self, LtoState};
+    use serde_json::json;
+    use std::process::Command;
+
+    #[test]
+    fn load_run_reads_current_marker_and_state_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join(".lto").join("r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(tmp.path().join(".lto").join("current"), "r1\n").unwrap();
+        let state = LtoState {
+            run_id: "r1".to_string(),
+            goal: "load me".to_string(),
+            ..LtoState::default()
+        };
+        state::save_state(run_dir.join("state.json"), &state).unwrap();
+
+        let loaded = load_run(tmp.path(), None).unwrap();
+        assert_eq!(loaded.run_id, "r1");
+        assert_eq!(loaded.state.goal, "load me");
+        assert_eq!(loaded.state_path, run_dir.join("state.json"));
+    }
+
+    #[test]
+    fn parse_and_evaluate_ledger_rounds_cover_all_verdicts() {
+        let text = r#"
+## Round Summary
+
+| Round | Total | Medium | High | Critical |
+|---|---:|---:|---:|---:|
+| r1 | 3 | 1 | 1+1 | 0 |
+| r2 | 0 | 0 | 0 | 0 |
+"#;
+        let rounds = parse_ledger(text).unwrap();
+        assert_eq!(rounds.len(), 2);
+        assert_eq!(rounds[0].high, 2);
+        assert_eq!(evaluate_ledger(&rounds, false), LedgerVerdict::Converged);
+
+        assert_eq!(
+            evaluate_ledger(
+                &[
+                    LedgerRound {
+                        label: "r1".into(),
+                        high: 2,
+                        critical: 0
+                    },
+                    LedgerRound {
+                        label: "r2".into(),
+                        high: 1,
+                        critical: 0
+                    },
+                ],
+                false,
+            ),
+            LedgerVerdict::Converging
+        );
+        assert_eq!(
+            evaluate_ledger(
+                &[
+                    LedgerRound {
+                        label: "r1".into(),
+                        high: 1,
+                        critical: 0
+                    },
+                    LedgerRound {
+                        label: "r2".into(),
+                        high: 2,
+                        critical: 0
+                    },
+                ],
+                false,
+            ),
+            LedgerVerdict::Rebound
+        );
+        assert_eq!(
+            evaluate_ledger(
+                &[
+                    LedgerRound {
+                        label: "r1".into(),
+                        high: 1,
+                        critical: 0
+                    },
+                    LedgerRound {
+                        label: "r2".into(),
+                        high: 1,
+                        critical: 0
+                    },
+                ],
+                true,
+            ),
+            LedgerVerdict::Stalled
+        );
+        assert!(
+            parse_ledger(
+                "## Round Summary\n| Round | Total | Medium | High | Critical |\n|---|---:|---:|---:|---:|\n| r1 | x | 0 | nope | 0 |",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn git_status_tracks_dirty_and_untracked_paths_outside_lto() {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init"]);
+        fs::write(tmp.path().join("tracked.txt"), "tracked\n").unwrap();
+        git(tmp.path(), &["add", "tracked.txt"]);
+        fs::write(tmp.path().join("untracked.txt"), "untracked\n").unwrap();
+        fs::create_dir_all(tmp.path().join(".lto")).unwrap();
+        fs::write(tmp.path().join(".lto").join("ignored.txt"), "ignored\n").unwrap();
+
+        let status = git_status(tmp.path());
+        assert!(status.dirty);
+        assert_ne!(status.branch, "");
+        assert!(tracked_dirty_paths(tmp.path()).contains(&"tracked.txt".to_string()));
+        assert!(untracked_paths(tmp.path()).contains(&"untracked.txt".to_string()));
+        assert!(
+            !untracked_paths(tmp.path())
+                .iter()
+                .any(|path| path.starts_with(".lto/"))
+        );
+    }
+
+    #[test]
+    fn append_phase_transition_and_token_rollup_preserve_state_contracts() {
+        let mut state = LtoState {
+            agent_runs: json!({
+                "j1": [{
+                    "job_id": "j1",
+                    "runner": "codex",
+                    "status": "ok",
+                    "cost": {"tokens_in": 5, "tokens_out": 7, "elapsed_sec": 1.5}
+                }]
+            }),
+            ..LtoState::default()
+        };
+        append_phase_transition(&mut state, "intake", "implementation", "abc");
+        assert_eq!(state.current_phase, "implementation");
+        assert_eq!(json_array(&state.phase_transitions).len(), 1);
+
+        let rollup = token_rollup(&state);
+        assert_eq!(rollup.total_tokens, 12);
+        assert_eq!(rollup.runs_with_tokens, 1);
+        assert_eq!(rollup.by_runner["codex"].tokens, 12);
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

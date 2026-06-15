@@ -75,6 +75,14 @@ pub struct PluginValidation {
     pub manifest_hash: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginMountEntry {
+    pub plugin_id: String,
+    pub mounted_at: String,
+    pub manifest_hash: String,
+    pub stage: PluginStage,
+}
+
 pub fn discover_plugins(repo: &Path) -> Vec<PathBuf> {
     [repo.join("plugins"), repo.join(".lto").join("plugins")]
         .into_iter()
@@ -89,6 +97,54 @@ pub fn discover_plugins(repo: &Path) -> Vec<PathBuf> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+pub fn mount_plugin(
+    plugin_dir: &Path,
+    mounts_json_path: &Path,
+) -> Result<PluginMountEntry, PluginError> {
+    let manifest_path = plugin_dir.join("plugin.json");
+    if !manifest_path.exists() {
+        return Err(PluginError::MissingManifest(manifest_path));
+    }
+    let raw = fs::read_to_string(&manifest_path)?;
+    let manifest: PluginManifest = serde_json::from_str(&raw)?;
+    let validation = validate_plugin(plugin_dir)?;
+    if !validation.ok {
+        return Err(PluginError::Validation(validation.errors));
+    }
+
+    let entry = PluginMountEntry {
+        plugin_id: manifest.id,
+        mounted_at: crate::state::iso_now(),
+        manifest_hash: validation.manifest_hash,
+        stage: manifest.stage,
+    };
+    let mut lock = load_mount_lock(mounts_json_path)?;
+    lock.as_object_mut()
+        .expect("mount lock forced to object")
+        .insert("schema_version".to_string(), serde_json::json!(1));
+    let mounts = lock
+        .as_object_mut()
+        .expect("mount lock forced to object")
+        .entry("mounts")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if !mounts.is_array() {
+        *mounts = serde_json::Value::Array(Vec::new());
+    }
+    mounts
+        .as_array_mut()
+        .expect("mounts forced to array")
+        .push(serde_json::to_value(&entry)?);
+
+    if let Some(parent) = mounts_json_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        mounts_json_path,
+        serde_json::to_string_pretty(&lock)? + "\n",
+    )?;
+    Ok(entry)
 }
 
 pub fn validate_plugin(plugin_dir: &Path) -> Result<PluginValidation, PluginError> {
@@ -148,6 +204,24 @@ pub fn validate_plugin(plugin_dir: &Path) -> Result<PluginValidation, PluginErro
         warnings,
         manifest_hash,
     })
+}
+
+fn load_mount_lock(path: &Path) -> Result<serde_json::Value, PluginError> {
+    if !path.exists() {
+        return Ok(serde_json::json!({
+            "schema_version": 1,
+            "mounts": [],
+        }));
+    }
+    let text = fs::read_to_string(path)?;
+    let mut value = serde_json::from_str::<serde_json::Value>(&text)?;
+    if !value.is_object() {
+        value = serde_json::json!({
+            "schema_version": 1,
+            "mounts": [],
+        });
+    }
+    Ok(value)
 }
 
 fn all_declared_refs(manifest: &PluginManifest) -> Vec<String> {
@@ -263,5 +337,63 @@ mod tests {
         fs::write(tmp.path().join("note.md"), "note").unwrap();
         let validation = validate_plugin(tmp.path()).unwrap();
         assert!(!validation.ok);
+    }
+
+    #[test]
+    fn mount_appends_data_only_provenance_without_changing_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        let manifest = r#"{
+          "id":"x.test","version":"0.1.0","kind":"path-plugin","stage":"experimental",
+          "security":{"executable_code":false,"max_sandbox":"read-only"},
+          "source_notes":["note.md"],
+          "provides":{"paths":["path.json"]}
+        }"#;
+        fs::write(plugin_dir.join("plugin.json"), manifest).unwrap();
+        fs::write(plugin_dir.join("note.md"), "note").unwrap();
+        fs::write(plugin_dir.join("path.json"), "{}").unwrap();
+        let lock = tmp.path().join("plugin-mounts.json");
+
+        let first = mount_plugin(&plugin_dir, &lock).unwrap();
+        let second = mount_plugin(&plugin_dir, &lock).unwrap();
+        assert_eq!(first.plugin_id, "x.test");
+        assert_eq!(first.stage, PluginStage::Experimental);
+        assert_eq!(first.manifest_hash, second.manifest_hash);
+
+        let data: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&lock).unwrap()).unwrap();
+        let mounts = data["mounts"].as_array().unwrap();
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0]["plugin_id"], "x.test");
+        assert!(mounts[0].get("approved_permissions").is_none());
+        assert!(mounts[0].get("default_enabled").is_none());
+        assert_eq!(
+            fs::read_to_string(plugin_dir.join("plugin.json")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            validate_plugin(&plugin_dir).unwrap().plugin_id.as_deref(),
+            Some("x.test")
+        );
+    }
+
+    #[test]
+    fn mount_rejects_invalid_plugin_without_writing_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("plugin.json"),
+            r#"{
+              "id":"bad plugin","version":"0.1.0","kind":"path-plugin","stage":"experimental",
+              "security":{"executable_code":false},
+              "source_notes":["note.md"],"provides":{}
+            }"#,
+        )
+        .unwrap();
+        fs::write(tmp.path().join("note.md"), "note").unwrap();
+        let lock = tmp.path().join("plugin-mounts.json");
+        let err = mount_plugin(tmp.path(), &lock).unwrap_err();
+        assert!(matches!(err, PluginError::Validation(_)));
+        assert!(!lock.exists());
     }
 }

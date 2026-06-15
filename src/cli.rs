@@ -3,6 +3,7 @@ use crate::budget;
 use crate::commands::{closeout, ops, recap, resume};
 use crate::plugin;
 use crate::state::{self, LtoState};
+use anyhow::Context;
 use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
@@ -344,7 +345,16 @@ pub enum BudgetCommand {
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
     List,
-    Validate { dir: PathBuf },
+    Validate {
+        dir: PathBuf,
+    },
+    Mount {
+        dir: PathBuf,
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        mounts_json: Option<PathBuf>,
+    },
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -404,6 +414,31 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             if !validation.ok {
                 anyhow::bail!("plugin validation failed");
             }
+        }
+        Commands::Plugin {
+            command:
+                PluginCommand::Mount {
+                    dir,
+                    run_id,
+                    mounts_json,
+                },
+        } => {
+            let mounts_json = match mounts_json {
+                Some(path) if path.is_absolute() => path,
+                Some(path) => args.repo.join(path),
+                None => {
+                    let run_id = run_id.or_else(|| current_run_id(&args.repo)).context(
+                        "plugin mount requires --run-id, .lto/current, or --mounts-json",
+                    )?;
+                    args.repo
+                        .join(".lto")
+                        .join(run_id)
+                        .join("plugin-mounts.json")
+                }
+            };
+            let entry = plugin::mount_plugin(&dir, &mounts_json)?;
+            println!("{}", serde_json::to_string_pretty(&entry)?);
+            println!("mounts_json: {}", mounts_json.display());
         }
         Commands::Runs => {
             let lto = args.repo.join(".lto");
@@ -745,5 +780,32 @@ mod tests {
     fn audit_flags_are_registered() {
         Args::try_parse_from(["lto-rs", "audit", "--auto-dispatch"]).unwrap();
         Args::try_parse_from(["lto-rs", "audit", "--discover-risks"]).unwrap();
+    }
+
+    #[test]
+    fn plugin_mount_command_accepts_explicit_mount_lock_path() {
+        Args::try_parse_from([
+            "lto-rs",
+            "plugin",
+            "mount",
+            "plugins/dev-workflow",
+            "--mounts-json",
+            ".lto/r1/plugin-mounts.json",
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn commands_markdown_tracks_rust_command_contract() {
+        let doc =
+            std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("COMMANDS.md"))
+                .unwrap();
+        assert!(doc.contains("Command count: 24."));
+        for command in COMMANDS {
+            assert!(
+                doc.contains(&format!("| `{command}`")),
+                "COMMANDS.md missing {command}"
+            );
+        }
     }
 }
