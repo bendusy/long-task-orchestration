@@ -28,6 +28,7 @@ from .. import evidence as ev
 from .. import decision as dec
 from .. import artifacts as af
 from .. import cross_run_mining as crm
+from ..budget import check_budget
 from ..autopilot_status import (
     AutopilotStatus,
     EXIT_CODES,
@@ -101,6 +102,28 @@ def run(args: argparse.Namespace) -> int:
     state = st.load_state(state_path)
     if state is None:
         raise SystemExit(f"no state.json for {run_id}")
+
+    # ── budget gate（run 级预算契约，硬刹车）──
+    # turns_used 只数 autopilot 自动推进调用（这是 turn 计数的唯一写点）。+1 必须在
+    # check 之前：第 N 次调用恰好触顶时当回合即拦，不多跑一回合。缺 budget 块（老 run）
+    # → 全 None → 永远 ok，零破坏。超限 → fail-closed NEEDS_CONFIRM，不执行任何推进；
+    # 解除靠人显式 `lto budget extend` 或重 start。计量归 budget.check_budget（纯函数），
+    # 这里只执行（计量与决策分离，对齐 next 是事实层、autopilot 才执行）。
+    budget_state = state.setdefault("budget", {})
+    budget_state["turns_used"] = budget_state.get("turns_used", 0) + 1
+    st.save_state(state_path, state)
+    _bud = check_budget(state, st.token_rollup(state)["total_tokens"], st.iso_now())
+    if _bud["overall"] == "exceeded":
+        bad = [n for n, d in _bud["dimensions"].items() if d["status"] == "exceeded"]
+        detail = ", ".join(
+            f"{n} {int(_bud['dimensions'][n]['ratio'] * 100)}%" for n in bad
+        )
+        reason = (f"budget exceeded: {detail} — run `lto budget extend` "
+                  f"or re-start to raise the cap")
+        print(f"# LTO Autopilot — budget gate BLOCKED")
+        print(f"  reason: {reason}")
+        emit_terminal_status(AutopilotStatus.NEEDS_CONFIRM, reason)
+        return EXIT_CODES[AutopilotStatus.NEEDS_CONFIRM]
 
     mode = "autonomous" if args.autonomous else "supervised"
 

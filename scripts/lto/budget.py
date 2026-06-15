@@ -32,10 +32,14 @@ def dimension_status(*, limit: Any, used: float, warn_ratio: float) -> dict[str,
 
 
 def _parse_iso(s: str) -> datetime | None:
-    """容忍带/不带 Z 的 ISO。LTO state 里 started_at 用 iso_now() 产出本地无 tz ISO。"""
+    """容忍带/不带 tz 的 ISO，统一归一到 naive（去 tzinfo）后比较。
+    LTO 内部 iso_now() 带本地 offset，但用户传的 --deadline 可能不带——混比会崩。
+    全部 drop tzinfo 后比较：进度比只需相对值，同一时区下结果一致。
+    """
     if not s:
         return None
-    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    return dt.replace(tzinfo=None)
 
 
 def deadline_status(*, deadline, started_at: str, now: str, warn_ratio: float) -> dict[str, Any]:
