@@ -78,7 +78,7 @@ jobs:
       - name: Verify packaged binary
         shell: bash
         run: |
-          shasum -a 256 -c "dist/${{ matrix.asset }}.tar.gz.sha256"
+          (cd dist && shasum -a 256 -c "${{ matrix.asset }}.tar.gz.sha256")
           verify_dir="$(mktemp -d)"
           tar -C "$verify_dir" -xzf "dist/${{ matrix.asset }}.tar.gz"
           "$verify_dir/lto-rs" self-test

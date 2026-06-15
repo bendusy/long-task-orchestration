@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Release package checksum verification
+
+- Fixed tag-time package checksum verification to run `shasum -c` from the
+  `dist/` directory where the tarball lives. The docs consistency gate now
+  checks this invariant so release CI cannot regress to a root-relative checksum
+  mismatch.
+
 ## v0.4.1 — 2026-06-16
 
 ### Open-source delivery gate hardening

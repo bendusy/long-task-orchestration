@@ -63,6 +63,7 @@ def main() -> int:
     check("Verify uploaded release asset" in release_workflow, "release workflow verifies uploaded GitHub Release asset", errors)
     check("gh release download" in release_workflow, "release workflow downloads uploaded assets for verification", errors)
     check("lto-rs\" self-test" in release_workflow, "release workflow self-tests unpacked assets", errors)
+    check("(cd dist && shasum -a 256 -c" in release_workflow, "release workflow verifies package checksum from dist directory", errors)
     check("macos-15-intel" in release_workflow, "release workflow uses current Intel macOS runner label", errors)
     check("macos-13" not in release_workflow, "release workflow avoids retired macos-13 release runner", errors)
     check("musl-tools" in release_workflow, "release workflow installs musl toolchain for Linux asset", errors)
