@@ -13,18 +13,20 @@ LTO is moving from the Python CLI to Rust v2 in three steps.
    cargo run -- check --run-id <run-id> --json
    ```
 
-2. **Wrapper opt-in path**
+2. **Wrapper default path**
    ```bash
    bash scripts/install.sh
-   cargo build --release --bin lto-rs
-   lto --use-rust self-test
-   LTO_USE_RUST=1 lto recap --run-id <run-id>
+   lto self-test
+   lto recap --run-id <run-id>
    ```
 
-3. **Future default flip**
-   The global `lto` wrapper may default to Rust only after parity evidence is recorded: Rust commands cover the active CLI surface, Python-written runs remain readable, release assets exist, and rollback to the Python fallback is documented.
+3. **Explicit legacy fallback**
+   ```bash
+   lto --use-python self-test
+   LTO_USE_PYTHON=1 lto check --run-id <run-id> --json
+   ```
 
-Python remains a compatibility fallback during the transition. Do not delete Python modules or tests just because a Rust command exists; first prove the Rust path owns the same behavior.
+Python remains a compatibility fallback during the transition. Do not delete Python modules or tests just because a Rust command exists; first prove the Rust path owns the same behavior and keep a rollback path until the release assets and downstream host integrations are verified.
 
 ## Platform Policy
 

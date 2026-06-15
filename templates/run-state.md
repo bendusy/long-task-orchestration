@@ -14,6 +14,13 @@
 - current_git_head:
 - current_branch:
 
+## Delivery Contract
+
+- delivery_targets:
+- delivery_constraints:
+- delivery_instruments:
+- delivery_forced_entropy:
+
 ## Host Preconditions
 
 - sandbox / approval:

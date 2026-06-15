@@ -24,9 +24,10 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 ## 架构哲学
 
 - **主 agent 是 planner**：路径选择属于宿主模型。LTO 只提供状态、证据、工具、沙箱、审计和停止闸门。
+- **交付契约进 core**：`/goal` 的价值是把交付目标变成可度量、可约束、可反过拟合的契约。Rust core 记录 `target` / `constraint` / `instrument` / `entropy-check`，phase gate 检查契约完整性；它不是后台 daemon，也不替 host agent 选路。
 - **Preset 是 playbook，不是硬路由**：`review` / `debug` / `migration` / `claim-verify` / `research` 是调度先验，详见 `references/workflow-playbook.md`。不要先做替模型决策的固定执行入口。
 - **Primitive 优先于产品命令**：先组合 `runner`、`audit`、`judge`、`next`、`autopilot`、`recap`；只有真实重复路径自然沉淀，才抽最薄 CLI。
-- **外部观点先进插件，不进 core**：有趣文章先做 `source_note → experimental path plugin → eval → promote/reject`，详见 `references/plugin-boundary.md`。插件只编译到现有 primitive，不替 host 规划、不自带升权。
+- **外部观点默认先进插件**：有趣文章先做 `source_note → experimental path plugin → eval → promote/reject`，详见 `references/plugin-boundary.md`。只有像交付契约这种被拍板为通用 core primitive 的能力才进 core；插件仍只编译到现有 primitive，不替 host 规划、不自带升权。
 - **自动化是梯度**：brief → supervised → sandboxed auto-exec → human gate。每一级都必须保留证据、可恢复状态和人工刹车。
 - **运行中可见、用量可查**：每个派工的输出边跑边写进 `.lto/<run-id>/live/<job-id>.log`，卡住时 `tail` 就能看（学 tmux-autopilot 可观测精髓但不用 tmux，scheduler 仍是确定性 subprocess）。token 用量按 runner 计量（四家 runner 中 codex/pi/claude 有真实计量，agy 无 CLI 用量诚实标 unmetered），`recap`/`closeout` 汇总「这次 run 烧了多少 token」。
 - **`.lto/` 是本地记忆，进项目先看**：装了 am（animem）时 run 成果 publish 到 am 做长期记忆；**没装 am 时 `.lto/` 就是全部记忆**（永远是本项目真源，am 只是下游投影）。接手项目第一件事跑 `lto runs`——列出本项目所有历史 run（目标/阶段/进度），别丢掉前人经验重复踩坑。
@@ -102,7 +103,7 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 ```bash
 LTO="cargo run --quiet --"
 # 装过 install.sh 且已 cargo build --release --bin lto-rs 后，可用：
-# LTO="lto --use-rust"
+# LTO="lto"
 
 # 全自动（推荐）：扫高风险 task → 自动派异构三方 → 收口判收敛
 $LTO audit --auto-dispatch
@@ -201,6 +202,12 @@ LTO="cargo run --quiet --"
 
 $LTO start --goal "做用户登录" \
   --why "降低登录失败率" --done-when "失败率<5%，三端覆盖"
+# /goal 型长交付：目标函数四件套进 core delivery_contract
+$LTO start --goal "提升检索召回" \
+  --target "hidden eval recall >= 95%" \
+  --constraint "wall clock <= 4h; paid API <= $50" \
+  --instrument "python3 eval/search_recall.py --hidden" \
+  --entropy-check "on stall, change hypothesis and log overfit reflection"
 #   预算契约（全可选，缺省无限）：--max-turns / --max-tokens / --deadline
 #   超 80% next/recap 软警告，超 100% autopilot 硬刹车（NEEDS_CONFIRM）。
 #   解除靠 `lto budget extend`。turn 只数 autopilot 自动推进，人手动操作不计。

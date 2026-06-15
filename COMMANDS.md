@@ -6,8 +6,8 @@ Command count: 24.
 
 | Command | Summary | Required | Optional |
 |---|---|---|---|
-| `start` | Create a new Rust v2 run directory and current marker. | None | `--run-id`, `--goal`, `--why`, `--done-when`, `--host`, `--force` |
-| `check` | Read a run and report phase/goal, optionally as JSON. | None | `--run-id`, `--json` |
+| `start` | Create a new Rust v2 run directory and current marker. | None | `--run-id`, `--goal`, `--why`, `--done-when`, `--host`, `--target`, `--constraint`, `--instrument`, `--entropy-check`, `--force` |
+| `check` | Read a run and report phase/goal, optionally as JSON. | None | `--run-id`, `--strict`, `--to`, `--json` |
 | `closeout` | Gate closeout, update state/run-state, write handoff and changelog. | `--summary` | `--run-id`, `--next-action`, `--blocked-by`, `--allow-dirty`, `--no-changelog`, `--force` |
 | `resume` | Print an active-session capsule and detect HEAD drift. | None | `--run-id` |
 | `preflight` | Check write access, git repo status, and delegate runner health. | None | `--run-id`, `--record` |
@@ -29,4 +29,4 @@ Command count: 24.
 | `collect-agent-run` | Register an already-produced runner reply into `agent_runs`. | `--task-id`, `--runner`, `--reply` | `--run-id`, `--meta`, `--model`, `--status`, `--elapsed-sec`, `--note` |
 | `runs` | List local `.lto` runs with `state.json`. | None | None |
 | `memory` | Export/publish/resume redacted local run projection. | Subcommand: `export`, `publish`, or `resume` | `--run-id`, `--project`, `--am-bin`, `--timeout`, `--dry-run` |
-| `plugin` | List, validate, or data-only mount plugin manifests. | Subcommand: `list`, `validate <dir>`, or `mount <dir>` | `mount --run-id`, `mount --mounts-json` |
+| `plugin` | List, validate, render, statically eval, or data-only mount plugin manifests. | Subcommand: `list`, `validate <dir>`, `render-profile <dir> <profile-id>`, `eval <dir>`, or `mount <dir>` | `render-profile --input --output --meta-output --json`; `eval --eval-id --output --json`; `mount --run-id`, `mount --mounts-json` |

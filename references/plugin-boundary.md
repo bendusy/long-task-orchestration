@@ -215,7 +215,7 @@ Experimental → blessed requires:
 - cost/time regression justified and recorded;
 - human approval.
 
-Blessed → core requires stricter evidence: multiple independent plugins reveal the same missing primitive that cannot be expressed with current contracts.
+Blessed → core requires stricter evidence: multiple independent plugins reveal the same missing primitive that cannot be expressed with current contracts, or the maintainer explicitly promotes a generic harness primitive. `delivery_contract` is a core primitive because it defines deliverable target/constraint/instrument/forced-entropy fields for any long run; plugin paths may still provide domain-specific playbooks around it.
 
 Rejected plugins stay tombstoned with `stage: rejected` and `rejection_reason`.
 
@@ -233,7 +233,7 @@ Do not implement yet:
 - automatic promotion to core;
 - one-click "best path" routing.
 
-v0 is validate + mount + provenance. Host agent still decides.
+Rust v2 owns the static data-only plugin path: list, validate, render-profile, eval, mount. Host agent still decides. Python legacy currently still owns source-note creation and real eval-run until those write-heavy/runner-heavy surfaces are ported.
 
 ## 11. Implemented v0 commands
 
@@ -243,7 +243,7 @@ lto plugin list
 lto plugin validate plugins/deep-agent-profiles --json
 
 # Create an inert source note and optionally append it to plugin.json
-lto plugin source-note plugins/deep-agent-profiles \
+lto --use-python plugin source-note plugins/deep-agent-profiles \
   --id note.example.article \
   --title "Interesting Article" \
   --url "https://example.com/article" \
@@ -265,14 +265,14 @@ lto plugin mount plugins/deep-agent-profiles --approved-by host
 
 # Real baseline-vs-candidate A/B run with deterministic metrics (v0)
 # Compiles each eval-pack case into two AgentJobs and runs them via the scheduler.
-lto plugin eval-run plugins/deep-agent-profiles --run-id <run-id> --json
+lto --use-python plugin eval-run plugins/deep-agent-profiles --run-id <run-id> --json
 ```
 
-`eval` stays deliberately static: it checks declared eval packs, profile references, metrics, and safety metadata. `eval-run` (v0) does the real model A/B: it compiles each case into a baseline (bare brief) and candidate (profile-injected) AgentJob, runs both through the normal scheduler/runner primitives, and records deterministic metrics + evidence under `.lto/<run-id>/plugin-eval/<case-id>/`. LLM-judged quality metrics and automatic promotion remain deferred (see §12).
+Rust `plugin eval` stays deliberately static: it checks declared eval packs, profile references, metrics, and safety metadata. Legacy `plugin eval-run` (v0) does the real model A/B: it compiles each case into a baseline (bare brief) and candidate (profile-injected) AgentJob, runs both through the normal scheduler/runner primitives, and records deterministic metrics + evidence under `.lto/<run-id>/plugin-eval/<case-id>/`. LLM-judged quality metrics and automatic promotion remain deferred (see §12).
 
 ## 12. Real eval runner boundary
 
-`plugin eval-run` (v0 implemented) follows [`plugin-real-eval-runner.md`](./plugin-real-eval-runner.md): it is a **sub-LTO-run compiler**, not a new workflow engine. The rules below are the boundary it stays inside; the deferred items (frozen-evidence hash/redact, LLM-judged metrics, swarm parallelism) are not yet built and are declared as such in each run report.
+Legacy `plugin eval-run` (v0 implemented in Python, invoked with `lto --use-python`) follows [`plugin-real-eval-runner.md`](./plugin-real-eval-runner.md): it is a **sub-LTO-run compiler**, not a new workflow engine. The rules below are the boundary it stays inside; the deferred items (frozen-evidence hash/redact, LLM-judged metrics, swarm parallelism) are not yet built and are declared as such in each run report.
 
 Design rules:
 

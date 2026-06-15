@@ -30,10 +30,17 @@
 ```bash
 L="cargo run --quiet --"         # Rust v2 当前接管线
 # 装过 install.sh 且已 cargo build --release --bin lto-rs 后，也可用：
-# L="lto --use-rust"
+# L="lto"
 
 # ① 开工：记下目标、为什么做、做完的标准（recap 会用到）
 $L start --goal "重构登录模块" --why "线上空指针崩溃" --done-when "测试全绿+review过"
+
+# /goal 型长交付：把交付契约写进 core state，而不是只靠自然语言目标
+$L start --goal "提升检索召回" \
+  --target "hidden eval recall >= 95%" \
+  --constraint "wall clock <= 4h; paid API <= $50" \
+  --instrument "python3 eval/search_recall.py --hidden" \
+  --entropy-check "on stall, try a non-keyword-list hypothesis and log overfit reflection"
 
 # ② 加一个任务，然后执行它（task 要先建，runner 不会自动建）
 $L task-add --task-id T1 --title "给 login 加判空" --command "pytest tests/ -x"
@@ -65,7 +72,7 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 ## Rust v2 轨道（当前接管线）
 
-`lto-rs` 是按 2026-06-15 v2 spec 落地的 Rust 核心轨道，也是接下来接管旧 Python CLI 的主线。当前状态是：Rust workspace、24/24 命令真实现、runner event parser、state/budget、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin mount` data-only provenance、COMMANDS.md 和回归测试已建立。
+`lto-rs` 是按 2026-06-15 v2 spec 落地的 Rust 核心轨道，也是接下来接管旧 Python CLI 的主线。当前状态是：Rust workspace、24/24 命令真实现、runner event parser、state/budget、delivery contract、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin validate/render-profile/eval/mount` data-only provenance、COMMANDS.md 和回归测试已建立。
 
 当前 Rust v2 支持面聚焦 macOS 和 Linux。Windows 二进制与 runner 派工支持先暂停：内置 delegate runtime 仍是 `scripts/delegate/runners/*.sh` + `healthcheck.sh` 的 shell 协议，先把 Rust 接管旧 Python 和核心代码清理做稳，再重新评估 Windows 原生 runner。
 
@@ -74,9 +81,10 @@ cargo test
 cargo run -- self-test
 cargo run -- check --run-id <run-id> --json
 
-# 全局 wrapper 在兼容期仍可回退 Python；显式开启 Rust 轨道
-LTO_USE_RUST=1 lto recap --run-id <run-id>
-lto --use-rust check --run-id <run-id> --json
+# 全局 wrapper 默认走 Rust；Python 只作为显式 legacy fallback
+lto recap --run-id <run-id>
+lto check --run-id <run-id> --json
+lto --use-python check --run-id <run-id> --json
 ```
 
 Rust 侧的原则是“黑盒行为对齐，内部 Rust-native”：外部兼容 `.lto/` 历史 state 和现有插件 JSON，内部用 enum/typed struct/trait/Result/serde flatten 固化不变量，不机械翻译 Python 模块边界。Python 入口保留为兼容 fallback；后续重点是缩小 wrapper 回退面、清理重复实现、再切默认入口。

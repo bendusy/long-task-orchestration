@@ -22,6 +22,10 @@ LTO may observe, summarize, constrain, and propose. It must not silently decide,
 
 `next` and `autopilot --supervised` produce control briefs. The host/human decides.
 
+### 1a. Delivery contract is core
+
+`/goal`-style work belongs in Rust core as a delivery contract, not as a plugin-only note and not as a daemon. The core state may persist targets, constraints, instruments, and forced-entropy checks so phase gates can tell whether the long run has an executable delivery target.
+
 ### 2. Observability before control
 
 Do not automate a behavior until LTO can measure it.
@@ -79,16 +83,16 @@ Do not build a Cockpit UI. Strengthen CLI/file primitives that help the host pav
 - worker observations;
 - closeout gates.
 
-### 7. Protocol before rewrite
+### 7. Protocol during Rust takeover
 
 The `.lto/<run-id>/` file protocol is the product boundary. Do not rewrite LTO in Go/Rust/TS before protocol contracts, redaction rules, and conformance fixtures are stable.
 
 Current posture:
 
-- Python remains primary while protocol is changing.
-- Go is a later shadow-CLI candidate after conformance tests exist.
+- Rust v2 is the default local wrapper path.
+- Python remains as explicit legacy fallback for parity checks and rollback.
+- Go is not a near-term core path.
 - TypeScript is for wrappers/MCP/editor integration, not core control logic.
-- Rust is only for narrow future security/sandbox components.
 
 ### 8. Run logs are tuning fuel
 
@@ -110,7 +114,7 @@ Articles, tweets, framework claims, and model-specific advice enter via:
 source note -> unverified claim -> falsifiable hypothesis -> eval evidence -> promote/reject
 ```
 
-No direct core changes from article authority.
+No direct core changes from article authority. A generic primitive can still be promoted into core after an explicit user/maintainer decision; `delivery_contract` is one such core primitive.
 
 ### 10. Typed shared workspace, not PM platform
 

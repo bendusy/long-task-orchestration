@@ -7,7 +7,7 @@
 commit 前检查，自动安装在 `lto start` 时。
 
 ```bash
-python3 scripts/lto_run.py hook pre-commit [--force --reason "..."]
+lto hook pre-commit [--force --reason "..."]
 ```
 
 检查项：
@@ -26,7 +26,7 @@ python3 scripts/lto_run.py hook pre-commit [--force --reason "..."]
 ```bash
 git commit --no-verify
 # 或
-python3 scripts/lto_run.py hook pre-commit --force --reason "docs-only"
+lto hook pre-commit --force --reason "docs-only"
 ```
 
 ## pre-deploy
@@ -34,11 +34,11 @@ python3 scripts/lto_run.py hook pre-commit --force --reason "docs-only"
 部署前检查。
 
 ```bash
-python3 scripts/lto_run.py hook pre-deploy
+lto hook pre-deploy
 ```
 
 检查项：
-- `lto_run.py check --strict` 通过
+- `lto check --strict` 通过
 - 无 unresolved blocks
 - phase 不为 closed
 
@@ -47,10 +47,10 @@ python3 scripts/lto_run.py hook pre-deploy
 归档前检查（已有 closeout 命令做硬门禁，此为独立钩子入口）。
 
 ```bash
-python3 scripts/lto_run.py hook pre-closeout
+lto hook pre-closeout
 ```
 
-等价于 `lto_run.py check --strict`。
+等价于 `lto check --strict`。
 
 ## ANIMEM / memory-flow publish hook 边界
 

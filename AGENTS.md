@@ -8,10 +8,11 @@ Default response language for this repo is Chinese unless the user asks otherwis
 
 ## Current Direction
 
-- Rust v2 is the active takeover path for the old Python CLI. Keep Python as a compatibility fallback until parity and release gates prove Rust can become the default wrapper path.
+- Rust v2 is now the default local wrapper path for the old Python CLI. Keep Python as an explicit legacy fallback for parity checks and rollback.
 - Keep macOS and Linux healthy first. Windows native support is paused while the built-in runner protocol depends on `scripts/delegate/runners/*.sh` and `healthcheck.sh`; WSL or Unix-like shells are separate user-side validation.
 - Do not claim GitHub has downloadable Rust binaries without checking live releases. The workflow can build assets on future `v*` tag pushes, but existing tags/releases must be verified before stating availability.
 - Next engineering priority is Rust takeover plus code cleanup, not expanding platform scope.
+- `/goal` belongs in Rust core only as a delivery contract: targets, constraints, instruments, and forced entropy recorded in `.lto/<run-id>/state.json` and checked by phase gates. Do not implement it as a stateful background loop.
 
 ## LTO First
 
@@ -23,10 +24,11 @@ cargo run --quiet -- resume --run-id <run-id>
 cargo run --quiet -- check --run-id <run-id>
 ```
 
-If using the installed wrapper, explicitly choose Rust during the compatibility period:
+If using the installed wrapper, Rust is the default. Choose Python only for explicit legacy fallback checks:
 
 ```bash
-lto --use-rust <command>
+lto <command>
+lto --use-python <command>
 ```
 
 Do not close the Rust v2 main run until the PR branch is merged and the release/migration evidence is recorded.
@@ -41,6 +43,16 @@ Before implementation or tuning, write these four evidence items into run-state,
 - `value_measurement`: for tuning, the baseline, metric, pass line, verification command, and post-change result.
 
 No-baseline tuning is only a hypothesis. It is not completion evidence.
+
+For `/goal`-style long deliveries, start with a delivery contract:
+
+```bash
+lto start --goal "..." \
+  --target "..." \
+  --constraint "..." \
+  --instrument "..." \
+  --entropy-check "..."
+```
 
 ## Closeout Gate
 
@@ -57,7 +69,7 @@ Do not treat a task as finished if docs still describe a different architecture,
 
 When touching Rust takeover, installer, release, or docs:
 
-- Explain the Python-to-Rust switch path: source build with `cargo`, installed wrapper with `--use-rust`, and the future default-wrapper flip.
+- Explain the Python-to-Rust switch path: source build with `cargo`, installed wrapper defaulting to Rust, and explicit fallback with `--use-python` / `LTO_USE_PYTHON=1`.
 - State whether users can download a binary only after checking GitHub Releases and release assets.
 - Keep release flow explicit: `lto release --dry-run`, verification, VERSION/CHANGELOG update, tag push, then CI `release-binaries` uploads macOS/Linux assets.
 - Do not add Windows release targets until runner/healthcheck support is designed and tested natively.

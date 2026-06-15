@@ -178,12 +178,12 @@ def _maybe_install_hooks(repo: Path) -> None:
         print(
             f"[lto] 检测到 {framework}，跳过 pre-commit hook 自动安装，"
             "避免与其冲突。如需 LTO 闸门请手动在你的 hook 链里加："
-            "python3 scripts/lto_run.py hook pre-commit"
+            "lto hook pre-commit"
         )
         return
 
     pre_commit_path = hooks_dir / "pre-commit"
-    lto_hook_line = f"{Path(__file__).resolve().parent.parent.parent / 'lto_run.py'} hook pre-commit"
+    lto_hook_line = "lto hook pre-commit"
 
     if pre_commit_path.exists():
         existing = pre_commit_path.read_text(encoding="utf-8")

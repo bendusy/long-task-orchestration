@@ -37,6 +37,93 @@ pub struct EnvironmentSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeliveryContract {
+    #[serde(default = "default_delivery_schema_version")]
+    pub schema_version: u64,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    #[serde(default)]
+    pub instruments: Vec<String>,
+    #[serde(default)]
+    pub forced_entropy: Vec<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for DeliveryContract {
+    fn default() -> Self {
+        Self {
+            schema_version: default_delivery_schema_version(),
+            targets: Vec::new(),
+            constraints: Vec::new(),
+            instruments: Vec::new(),
+            forced_entropy: Vec::new(),
+            extra: Map::new(),
+        }
+    }
+}
+
+impl DeliveryContract {
+    pub fn new(
+        targets: Vec<String>,
+        constraints: Vec<String>,
+        instruments: Vec<String>,
+        forced_entropy: Vec<String>,
+    ) -> Self {
+        Self {
+            targets: clean_list(targets),
+            constraints: clean_list(constraints),
+            instruments: clean_list(instruments),
+            forced_entropy: clean_list(forced_entropy),
+            ..Self::default()
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.targets.is_empty()
+            && self.constraints.is_empty()
+            && self.instruments.is_empty()
+            && self.forced_entropy.is_empty()
+            && self.extra.is_empty()
+    }
+
+    pub fn missing_sections(&self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if self.targets.is_empty() {
+            missing.push("targets");
+        }
+        if self.constraints.is_empty() {
+            missing.push("constraints");
+        }
+        if self.instruments.is_empty() {
+            missing.push("instruments");
+        }
+        if self.forced_entropy.is_empty() {
+            missing.push("forced_entropy");
+        }
+        missing
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.missing_sections().is_empty()
+    }
+}
+
+fn default_delivery_schema_version() -> u64 {
+    1
+}
+
+fn clean_list(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LtoState {
     #[serde(default)]
     pub schema_version: u64,
@@ -76,6 +163,8 @@ pub struct LtoState {
     pub gates: Value,
     #[serde(default)]
     pub budget: RunBudget,
+    #[serde(default, skip_serializing_if = "DeliveryContract::is_empty")]
+    pub delivery_contract: DeliveryContract,
     #[serde(default)]
     pub last_failure: Value,
     #[serde(default)]
@@ -115,6 +204,7 @@ impl Default for LtoState {
                 warn_ratio: 0.8,
                 ..RunBudget::default()
             },
+            delivery_contract: DeliveryContract::default(),
             last_failure: Value::Null,
             user_decisions: Value::Array(Vec::new()),
             next_action: Value::Null,

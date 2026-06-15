@@ -31,7 +31,7 @@ Primary outcomes:
 
 | Control concept | LTO construct | Notes |
 |---|---|---|
-| Setpoint | `goal`, `why`, `done_when`, phase exit criteria | Human/host defines target. |
+| Setpoint | `goal`, `why`, `done_when`, `delivery_contract`, phase exit criteria | Human/host defines target; `/goal`-style work uses target/constraint/instrument/forced-entropy fields. |
 | Plant | Real work being done in repo, docs, tests, deployment | Messy external system. |
 | Sensors | `state.json`, `artifacts.json`, runner stdout/stderr, tests, git state, issue/finding logs | Sensors can be noisy. |
 | Observer / estimator | `check`, `judge`, `audit`, privacy scan, schema parsers | Estimates truth; never truth itself. |

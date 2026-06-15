@@ -392,6 +392,10 @@ pub fn sync_run_state_md(path: &Path, state: &LtoState) -> anyhow::Result<()> {
         return Ok(());
     }
     let mut content = fs::read_to_string(path)?;
+    let delivery_targets = state.delivery_contract.targets.join(" | ");
+    let delivery_constraints = state.delivery_contract.constraints.join(" | ");
+    let delivery_instruments = state.delivery_contract.instruments.join(" | ");
+    let delivery_forced_entropy = state.delivery_contract.forced_entropy.join(" | ");
     let fields = [
         ("run_id", state.run_id.as_str()),
         ("feature / goal", state.goal.as_str()),
@@ -407,6 +411,10 @@ pub fn sync_run_state_md(path: &Path, state: &LtoState) -> anyhow::Result<()> {
             state.next_action.as_str().unwrap_or_default(),
         ),
         ("blocked_by", state.blocked_by.as_str().unwrap_or("none")),
+        ("delivery_targets", delivery_targets.as_str()),
+        ("delivery_constraints", delivery_constraints.as_str()),
+        ("delivery_instruments", delivery_instruments.as_str()),
+        ("delivery_forced_entropy", delivery_forced_entropy.as_str()),
     ];
     for (field, value) in fields {
         if !value.is_empty() {

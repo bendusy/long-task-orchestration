@@ -547,6 +547,7 @@ fn phase_report(
     let open_risks = open_unverified_risks(state);
     match target {
         "implementation" => {
+            add_delivery_contract_phase_check(&mut checks, state);
             let count = unresolved.len() + open_risks.len();
             add_phase_check(
                 &mut checks,
@@ -574,6 +575,7 @@ fn phase_report(
             );
         }
         "closed" => {
+            add_delivery_contract_phase_check(&mut checks, state);
             let open_tasks = util::json_array(&state.tasks)
                 .iter()
                 .filter(|task| {
@@ -672,6 +674,32 @@ fn phase_report(
         "human_gate_required": true,
         "checks": checks,
     })
+}
+
+fn add_delivery_contract_phase_check(checks: &mut Vec<Value>, state: &crate::state::LtoState) {
+    let contract = &state.delivery_contract;
+    if contract.is_empty() {
+        return;
+    }
+    let missing = contract.missing_sections();
+    let detail = if missing.is_empty() {
+        format!(
+            "targets={}, constraints={}, instruments={}, forced_entropy={}",
+            contract.targets.len(),
+            contract.constraints.len(),
+            contract.instruments.len(),
+            contract.forced_entropy.len()
+        )
+    } else {
+        format!("missing {}", missing.join(", "))
+    };
+    add_phase_check(
+        checks,
+        "delivery_contract_complete",
+        if missing.is_empty() { "ok" } else { "missing" },
+        true,
+        detail,
+    );
 }
 
 fn add_phase_check(
@@ -2178,14 +2206,43 @@ fn memory_projection(repo: &Path, ctx: &util::RunContext) -> anyhow::Result<Valu
         "records": [{
             "kind": "lto_run_snapshot",
             "run_id": ctx.run_id,
-            "goal": ctx.state.goal,
+            "request_hash": format!("sha256:{}", sha256_hex(ctx.state.original_user_request.as_bytes())),
+            "goal_redacted": redact_short(&ctx.state.goal, 240),
+            "why_redacted": redact_short(&ctx.state.why, 240),
+            "done_when_redacted": redact_short(&ctx.state.done_when, 240),
             "phase": ctx.state.current_phase,
-            "state_hash": format!("{:x}", sha2::Sha256::digest(&state_bytes)),
-            "artifact_hash": format!("{:x}", sha2::Sha256::digest(&artifact_bytes)),
+            "delivery_contract": delivery_contract_projection(&ctx.state.delivery_contract),
+            "state_hash": format!("sha256:{}", sha256_hex(&state_bytes)),
+            "artifact_hash": format!("sha256:{}", sha256_hex(&artifact_bytes)),
             "tasks": tasks,
             "source": "local .lto",
         }]
     }))
+}
+
+fn delivery_contract_projection(contract: &crate::state::DeliveryContract) -> Value {
+    json!({
+        "present": !contract.is_empty(),
+        "complete": !contract.is_empty() && contract.is_complete(),
+        "target_count": contract.targets.len(),
+        "constraint_count": contract.constraints.len(),
+        "instrument_count": contract.instruments.len(),
+        "forced_entropy_count": contract.forced_entropy.len(),
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn redact_short(value: &str, max_len: usize) -> String {
+    let redacted = llm_judge::redact_text(value);
+    let line = util::single_line(&redacted);
+    if line.chars().count() <= max_len {
+        line
+    } else {
+        format!("{}...", line.chars().take(max_len).collect::<String>())
+    }
 }
 
 fn publish_am(projection: &Value, am_bin: Option<&str>, timeout: u64) -> anyhow::Result<String> {
@@ -2807,7 +2864,7 @@ fn task_command(tasks: &Value, task_id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{self, LtoState, WorkspaceSnapshot};
+    use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
     use std::process::Command;
 
     struct Harness {
@@ -3003,6 +3060,70 @@ mod tests {
     }
 
     #[test]
+    fn collect_check_gates_partial_delivery_contract_when_present() {
+        let h = Harness::new();
+        h.init_git();
+        let mut state = base_state();
+        state.workspace.head = util::git_status(&h.repo).head;
+        state.delivery_contract = DeliveryContract::new(
+            vec!["ship installable Rust wrapper".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        h.write_state(state);
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("r1".into()),
+                strict: true,
+                to_phase: Some("implementation".into()),
+                json: true,
+            },
+        );
+        let joined = outcome.errors.join("\n");
+        assert!(joined.contains("delivery_contract_complete"));
+        assert!(joined.contains("constraints"));
+        let report = outcome.phase_report.unwrap();
+        let checks = report["checks"].as_array().unwrap();
+        assert!(checks.iter().any(|check| {
+            check["id"] == "delivery_contract_complete" && check["status"] == "missing"
+        }));
+    }
+
+    #[test]
+    fn collect_check_accepts_complete_delivery_contract() {
+        let h = Harness::new();
+        h.init_git();
+        let mut state = base_state();
+        state.workspace.head = util::git_status(&h.repo).head;
+        state.delivery_contract = DeliveryContract::new(
+            vec!["ship installable Rust wrapper".into()],
+            vec!["macOS/Linux first".into()],
+            vec!["cargo test --locked --all-targets".into()],
+            vec!["verify Rust default and Python fallback separately".into()],
+        );
+        h.write_state(state);
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("r1".into()),
+                strict: true,
+                to_phase: Some("implementation".into()),
+                json: true,
+            },
+        );
+        assert_eq!(outcome.errors, Vec::<String>::new());
+        let report = outcome.phase_report.unwrap();
+        let checks = report["checks"].as_array().unwrap();
+        assert!(checks.iter().any(|check| {
+            check["id"] == "delivery_contract_complete" && check["status"] == "ok"
+        }));
+    }
+
+    #[test]
     fn runner_failure_increments_retry_by_command_fingerprint() {
         let h = Harness::new();
         let mut state = base_state();
@@ -3182,7 +3303,14 @@ mod tests {
     #[test]
     fn cmd_memory_export_main_path_reads_local_run_without_sink() {
         let h = Harness::new();
-        h.write_state(base_state());
+        let mut state = base_state();
+        state.delivery_contract = DeliveryContract::new(
+            vec!["secret target token=SECRET".into()],
+            vec!["budget".into()],
+            vec!["private command /Users/example/private/eval.sh".into()],
+            vec!["entropy".into()],
+        );
+        h.write_state(state);
         cmd_memory(
             &h.repo,
             MemoryAction::Export {
@@ -3192,8 +3320,20 @@ mod tests {
         .unwrap();
         let projection =
             memory_projection(&h.repo, &util::load_run(&h.repo, Some("r1")).unwrap()).unwrap();
-        assert_eq!(projection["records"][0]["run_id"], "r1");
-        assert_eq!(projection["records"][0]["source"], "local .lto");
+        let record = &projection["records"][0];
+        assert_eq!(record["run_id"], "r1");
+        assert_eq!(record["source"], "local .lto");
+        assert!(record.get("goal").is_none());
+        assert!(
+            record["request_hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert_eq!(record["delivery_contract"]["complete"], true);
+        let text = serde_json::to_string(&projection).unwrap();
+        assert!(!text.contains("token=SECRET"));
+        assert!(!text.contains("/Users/example/private"));
     }
 
     #[test]

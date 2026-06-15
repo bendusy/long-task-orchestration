@@ -2,7 +2,7 @@ use crate::audit_dispatch;
 use crate::budget;
 use crate::commands::{closeout, ops, recap, resume, util};
 use crate::plugin;
-use crate::state::{self, LtoState, WorkspaceSnapshot};
+use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
 use anyhow::Context;
 use chrono::Utc;
 use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
@@ -60,6 +60,14 @@ pub enum Commands {
         done_when: Option<String>,
         #[arg(long)]
         host: Option<String>,
+        #[arg(long)]
+        target: Vec<String>,
+        #[arg(long)]
+        constraint: Vec<String>,
+        #[arg(long)]
+        instrument: Vec<String>,
+        #[arg(long = "entropy-check")]
+        entropy_check: Vec<String>,
         #[arg(long)]
         force: bool,
     },
@@ -366,6 +374,27 @@ pub enum PluginCommand {
     Validate {
         dir: PathBuf,
     },
+    RenderProfile {
+        dir: PathBuf,
+        profile_id: String,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long = "meta-output")]
+        meta_output: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Eval {
+        dir: PathBuf,
+        #[arg(long = "eval-id")]
+        eval_id: Option<String>,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     Mount {
         dir: PathBuf,
         #[arg(long)]
@@ -425,6 +454,65 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&validation)?);
             if !validation.ok {
                 anyhow::bail!("plugin validation failed");
+            }
+        }
+        Commands::Plugin {
+            command:
+                PluginCommand::RenderProfile {
+                    dir,
+                    profile_id,
+                    input,
+                    output,
+                    meta_output,
+                    json,
+                },
+        } => {
+            let meta = plugin::render_profile(&dir, &profile_id, &input, &output)?;
+            if let Some(meta_output) = meta_output {
+                if let Some(parent) = meta_output.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&meta_output, serde_json::to_string_pretty(&meta)? + "\n")?;
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&meta)?);
+            } else {
+                println!("rendered {profile_id} -> {}", output.display());
+            }
+        }
+        Commands::Plugin {
+            command:
+                PluginCommand::Eval {
+                    dir,
+                    eval_id,
+                    output,
+                    json,
+                },
+        } => {
+            let report = plugin::static_eval(&dir, eval_id.as_deref())?;
+            let should_print = json || output.is_none();
+            if let Some(output) = output.as_ref() {
+                if let Some(parent) = output.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(output, serde_json::to_string_pretty(&report)? + "\n")?;
+                if !json {
+                    println!(
+                        "plugin eval {} -> {}",
+                        if report.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+                            "OK"
+                        } else {
+                            "FAIL"
+                        },
+                        output.display()
+                    );
+                }
+            }
+            if should_print {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+            if report.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+                anyhow::bail!("plugin eval failed");
             }
         }
         Commands::Plugin {
@@ -519,16 +607,28 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             why,
             done_when,
             host,
+            target,
+            constraint,
+            instrument,
+            entropy_check,
             force,
         } => {
             let run_dir = start_run(
                 &args.repo,
-                run_id,
-                goal.unwrap_or_default(),
-                why.unwrap_or_default(),
-                done_when.unwrap_or_default(),
-                host.unwrap_or_default(),
-                force,
+                StartRunOptions {
+                    run_id,
+                    goal: goal.unwrap_or_default(),
+                    why: why.unwrap_or_default(),
+                    done_when: done_when.unwrap_or_default(),
+                    host: host.unwrap_or_default(),
+                    delivery_contract: DeliveryContract::new(
+                        target,
+                        constraint,
+                        instrument,
+                        entropy_check,
+                    ),
+                    force,
+                },
             )?;
             println!("{}", run_dir.display());
         }
@@ -789,15 +889,26 @@ fn current_run_id(repo: &Path) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn start_run(
-    repo: &Path,
+struct StartRunOptions {
     run_id: Option<String>,
     goal: String,
     why: String,
     done_when: String,
     host: String,
+    delivery_contract: DeliveryContract,
     force: bool,
-) -> anyhow::Result<PathBuf> {
+}
+
+fn start_run(repo: &Path, options: StartRunOptions) -> anyhow::Result<PathBuf> {
+    let StartRunOptions {
+        run_id,
+        goal,
+        why,
+        done_when,
+        host,
+        delivery_contract,
+        force,
+    } = options;
     let run_id = run_id.unwrap_or_else(|| default_run_id(&goal));
     state::validate_run_id(&run_id)?;
     let run_dir = repo.join(".lto").join(&run_id);
@@ -827,6 +938,7 @@ fn start_run(
         artifacts: json!({"manifest": format!(".lto/{run_id}/artifacts.json")}),
         ..LtoState::default()
     };
+    state.delivery_contract = delivery_contract;
     state.started_at = state::iso_now();
 
     let state_path = run_dir.join("state.json");
@@ -957,6 +1069,14 @@ mod tests {
             "release binaries exist",
             "--host",
             "codex",
+            "--target",
+            "users can run lto without Python",
+            "--constraint",
+            "macOS/Linux first; Windows paused",
+            "--instrument",
+            "cargo test --locked --all-targets",
+            "--entropy-check",
+            "verify wrapper and legacy fallback separately",
             "--force",
         ])
         .unwrap();
@@ -969,12 +1089,20 @@ mod tests {
         crate::process::git(repo, ["init"]).unwrap();
         let run_dir = start_run(
             repo,
-            Some("r1".to_string()),
-            "ship rust".to_string(),
-            "reduce python fallback risk".to_string(),
-            "release binaries exist".to_string(),
-            "codex".to_string(),
-            false,
+            StartRunOptions {
+                run_id: Some("r1".to_string()),
+                goal: "ship rust".to_string(),
+                why: "reduce python fallback risk".to_string(),
+                done_when: "release binaries exist".to_string(),
+                host: "codex".to_string(),
+                delivery_contract: DeliveryContract::new(
+                    vec!["users can run lto without Python".to_string()],
+                    vec!["macOS/Linux first; Windows paused".to_string()],
+                    vec!["cargo test --locked --all-targets".to_string()],
+                    vec!["verify wrapper and legacy fallback separately".to_string()],
+                ),
+                force: false,
+            },
         )
         .unwrap();
         assert!(run_dir.join("state.json").exists());
@@ -989,6 +1117,14 @@ mod tests {
         assert_eq!(state.why, "reduce python fallback risk");
         assert_eq!(state.done_when, "release binaries exist");
         assert_eq!(state.host_runtime, "codex");
+        assert_eq!(
+            state.delivery_contract.targets,
+            vec!["users can run lto without Python"]
+        );
+        assert!(state.delivery_contract.is_complete());
+        let run_state = std::fs::read_to_string(run_dir.join("run-state.md")).unwrap();
+        assert!(run_state.contains("- delivery_targets: users can run lto without Python"));
+        assert!(run_state.contains("- delivery_instruments: cargo test --locked --all-targets"));
     }
 
     #[test]
@@ -1000,6 +1136,37 @@ mod tests {
             "plugins/dev-workflow",
             "--mounts-json",
             ".lto/r1/plugin-mounts.json",
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn plugin_static_commands_are_registered() {
+        Args::try_parse_from([
+            "lto-rs",
+            "plugin",
+            "render-profile",
+            "plugins/deep-agent-profiles",
+            "codex-audit-readonly-v1",
+            "--input",
+            "brief.md",
+            "--output",
+            "rendered.md",
+            "--meta-output",
+            "rendered.meta.json",
+            "--json",
+        ])
+        .unwrap();
+        Args::try_parse_from([
+            "lto-rs",
+            "plugin",
+            "eval",
+            "plugins/deep-agent-profiles",
+            "--eval-id",
+            "profile-ab-cases-v1",
+            "--output",
+            "eval.json",
+            "--json",
         ])
         .unwrap();
     }

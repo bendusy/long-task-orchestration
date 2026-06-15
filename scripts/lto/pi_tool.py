@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
-import json, subprocess, sys
+import os, subprocess, sys
 from pathlib import Path
 from typing import Any
 
 LTO_RUN = Path(__file__).resolve().parent.parent / "lto_run.py"
+LTO_RS = Path(__file__).resolve().parent.parent.parent / "target" / "release" / "lto-rs"
 
 # Tool definitions in OpenAI/MCP-compatible format
 LTO_TOOLS = [
@@ -162,7 +163,10 @@ LTO_TOOLS = [
 
 def execute_lto_tool(tool_name: str, args: dict[str, Any], repo: Path) -> str:
     """执行 LTO 工具调用，返回结果文本。"""
-    cmd = [sys.executable, str(LTO_RUN), "--repo", str(repo)]
+    try:
+        cmd = _lto_cmd(repo)
+    except Exception as e:
+        return f"error: {e}"
 
     if tool_name == "lto_start":
         cmd += ["start", "--goal", args["goal"], "--host", args.get("host", "pi")]
@@ -273,6 +277,17 @@ def _current_run_id(repo: Path) -> str:
     if current.exists():
         return current.read_text(encoding="utf-8").strip()
     raise SystemExit("no active LTO run")
+
+
+def _lto_cmd(repo: Path) -> list[str]:
+    if os.environ.get("LTO_USE_PYTHON") == "1":
+        return [sys.executable, str(LTO_RUN), "--repo", str(repo)]
+    if not os.access(LTO_RS, os.X_OK):
+        raise FileNotFoundError(
+            f"Rust binary missing: {LTO_RS}; build with `cargo build --release --bin lto-rs` "
+            "or set LTO_USE_PYTHON=1 for legacy fallback"
+        )
+    return [str(LTO_RS), "--repo", str(repo)]
 
 
 # Pi extension entrypoint

@@ -73,7 +73,7 @@ def _pre_commit(args: argparse.Namespace) -> int:
     if blocks and mode == "block" and not args.force:
         print(f"LTO: BLOCKED — {'; '.join(blocks)}", file=sys.stderr)
         print("  use: git commit --no-verify", file=sys.stderr)
-        print("  or: lto_run.py hook pre-commit --force --reason '...'", file=sys.stderr)
+        print("  or: lto hook pre-commit --force --reason '...'", file=sys.stderr)
         return 1
 
     if warnings:

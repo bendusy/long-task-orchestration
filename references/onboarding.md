@@ -91,8 +91,10 @@ bash scripts/install.sh --check  # 只检查不装
 LTO 是个 CLI，任何能跑 bash 的 runtime 都能调，不需要你内置什么 Agent 工具：
 ```bash
 cargo run --manifest-path <skill-root>/Cargo.toml -- --repo <目标仓库> <子命令> [参数]
-# 或安装 wrapper 后显式走 Rust：
-lto --use-rust --repo <目标仓库> <子命令> [参数]
+# 或安装 wrapper 后默认走 Rust：
+lto --repo <目标仓库> <子命令> [参数]
+# legacy fallback:
+lto --use-python --repo <目标仓库> <子命令> [参数]
 ```
 `--repo` 指向你要做长任务的那个仓库（默认当前目录）。
 
@@ -104,7 +106,7 @@ lto --use-rust --repo <目标仓库> <子命令> [参数]
 
 | 命令 | 干什么 | 阶段 |
 |---|---|---|
-| `start --goal "..."` | 创建 `.lto/<run-id>/`，记下目标、宿主、HEAD | 开工 |
+| `start --goal "..."` | 创建 `.lto/<run-id>/`，记下目标、宿主、HEAD；可附 `--target/--constraint/--instrument/--entropy-check` 形成 core delivery contract | 开工 |
 | `runs` | **列本项目所有 LTO run**（目标/阶段/进度/current）。am 没装时 `.lto/` 就是本地记忆，进项目先跑这个 | 接续 |
 | `resume` | 跨 session 拉回上下文胶囊（目标/进度/上次失败/下一步） | 接续 |
 | `memory export/resume/publish` | 可选 artifact memory：导出 redacted projection / 发现历史 run / 显式发布到 sink | 接续 |
@@ -191,10 +193,17 @@ $L recap
 ## 最小跑通流程（照着做）
 
 ```bash
-L="python3 <skill-root>/scripts/lto_run.py --repo ."
+L="lto --repo ."
 
 # 1. 开工，记下目标
 $L start --goal "重构登录模块，消除空指针" --host <你这家:codex/pi/agy/claude>
+
+# /goal 型长交付，直接把交付契约落进 Rust core state
+$L start --goal "提升检索召回" \
+  --target "hidden eval recall >= 95%" \
+  --constraint "wall clock <= 4h; paid API <= $50" \
+  --instrument "python3 eval/search_recall.py --hidden" \
+  --entropy-check "on stall, change hypothesis and log overfit reflection"
 
 # 2. 加任务（task 是 runner/next/audit 的操作对象，先建出来）
 $L task-add --task-id T1 --title "给 login 加判空" --command "pytest tests/test_auth.py -x"

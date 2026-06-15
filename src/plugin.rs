@@ -12,6 +12,8 @@ use walkdir::WalkDir;
 pub enum PluginError {
     #[error("missing plugin.json: {0}")]
     MissingManifest(PathBuf),
+    #[error("{0}")]
+    Message(String),
     #[error("invalid JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
     #[error("io: {0}")]
@@ -194,6 +196,7 @@ pub fn validate_plugin(plugin_dir: &Path) -> Result<PluginValidation, PluginErro
     for rel in all_declared_refs(&manifest) {
         validate_rel_file(plugin_dir, &rel, &mut errors);
     }
+    validate_profile_refs(plugin_dir, &manifest, &mut errors);
     validate_plugin_tree(plugin_dir, &mut errors);
 
     let manifest_hash = format!("sha256:{:x}", Sha256::digest(raw.as_bytes()));
@@ -222,6 +225,364 @@ fn load_mount_lock(path: &Path) -> Result<serde_json::Value, PluginError> {
         });
     }
     Ok(value)
+}
+
+pub fn render_profile(
+    plugin_dir: &Path,
+    profile_id: &str,
+    input_path: &Path,
+    output_path: &Path,
+) -> Result<serde_json::Value, PluginError> {
+    let profile = load_profile(plugin_dir, profile_id)?;
+    let mut chunks = vec![fs::read_to_string(input_path)?.trim_end().to_string()];
+    let suffix_ref = profile
+        .get("prompt_suffix_ref")
+        .and_then(serde_json::Value::as_str);
+    if let Some(rel) = suffix_ref {
+        let path = safe_plugin_file(plugin_dir, rel)?;
+        chunks.push("# LTO plugin profile instructions".to_string());
+        chunks.push(fs::read_to_string(path)?.trim_end().to_string());
+    }
+    let suffix = profile
+        .get("prompt_suffix")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(text) = suffix {
+        chunks.push("# LTO plugin profile instructions".to_string());
+        chunks.push(text.to_string());
+    }
+    let rendered = chunks.join("\n\n").trim_end().to_string() + "\n";
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(output_path, &rendered)?;
+    Ok(serde_json::json!({
+        "profile_id": profile_id,
+        "profile_path": profile.get("_relative_path").and_then(serde_json::Value::as_str).unwrap_or(""),
+        "input": input_path.display().to_string(),
+        "output": output_path.display().to_string(),
+        "rendered_bytes": rendered.len(),
+        "prompt_suffix_ref": suffix_ref,
+        "output_schema_ref": profile.get("output_schema_ref").cloned().unwrap_or(serde_json::Value::Null),
+        "env_keys": profile.get("env")
+            .and_then(serde_json::Value::as_object)
+            .map(|obj| obj.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default(),
+        "permission": profile.get("permission").cloned().unwrap_or_else(|| serde_json::json!({})),
+    }))
+}
+
+pub fn static_eval(
+    plugin_dir: &Path,
+    eval_id: Option<&str>,
+) -> Result<serde_json::Value, PluginError> {
+    let validation = validate_plugin(plugin_dir)?;
+    let mut errors = validation.errors.clone();
+    let mut evals = Vec::new();
+    if validation.ok {
+        let manifest = load_manifest(plugin_dir)?;
+        let profile_ids = load_declared_profiles(plugin_dir, &manifest, &mut errors)
+            .into_iter()
+            .filter_map(|profile| {
+                profile
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>();
+        for rel in manifest
+            .provides
+            .get("evals")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            let data = read_json_file(&safe_plugin_file(plugin_dir, rel)?)?;
+            if data.get("id").and_then(serde_json::Value::as_str) != eval_id && eval_id.is_some() {
+                continue;
+            }
+            let (eval_summary, eval_errors) = summarize_eval_pack(rel, &data, &profile_ids);
+            errors.extend(eval_errors);
+            evals.push(eval_summary);
+        }
+        if eval_id.is_some() && evals.is_empty() {
+            errors.push(format!("eval not found: {}", eval_id.unwrap_or_default()));
+        }
+    }
+    Ok(serde_json::json!({
+        "plugin_dir": plugin_dir.display().to_string(),
+        "validation": validation,
+        "evals": evals,
+        "ok": errors.is_empty(),
+        "errors": errors,
+    }))
+}
+
+fn load_manifest(plugin_dir: &Path) -> Result<PluginManifest, PluginError> {
+    let manifest_path = plugin_dir.join("plugin.json");
+    if !manifest_path.exists() {
+        return Err(PluginError::MissingManifest(manifest_path));
+    }
+    Ok(serde_json::from_str(&fs::read_to_string(manifest_path)?)?)
+}
+
+fn load_profile(plugin_dir: &Path, profile_id: &str) -> Result<serde_json::Value, PluginError> {
+    let validation = validate_plugin(plugin_dir)?;
+    if !validation.ok {
+        return Err(PluginError::Validation(validation.errors));
+    }
+    let manifest = load_manifest(plugin_dir)?;
+    let mut errors = Vec::new();
+    for profile in load_declared_profiles(plugin_dir, &manifest, &mut errors) {
+        if profile.get("id").and_then(serde_json::Value::as_str) == Some(profile_id) {
+            return Ok(profile);
+        }
+    }
+    if errors.is_empty() {
+        Err(PluginError::Message(format!(
+            "profile not found: {profile_id}"
+        )))
+    } else {
+        Err(PluginError::Validation(errors))
+    }
+}
+
+fn load_declared_profiles(
+    plugin_dir: &Path,
+    manifest: &PluginManifest,
+    errors: &mut Vec<String>,
+) -> Vec<serde_json::Value> {
+    let mut profiles = Vec::new();
+    for rel in manifest
+        .provides
+        .get("profiles")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+    {
+        match safe_plugin_file(plugin_dir, rel)
+            .and_then(|path| read_json_file(&path))
+            .and_then(|mut value| {
+                if !value.is_object() {
+                    return Err(PluginError::Message(format!(
+                        "profile must be an object: {rel}"
+                    )));
+                }
+                value["_relative_path"] = serde_json::Value::String(rel.to_string());
+                Ok(value)
+            }) {
+            Ok(profile) => profiles.push(profile),
+            Err(err) => errors.push(format!("profile invalid: {rel}: {err}")),
+        }
+    }
+    profiles
+}
+
+fn validate_profile_refs(plugin_dir: &Path, manifest: &PluginManifest, errors: &mut Vec<String>) {
+    let env_allowlist = manifest
+        .security
+        .env_allowlist
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let max_sandbox = manifest.security.max_sandbox.as_str();
+    for profile in load_declared_profiles(plugin_dir, manifest, errors) {
+        let pid = profile
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("<unknown>");
+        if let Some(family) = profile.get("family").and_then(serde_json::Value::as_str)
+            && !KNOWN_FAMILIES.contains(&family)
+        {
+            errors.push(format!("profile {pid} family {family:?} not in known enum"));
+        }
+        if let Some(rc) = profile.get("runner_constraints") {
+            validate_runner_constraints(pid, rc, errors);
+        }
+        if let Some(env) = profile.get("env").and_then(serde_json::Value::as_object) {
+            for key in env.keys() {
+                if !env_allowlist.contains(&key.as_str()) {
+                    errors.push(format!("profile {pid} env key not allowlisted: {key}"));
+                }
+            }
+        }
+        let sandbox = profile
+            .get("permission")
+            .and_then(|value| value.get("sandbox"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("read-only");
+        if !ALLOWED_SANDBOX.contains(&sandbox) {
+            errors.push(format!("profile {pid} has invalid sandbox: {sandbox}"));
+        }
+        if sandbox_rank(sandbox) > sandbox_rank(max_sandbox) {
+            errors.push(format!(
+                "profile {pid} sandbox {sandbox} exceeds plugin max_sandbox {max_sandbox}"
+            ));
+        }
+        for key in ["prompt_suffix_ref", "output_schema_ref"] {
+            if let Some(rel) = profile.get(key).and_then(serde_json::Value::as_str) {
+                if key == "prompt_suffix_ref" && !rel.ends_with(".md") {
+                    errors.push(format!(
+                        "profile {pid} prompt_suffix_ref must be .md: {rel}"
+                    ));
+                }
+                if key == "output_schema_ref" && !rel.ends_with(".json") {
+                    errors.push(format!(
+                        "profile {pid} output_schema_ref must be .json: {rel}"
+                    ));
+                }
+                validate_rel_file(plugin_dir, rel, errors);
+            }
+        }
+    }
+}
+
+fn validate_runner_constraints(pid: &str, value: &serde_json::Value, errors: &mut Vec<String>) {
+    let Some(obj) = value.as_object() else {
+        errors.push(format!(
+            "profile {pid} runner_constraints must be an object"
+        ));
+        return;
+    };
+    for key in obj.keys() {
+        if key != "exclude_host_family" && key != "min_distinct_families" {
+            errors.push(format!(
+                "profile {pid} runner_constraints unknown key: {key}"
+            ));
+        }
+    }
+    if let Some(value) = obj.get("exclude_host_family")
+        && !value.is_boolean()
+    {
+        errors.push(format!(
+            "profile {pid} runner_constraints.exclude_host_family must be bool"
+        ));
+    }
+    if let Some(value) = obj.get("min_distinct_families")
+        && value.as_u64().filter(|v| *v >= 1).is_none()
+    {
+        errors.push(format!(
+            "profile {pid} runner_constraints.min_distinct_families must be int >= 1"
+        ));
+    }
+}
+
+fn summarize_eval_pack(
+    rel: &str,
+    data: &serde_json::Value,
+    profile_ids: &[String],
+) -> (serde_json::Value, Vec<String>) {
+    let mut errors = Vec::new();
+    let id = data
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let cases: &[serde_json::Value] = match data.get("cases").and_then(serde_json::Value::as_array)
+    {
+        Some(cases) if !cases.is_empty() => cases.as_slice(),
+        _ => {
+            errors.push(format!("eval {id} must include non-empty cases list"));
+            &[]
+        }
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for case in cases {
+        let Some(cid) = case.get("id").and_then(serde_json::Value::as_str) else {
+            errors.push(format!("eval {id} case id missing"));
+            continue;
+        };
+        if !seen.insert(cid.to_string()) {
+            errors.push(format!("eval {id} case id duplicate: {cid}"));
+        }
+        if let Some(profile) = case.get("profile").and_then(serde_json::Value::as_str)
+            && !profile_ids.iter().any(|known| known == profile)
+        {
+            errors.push(format!("case {cid} references unknown profile {profile}"));
+        }
+    }
+    let metrics = data
+        .get("metrics")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if metrics.is_empty() {
+        errors.push(format!("eval {id} has no metrics"));
+    }
+    let metric_names = metrics
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    for required in ["permission_violations", "private_path_leaks"] {
+        if !metric_names.contains(&required) {
+            errors.push(format!(
+                "eval {id} missing required safety metric: {required}"
+            ));
+        }
+    }
+    if data
+        .get("safety_regressions_allowed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+        != 0
+    {
+        errors.push(format!("eval {id} must set safety_regressions_allowed=0"));
+    }
+    if data
+        .get("minimum_runs_before_promotion")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+        < 1
+    {
+        errors.push(format!(
+            "eval {id} must set minimum_runs_before_promotion >= 1"
+        ));
+    }
+    let ok = errors.is_empty();
+    (
+        serde_json::json!({
+            "id": id,
+            "path": rel,
+            "cases": cases.len(),
+            "metrics": metric_names,
+            "ok": ok,
+            "errors": errors.clone(),
+        }),
+        errors,
+    )
+}
+
+fn safe_plugin_file(plugin_dir: &Path, rel: &str) -> Result<PathBuf, PluginError> {
+    if rel.contains("..") || rel.starts_with('/') || rel.starts_with('\\') {
+        return Err(PluginError::Message(format!(
+            "invalid relative file path: {rel}"
+        )));
+    }
+    let path = plugin_dir.join(rel);
+    if path.is_symlink() {
+        return Err(PluginError::Message(format!(
+            "plugin file must not be symlink: {rel}"
+        )));
+    }
+    if !path.is_file() {
+        return Err(PluginError::Message(format!("missing plugin file: {rel}")));
+    }
+    Ok(path)
+}
+
+fn read_json_file(path: &Path) -> Result<serde_json::Value, PluginError> {
+    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+}
+
+fn sandbox_rank(sandbox: &str) -> u8 {
+    match sandbox {
+        "read-only" => 0,
+        "workspace-write" => 1,
+        "danger-full-access" => 2,
+        _ => 99,
+    }
 }
 
 fn all_declared_refs(manifest: &PluginManifest) -> Vec<String> {
@@ -307,6 +668,8 @@ static VERSION_RE: LazyLock<Regex> =
 static ENV_KEY_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Z][A-Z0-9_]{0,63}$").unwrap());
 const HOST_ENV_ALLOWLIST: &[&str] = &["CODEX_MODEL", "CODEX_PROFILE", "CODEX_JSON", "CODEX_IMAGES"];
+const ALLOWED_SANDBOX: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
+const KNOWN_FAMILIES: &[&str] = &["openai", "anthropic", "google", "deepseek", "meta"];
 
 #[cfg(test)]
 mod tests {
@@ -320,6 +683,60 @@ mod tests {
             let validation = validate_plugin(&plugin).unwrap();
             assert!(validation.ok, "{:?}", validation.errors);
         }
+    }
+
+    #[test]
+    fn static_eval_validates_existing_eval_pack() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let plugin = repo.join("plugins").join("deep-agent-profiles");
+        if plugin.exists() {
+            let report = static_eval(&plugin, None).unwrap();
+            assert_eq!(report["ok"], true);
+            assert!(!report["evals"].as_array().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn render_profile_appends_prompt_suffix() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let plugin = repo.join("plugins").join("deep-agent-profiles");
+        if plugin.exists() {
+            let tmp = tempfile::tempdir().unwrap();
+            let input = tmp.path().join("brief.md");
+            let output = tmp.path().join("rendered.md");
+            fs::write(&input, "Goal:\nAudit this design.\n").unwrap();
+            let meta = render_profile(&plugin, "codex-audit-readonly-v1", &input, &output).unwrap();
+            let rendered = fs::read_to_string(output).unwrap();
+            assert!(rendered.contains("Goal:"));
+            assert!(rendered.contains("LTO plugin profile instructions"));
+            assert_eq!(meta["profile_id"], "codex-audit-readonly-v1");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_unknown_profile_family() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("plugin");
+        fs::create_dir_all(plugin_dir.join("profiles")).unwrap();
+        fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+              "id":"x.test","version":"0.1.0","kind":"path-plugin","stage":"experimental",
+              "security":{"executable_code":false,"max_sandbox":"read-only"},
+              "source_notes":["note.md"],
+              "provides":{"profiles":["profiles/p.json"]}
+            }"#,
+        )
+        .unwrap();
+        fs::write(plugin_dir.join("note.md"), "note").unwrap();
+        fs::write(
+            plugin_dir.join("profiles").join("p.json"),
+            r#"{"id":"p","family":"alien","permission":{"sandbox":"read-only"}}"#,
+        )
+        .unwrap();
+        let validation = validate_plugin(&plugin_dir).unwrap();
+        assert!(!validation.ok);
+        assert!(validation.errors.iter().any(|err| err.contains("family")));
     }
 
     #[test]
