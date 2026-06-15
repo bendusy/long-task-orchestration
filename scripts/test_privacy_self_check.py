@@ -72,6 +72,35 @@ def main() -> int:
         errors += ok(not (repo / ".claude").exists(), "exact delete removes one repo-local candidate")
         errors += ok((repo / ".lto").exists(), "later non-delete answer keeps next candidate")
 
+    with tempfile.TemporaryDirectory(prefix="lto_privacy_classify_test_") as td:
+        base = Path(td)
+        repo = base / "repo"
+        home = base / "home"
+        repo.mkdir()
+        home.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+        (repo / ".gitignore").write_text(".lto/\n", encoding="utf-8")
+        (repo / "scripts").mkdir()
+        (repo / "scripts" / "test_redaction.py").write_text(
+            'fake = "sk-ant-abcdefghijkl1234567890"\n',
+            encoding="utf-8",
+        )
+
+        env = {
+            **os.environ,
+            "PRIVACY_CHECK_HOME": str(home),
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+            "DISABLE_TELEMETRY": "1",
+            "DO_NOT_TRACK": "1",
+            "CLAUDE_CODE_SKIP_PROMPT_HISTORY": "1",
+        }
+
+        strict = run([str(SCRIPT), "--repo", str(repo), "--strict", "--no-gitleaks"], env=env)
+        errors += ok(strict.returncode == 0, f"classified test fixture strict scan exits 0 (got {strict.returncode})")
+        errors += ok("classified regex test fixture" in strict.stdout, "test fixture hit is classified")
+        errors += ok("findings=0" in strict.stdout, "classified fixture does not count as finding")
+
     if errors == 0:
         print("PRIVACY SELF-CHECK TESTS OK")
         return 0

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "run_id": "legacy-fixture-run",
+  "goal": "legacy Python run compatibility",
+  "why": "prove Rust can load a fixed older .lto state",
+  "done_when": "rust recap resume check pass",
+  "started_at": "2026-06-04T00:00:00+00:00",
+  "host_runtime": "python",
+  "workspace": {
+    "repo_root": ".",
+    "branch": "main",
+    "head": "__HEAD__",
+    "dirty_fingerprint": "clean"
+  },
+  "current_phase": "implementation",
+  "original_user_request": "legacy compatibility fixture",
+  "phase_transitions": [],
+  "tasks": [
+    {
+      "id": "OLD1",
+      "title": "legacy completed task",
+      "status": "done",
+      "phase": "implementation",
+      "touched_files": [
+        "README.md"
+      ],
+      "commands_run": [
+        "git status --short"
+      ],
+      "evidence": [
+        {
+          "kind": "test",
+          "command": "git status --short",
+          "rc": 0,
+          "summary": "legacy command passed"
+        }
+      ]
+    }
+  ],
+  "active_task_id": null,
+  "risk_points": [],
+  "agent_runs": {
+    "legacy-job": [
+      {
+        "job_id": "legacy-job",
+        "runner": "codex",
+        "status": "ok",
+        "reply_text": "legacy runner completed without typed dimensions"
+      }
+    ]
+  },
+  "gates": {
+    "unresolved_blocks": []
+  },
+  "last_failure": null,
+  "user_decisions": [],
+  "next_action": "continue rust takeover",
+  "blocked_by": "none",
+  "artifacts": {
+    "manifest": ".lto/legacy-fixture-run/artifacts.json"
+  }
+}

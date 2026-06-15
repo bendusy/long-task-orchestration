@@ -296,7 +296,13 @@ Protocol compatibility smoke:
 lto runs
 lto resume --run-id <old-run-id>
 lto check --run-id <old-run-id> --json
+cargo test --locked --test python_rust_compat
 ```
+
+The fixed legacy fixture lives at `tests/fixtures/legacy-run/state.json`. It
+must keep omitting newer optional fields such as `budget` and
+`delivery_contract` so Rust compatibility is tested against an older on-disk
+shape, not only against state freshly emitted by the current Python fallback.
 
 Privacy and repository hygiene:
 

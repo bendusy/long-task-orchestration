@@ -46,6 +46,7 @@ done
 REPO="$(cd "$REPO" && pwd)"
 FINDINGS=0
 WARNINGS=0
+CLASSIFIED_REGEX_HITS=0
 DELETE_PATHS=()
 DELETE_REASONS=()
 
@@ -54,6 +55,10 @@ ok() { printf 'OK   %s\n' "$1"; }
 warn() { printf 'WARN %s\n' "$1"; WARNINGS=$((WARNINGS + 1)); }
 fail() { printf 'FAIL %s\n' "$1"; FINDINGS=$((FINDINGS + 1)); }
 info() { printf 'INFO %s\n' "$1"; }
+classified_regex_hit() {
+  printf 'OK   classified regex test fixture: %s\n' "$1"
+  CLASSIFIED_REGEX_HITS=$((CLASSIFIED_REGEX_HITS + 1))
+}
 
 is_git_repo() { git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; }
 
@@ -93,6 +98,21 @@ try:
 except ValueError:
     print(path)
 PY
+}
+
+is_classified_regex_hit() {
+  local rel="$1" hit="$2" line_no test_start
+  line_no="${hit%%:*}"
+  case "$rel" in
+    scripts/test_*.py) return 0 ;;
+    src/llm_judge.rs)
+      [[ "$line_no" =~ ^[0-9]+$ ]] || return 1
+      test_start="$(grep -n '^\#\[cfg(test)\]' "$REPO/$rel" | head -1 | cut -d: -f1 || true)"
+      [[ -n "$test_start" && "$line_no" -ge "$test_start" ]]
+      return
+      ;;
+  esac
+  return 1
 }
 
 check_env_var() {
@@ -219,13 +239,21 @@ for rel in "${scan_files[@]}"; do
   [[ "$size" -le "$MAX_SCAN_BYTES" ]] || { warn "skip large file in regex scan: $rel ($size bytes)"; continue; }
   if LC_ALL=C grep -Iq . "$path" 2>/dev/null && grep -En "$SCAN_PATTERNS" "$path" >/tmp/privacy_self_check_hits.$$ 2>/dev/null; then
     while IFS= read -r hit; do
-      fail "$rel:$hit"
-      scan_hits=$((scan_hits + 1))
+      if is_classified_regex_hit "$rel" "$hit"; then
+        classified_regex_hit "$rel:$hit"
+      else
+        fail "$rel:$hit"
+        scan_hits=$((scan_hits + 1))
+      fi
     done < /tmp/privacy_self_check_hits.$$
   fi
   rm -f /tmp/privacy_self_check_hits.$$
 done
-[[ "$scan_hits" -eq 0 ]] && ok "regex scan clean"
+if [[ "$scan_hits" -eq 0 && "$CLASSIFIED_REGEX_HITS" -eq 0 ]]; then
+  ok "regex scan clean"
+elif [[ "$scan_hits" -eq 0 ]]; then
+  ok "regex scan has ${CLASSIFIED_REGEX_HITS} classified test fixture hit(s), 0 unclassified"
+fi
 
 section "Gitleaks"
 if [[ "$RUN_GITLEAKS" -eq 0 ]]; then
@@ -294,7 +322,7 @@ if [[ "$DELETE_MODE" -eq 1 && "${#DELETE_PATHS[@]}" -gt 0 ]]; then
 fi
 
 section "Summary"
-printf 'findings=%s warnings=%s cleanup_candidates=%s\n' "$FINDINGS" "$WARNINGS" "${#DELETE_PATHS[@]}"
+printf 'findings=%s warnings=%s classified_regex_hits=%s cleanup_candidates=%s\n' "$FINDINGS" "$WARNINGS" "$CLASSIFIED_REGEX_HITS" "${#DELETE_PATHS[@]}"
 if [[ "$STRICT" -eq 1 && "$FINDINGS" -gt 0 ]]; then
   exit 1
 fi
