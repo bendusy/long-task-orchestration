@@ -20,6 +20,7 @@ from lto.budget import (  # noqa: E402
     deadline_status,
     dimension_status,
 )
+from lto.state import default_state  # noqa: E402
 
 
 class TestDimensionStatus(unittest.TestCase):
@@ -120,6 +121,27 @@ class TestCheckBudget(unittest.TestCase):
         budget = {"max_tokens": 1000, "turns_used": 0}
         r = check_budget(_state(budget), token_total=800, now_iso="2026-06-15T01:00:00")
         self.assertEqual(r["overall"], "warn")
+
+
+class TestStateBudgetBlock(unittest.TestCase):
+    def _make(self, **kw):
+        return default_state(goal="g", host="h", repo="r", request="", phase="intake",
+                             head="abc", branch="main", auditors="codex", timeout="900", **kw)
+
+    def test_default_state_has_budget_block_all_none(self):
+        s = self._make()
+        self.assertIn("budget", s)
+        self.assertIsNone(s["budget"]["max_turns"])
+        self.assertIsNone(s["budget"]["max_tokens"])
+        self.assertIsNone(s["budget"]["hard_deadline"])
+        self.assertEqual(s["budget"]["turns_used"], 0)
+        self.assertEqual(s["budget"]["warn_ratio"], 0.8)
+
+    def test_default_state_accepts_limits(self):
+        s = self._make(max_turns=50, max_tokens=1000000, hard_deadline="2026-06-20T23:59:00")
+        self.assertEqual(s["budget"]["max_turns"], 50)
+        self.assertEqual(s["budget"]["max_tokens"], 1000000)
+        self.assertEqual(s["budget"]["hard_deadline"], "2026-06-20T23:59:00")
 
 
 if __name__ == "__main__":

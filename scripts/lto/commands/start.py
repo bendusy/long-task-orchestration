@@ -58,6 +58,9 @@ def run(args: argparse.Namespace) -> int:
         timeout=args.timeout,
         why=getattr(args, "why", "") or "",
         done_when=getattr(args, "done_when", "") or "",
+        max_turns=getattr(args, "max_turns", None),
+        max_tokens=getattr(args, "max_tokens", None),
+        hard_deadline=getattr(args, "hard_deadline", None),
     )
     state["run_id"] = run_id
     state["artifacts"] = {"manifest": f".lto/{run_id}/artifacts.json"}
@@ -222,6 +225,12 @@ def add_parser(subparsers) -> None:
     p.add_argument("--why", default="", help="why this run exists (for human recap after long gaps)")
     p.add_argument("--done-when", dest="done_when", default="",
                    help="done-criteria: how you'll know it's finished (for human recap)")
+    p.add_argument("--max-turns", type=int, default=None,
+                   help="run-level cap on autopilot auto-advance turns (default: unlimited)")
+    p.add_argument("--max-tokens", type=int, default=None,
+                   help="run-level cap on cumulative dispatch tokens (default: unlimited)")
+    p.add_argument("--deadline", dest="hard_deadline", default=None,
+                   help="ISO8601 hard deadline for the run (default: none)")
     p.add_argument("--with-audit", action="store_true", help="force generate audit-ledger.md")
     p.add_argument("--install-hooks", action="store_true",
                    help="install LTO pre-commit gate into .git/hooks (opt-in; skips if husky/pre-commit detected)")
