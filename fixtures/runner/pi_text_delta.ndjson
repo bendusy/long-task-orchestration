@@ -1,0 +1,4 @@
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"ignored"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hel"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"lo"}}
+{"type":"message_end","message":{"usage":{"input":10,"output":2,"totalTokens":12}}}

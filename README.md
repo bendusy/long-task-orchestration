@@ -61,6 +61,18 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 完整技术条目见 [CHANGELOG.md](./CHANGELOG.md)。
 
+## Rust v2 轨道（施工中）
+
+`lto-rs` 是按 2026-06-15 v2 spec 开始落地的 Rust 核心轨道。当前状态是：Rust workspace、24 命令 clap 外壳、runner event parser、state/budget、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型和契约测试已建立；Python CLI 仍是真源，未完成全量等价前不会切换 wrapper。
+
+```bash
+cargo test
+cargo run -- self-test
+cargo run -- check --run-id <run-id> --json
+```
+
+Rust 侧的原则是“黑盒行为对齐，内部 Rust-native”：外部兼容 `.lto/` 历史 state 和现有插件 JSON，内部用 enum/typed struct/trait/Result/serde flatten 固化不变量，不机械翻译 Python 模块边界。
+
 ## 什么时候**不**该用
 
 - 修个小 bug、改一行 —— 直接改，别套 harness。

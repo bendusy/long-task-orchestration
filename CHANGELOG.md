@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Rust v2 core track — typed contracts without replacing Python yet
+
+- **Summary**: Added the first Rust v2 workspace (`lto-rs`) from the staged 2026-06-15 specs. This is a verified core track, not a wrapper cutover: Python remains the source of truth until full parity passes.
+- **Rust-native boundaries**: runner output is parsed into tagged enums (`pi` reply from `message_update/text_delta`, `codex` usage from `turn.completed`, `claude` result fallback); `Sandbox`/`ExitState`/`JobStatus`/`TaskSize` are typed; `state` uses `serde(flatten)` to preserve unknown Python keys; `RankedCandidate` has no execute method; `MergeReview` requires deterministic diff + test result and keeps `audit_opinion` optional.
+- **Reusable core modules**: shared `process` helpers centralize shell/git CLI execution so worktree and merge-review logic do not each maintain their own git wrappers. `scheduler` now exposes the reusable deterministic core for batch validation, exit classification, health re-probe, retry backoff, and attempt-to-result conversion before the runner I/O layer is cut over. Plugins remain data-only JSON/Markdown; Rust validates existing manifests instead of migrating plugin code.
+- **Heterogeneous review guard**: the decision reviewer gate now requires at least two valid non-empty reviewers from distinct runner families, so same-family aliases such as `codex`/`openai-gpt-5` cannot satisfy the heterogeneity contract.
+- **Coverage**: `cargo test` covers runner parsers, scheduler classifier/backoff/health gates, budget semantics, state compatibility, worktree sandbox redlines, dispatch three-cell scoring, decision 2-vote/needs-human semantics, judge isolation, plugin validation, and CLI command-count parity (24).
+- **CI**: added `.github/workflows/rust-v2.yml` for fmt/check/clippy/test on Linux/macOS/Windows and tag-time release binary builds. `unsafe_code = "forbid"` is set at the crate lint layer.
+
 ### Run-level budget contract — graded brake on autonomous over-run
 
 - **Why**: distilled from elvis (@omarsar0)'s *Autonomous Long-Running Coding Agents* — a strong goal is a contract that includes *the number of turns and budget*. LTO had `why`/`done_when` (human-recap free text) but no run-level turn/token/deadline cap; `--timeout` was per-dispatch only. This closes the contract gap without touching the "host is planner" core.
