@@ -206,6 +206,7 @@ def main() -> int:
         "audit-convergence.md", "codex-cli-control.md", "control-loop-harness.md",
         "cross-runtime-host-notes.md", "decision-logging.md", "deploy-sequencing.md",
         "plugin-boundary.md", "plugin-real-eval-runner.md", "privacy-self-check.md",
+        "python-rust-ownership.md", "open-source-delivery-requirements.md",
         "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
         "validation-log.md", "workflow-playbook.md",
@@ -220,6 +221,7 @@ def main() -> int:
         "audit-convergence.md", "codex-cli-control.md", "control-loop-harness.md",
         "cross-runtime-host-notes.md", "decision-logging.md", "deploy-sequencing.md",
         "plugin-boundary.md", "plugin-real-eval-runner.md", "privacy-self-check.md",
+        "python-rust-ownership.md", "open-source-delivery-requirements.md",
         "engineering-map.md", "long-loop-state.md",
         "onboarding.md", "run-state-workflow.md", "sharing-guide.md",
         "validation-log.md", "workflow-playbook.md",
@@ -240,6 +242,20 @@ def main() -> int:
         )
         last = (proc.stdout.strip().split(chr(10)) or [""])[-1]
         errors += check(proc.returncode == 0, f"docs consistency: {last or 'rc=' + str(proc.returncode)}")
+        if proc.returncode != 0:
+            print(proc.stdout[-2000:], file=sys.stderr)
+            print(proc.stderr[-2000:], file=sys.stderr)
+
+    ownership_check = SCRIPTS_DIR / "check_python_rust_ownership.py"
+    errors += check(ownership_check.exists(), "check_python_rust_ownership.py exists")
+    if ownership_check.exists():
+        proc = subprocess.run(
+            [sys.executable, str(ownership_check)],
+            cwd=str(SKILL_DIR),
+            capture_output=True, text=True, timeout=60,
+        )
+        last = (proc.stdout.strip().split(chr(10)) or [""])[-1]
+        errors += check(proc.returncode == 0, f"Python/Rust ownership: {last or 'rc=' + str(proc.returncode)}")
         if proc.returncode != 0:
             print(proc.stdout[-2000:], file=sys.stderr)
             print(proc.stderr[-2000:], file=sys.stderr)

@@ -296,6 +296,7 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 - `references/run-state-workflow.md` — 完整命令详细用法手册
 - `references/execution-loop.md` — runner/judge/parallel/pipeline + agent 执行层
 - `references/rust-migration-release.md` — Rust 接管 Python、二进制下载状态、release 打包流程
+- `references/python-rust-ownership.md` — Rust/Python 命令 ownership 与 legacy 分类
 - `references/hooks.md` — pre-commit/pre-deploy/pre-closeout 边界 hook（opt-in）
 - `references/sharing-guide.md` — 怎么装、怎么给朋友用、项目级注入
 - `references/cross-runtime-host-notes.md` — 不同 AI 工具当宿主的具体用法

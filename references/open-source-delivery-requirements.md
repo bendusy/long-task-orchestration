@@ -202,7 +202,9 @@ The next cleanup pass must reduce duplicate logic. The correct order is:
 
 1. Prove parity with tests and old-run fixtures.
 2. Move one behavior owner to Rust.
-3. Shrink or label the Python path.
+3. Shrink or label the Python path. The current ownership manifest is
+   [`python-rust-ownership.json`](./python-rust-ownership.json), with the
+   human-readable table in [`python-rust-ownership.md`](./python-rust-ownership.md).
 4. Delete unreachable or duplicated code only after rollback is preserved.
 
 ## Release And Binary Requirements
@@ -383,7 +385,8 @@ If one answer is no, do not push as a release candidate.
 
 ### P1: Rust Owns Core, Python Shrinks
 
-- Build a command-by-command ownership table.
+- Keep the command-by-command ownership table and
+  `scripts/check_python_rust_ownership.py` gate current.
 - Add old-run compatibility fixtures.
 - Port or explicitly defer each Python-only behavior.
 - Remove duplicated branches only after parity evidence exists.
