@@ -225,8 +225,9 @@ def main() -> int:
             )
 
     readme = (SKILL_DIR / "README.md").read_text(encoding="utf-8")
-    errors += check('L="python3 scripts/lto_run.py"' in readme, "README quickstart uses standalone lto_run.py path")
-    errors += check((SCRIPTS_DIR / "lto_run.py").exists(), "README quickstart script exists")
+    errors += check('L="cargo run --quiet --"' in readme, "README quickstart uses Rust v2 entrypoint")
+    errors += check((SKILL_DIR / "src" / "cli.rs").exists(), "README quickstart Rust CLI exists")
+    errors += check((SCRIPTS_DIR / "lto_run.py").exists(), "Python compatibility fallback exists")
     errors += check((SCRIPTS_DIR / "delegate" / "triad.sh").exists(), "bundled triad.sh exists")
     errors += check((SCRIPTS_DIR / "delegate" / "runners" / "healthcheck.sh").exists(), "bundled delegate runners exist")
 

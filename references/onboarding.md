@@ -1,13 +1,13 @@
 # LTO 装载手册 — 给 agent 读的一份文档
 
-> 你是一个 agent（codex / pi / agy / claude / 任意能跑 Python + bash 的 runtime）。
+> 你是一个 agent（codex / pi / agy / claude / 任意能跑 Rust/Cargo + bash 的 runtime）。
 > 读完这一份，你就知道 LTO 是什么、怎么装给自己用、长任务里怎么用它不迷路。
 
 ## 一句话
 
 **LTO 是一个跨 runtime 的长任务 harness：它给你 state、artifact、runner、audit、sandbox、resume/recap 和 gate。你这个 host agent 仍然是 planner；LTO 让你的选择可恢复、可审计、可自动化推进。**
 
-它不复制 Claude Code 原生任务 harness 的实现——它是给**任意 runtime**用的版本，只依赖 Python + bash。
+它不复制 Claude Code 原生任务 harness 的实现——它是给**任意 runtime**用的版本。当前接管线是 Rust v2；Python 入口只作为兼容 fallback 保留。
 
 ## 术语表（读正文前先扫一遍）
 
@@ -66,19 +66,20 @@ publish 到 am 做跨项目长期记忆；**没装 am 时，`.lto/` 就是全部
 ## 怎么装给自己用
 
 ### 前提
-- Python 3.10+、bash。
-- 纯标准库，无第三方依赖（核心命令）。
+- Rust stable + Cargo、bash、git。
+- Python 3.10+ 仍用于兼容 fallback 和 legacy 自检。
 - 异构派工 runner：repo 自带 `scripts/delegate/`（runners/codex.sh、pi.sh、agy.sh、claude.sh + healthcheck.sh），`lto audit --auto-dispatch` 和 spawn agent 直接用它，无需外部 skill。前提是本机至少装好其中两家 CLI。
 - 可选：ANIMEM / memory-flow。没装也能完整使用 LTO 核心命令；它只增强跨项目 artifact memory。
 
 ### 找到入口
-LTO 的入口是一个 Python 脚本：
+LTO 的当前接管入口是 Rust CLI：
 ```
-<skill-root>/scripts/lto_run.py
+cargo run --manifest-path <skill-root>/Cargo.toml -- <子命令>
 ```
 `<skill-root>` 取决于你怎么装的 skill：
 - 软链装载（推荐）：`~/.agents/skills/long-task-orchestration/`（codex/agy 标准路径）或 `~/.claude/skills/long-task-orchestration/`（claude）。
-- 仓库内直接用：`<repo>/scripts/lto_run.py`。
+- 仓库内直接用：`cargo run -- <子命令>`。
+- 兼容 fallback：`python3 <repo>/scripts/lto_run.py <子命令>`。
 
 装载方式（在 agent-skills 仓库根）：
 ```bash
@@ -89,7 +90,9 @@ bash scripts/install.sh --check  # 只检查不装
 ### 在你这家 runtime 里怎么调
 LTO 是个 CLI，任何能跑 bash 的 runtime 都能调，不需要你内置什么 Agent 工具：
 ```bash
-python3 <skill-root>/scripts/lto_run.py --repo <目标仓库> <子命令> [参数]
+cargo run --manifest-path <skill-root>/Cargo.toml -- --repo <目标仓库> <子命令> [参数]
+# 或安装 wrapper 后显式走 Rust：
+lto --use-rust --repo <目标仓库> <子命令> [参数]
 ```
 `--repo` 指向你要做长任务的那个仓库（默认当前目录）。
 
@@ -254,6 +257,7 @@ hook 是 commit/deploy/closeout 前的边界闸门，提醒你"测过了吗 / �
 | workflow 调度先验 | `workflow-playbook.md` |
 | 外部观点 / 路径插件边界 | `plugin-boundary.md` |
 | 执行循环器（runner/judge/parallel/pipeline）细节 | `execution-loop.md` |
+| Rust 迁移 / 二进制 / release 打包 | `rust-migration-release.md` |
 | Codex CLI runner 控制面（`exec -C/-s/-o/stdin`） | `codex-cli-control.md` |
 | 在 codex/pi/agy 当宿主的专项坑 | `cross-runtime-host-notes.md` |
 | 审计收敛逻辑 | `audit-convergence.md` |

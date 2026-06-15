@@ -12,9 +12,11 @@
 
 | 层级 | 必需性 | 依赖 | 用途 | 没有时 |
 |---|---|---|---|---|
-| 核心 CLI | 必需 | Python 3.10+ | 运行 `scripts/lto_run.py` / 自检 | 不能运行脚本 |
+| Rust v2 CLI | 必需 | Rust stable + Cargo | 运行/验证 `lto-rs` 当前接管线 | 不能验证当前 Rust 路线 |
+| Python 兼容层 | 兼容期必需 | Python 3.10+ | 运行 `scripts/lto_run.py` fallback / legacy 自检 | 不能使用旧入口和部分兼容测试 |
 | 核心 CLI | 必需 | bash | installer、wrapper、runner shell | 不能安装 wrapper |
 | 核心 CLI | 必需 | git | HEAD 锚定、drift 检测、worktree 沙箱 | 多数长任务证据不完整 |
+| 操作系统 | 必需 | macOS / Linux | 当前 CI、release binary、内置 shell runner 支持面 | Windows 原生支持暂缓；可用 WSL/类 Unix shell 自行验证 |
 | 宿主 | 必需 | Codex / Claude Code / pi / agy / 其他能读 `SKILL.md` 并跑 shell 的 agent | 作为主 agent 推进任务 | LTO 只是文件和脚本，不能自己工作 |
 | 异构审计 | 内置 | `scripts/delegate/` | 标准化派 codex/claude/pi/agy 审计 | runtime 不可用时手动 `audit --collect` |
 | 异构审计 | 可选 | `tmux` | 内置 delegate 的可观测并行窗口 | 无 tmux 时用 headless 子进程 |
@@ -30,7 +32,7 @@ export AGENT_DELEGATE_TRIAD=/path/to/agent-delegate/scripts/triad.sh
 export AGENT_DELEGATE_RUNNERS=/path/to/agent-delegate/scripts/runners
 ```
 
-`bash scripts/install.sh --check` 只检查核心 CLI 和全局 `lto` wrapper 状态；
+`bash scripts/install.sh --check` 检查兼容层 CLI 和全局 `lto` wrapper 状态；
 可选 runtime 是否可派工，要在目标机器上跑 `lto preflight` 和
 `scripts/delegate/runners/healthcheck.sh` 取得实测结果。
 
@@ -54,10 +56,15 @@ SKILL.md + `references/` 子目录要一起放进去（主文件通过 `[[wikili
 ```bash
 bash scripts/install.sh          # 生成/刷新 ${LTO_BIN_DIR:-$HOME/.local/bin}/lto
 bash scripts/install.sh --check  # 只检查，不写文件
+cargo build --release --bin lto-rs
+lto --use-rust self-test         # 兼容期显式走 Rust v2
 ```
 
 这个脚本只安装 sentinel-managed `lto` 命令，不会自动把本仓软链到各
 runtime 的 skills 目录。skill 装载路径由你按上表复制或软链。
+
+当前 GitHub Releases 尚无可下载 Rust 二进制。二进制安装、checksum 校验和 release
+打包流程见 [`references/rust-migration-release.md`](./references/rust-migration-release.md)。
 
 ### 2. 验证加载
 

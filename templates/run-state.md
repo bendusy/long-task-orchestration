@@ -52,6 +52,14 @@ Status values: planned, running, returned, failed, superseded, abandoned.
 
 Keep this short and evidence-first. Update after every resume or phase gate.
 
+- architecture_alignment:
+- first_principles:
+- simplification_dedupe:
+- value_measurement:
+- documentation_alignment:
+- historical_cleanup:
+- clean_worktree:
+- rebuild_package:
 - code layer:
 - runtime layer:
 - persistence layer:

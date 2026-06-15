@@ -1,10 +1,14 @@
 use crate::audit_dispatch;
 use crate::budget;
-use crate::commands::{closeout, ops, recap, resume};
+use crate::commands::{closeout, ops, recap, resume, util};
 use crate::plugin;
-use crate::state::{self, LtoState};
+use crate::state::{self, LtoState, WorkspaceSnapshot};
 use anyhow::Context;
+use chrono::Utc;
 use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const COMMANDS: &[&str] = &[
@@ -47,7 +51,17 @@ pub struct Args {
 pub enum Commands {
     Start {
         #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
         goal: Option<String>,
+        #[arg(long)]
+        why: Option<String>,
+        #[arg(long = "done-when")]
+        done_when: Option<String>,
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        force: bool,
     },
     Check {
         #[arg(long)]
@@ -499,12 +513,24 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 }))?
             );
         }
-        Commands::Start { goal } => {
-            let state = LtoState {
-                goal: goal.unwrap_or_default(),
-                ..LtoState::default()
-            };
-            println!("{}", serde_json::to_string_pretty(&state)?);
+        Commands::Start {
+            run_id,
+            goal,
+            why,
+            done_when,
+            host,
+            force,
+        } => {
+            let run_dir = start_run(
+                &args.repo,
+                run_id,
+                goal.unwrap_or_default(),
+                why.unwrap_or_default(),
+                done_when.unwrap_or_default(),
+                host.unwrap_or_default(),
+                force,
+            )?;
+            println!("{}", run_dir.display());
         }
         Commands::Recap { run_id, artifacts } => {
             recap::cmd_recap(&args.repo, recap::RecapOptions { run_id, artifacts })?;
@@ -763,6 +789,128 @@ fn current_run_id(repo: &Path) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+fn start_run(
+    repo: &Path,
+    run_id: Option<String>,
+    goal: String,
+    why: String,
+    done_when: String,
+    host: String,
+    force: bool,
+) -> anyhow::Result<PathBuf> {
+    let run_id = run_id.unwrap_or_else(|| default_run_id(&goal));
+    state::validate_run_id(&run_id)?;
+    let run_dir = repo.join(".lto").join(&run_id);
+    if run_dir.exists() && !force {
+        anyhow::bail!(
+            "run already exists: {} (use --force to overwrite)",
+            run_dir.display()
+        );
+    }
+
+    fs::create_dir_all(&run_dir)?;
+    let git = util::git_status(repo);
+    let mut state = LtoState {
+        run_id: run_id.clone(),
+        goal: goal.clone(),
+        why,
+        done_when,
+        host_runtime: host,
+        workspace: WorkspaceSnapshot {
+            repo_root: repo.display().to_string(),
+            branch: git.branch,
+            head: git.head,
+            dirty_fingerprint: if git.dirty { "dirty" } else { "clean" }.to_string(),
+            ..WorkspaceSnapshot::default()
+        },
+        original_user_request: goal,
+        artifacts: json!({"manifest": format!(".lto/{run_id}/artifacts.json")}),
+        ..LtoState::default()
+    };
+    state.started_at = state::iso_now();
+
+    let state_path = run_dir.join("state.json");
+    state::save_state(&state_path, &state)?;
+
+    let run_state_path = run_dir.join("run-state.md");
+    let template_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("templates")
+        .join("run-state.md");
+    let template = fs::read_to_string(&template_path)
+        .with_context(|| format!("failed to read {}", template_path.display()))?;
+    fs::write(&run_state_path, template)?;
+    util::sync_run_state_md(&run_state_path, &state)?;
+
+    fs::create_dir_all(repo.join(".lto"))?;
+    fs::write(repo.join(".lto").join("current"), format!("{run_id}\n"))?;
+    util::register_artifact(
+        repo,
+        &run_id,
+        &state_path,
+        util::ArtifactMeta {
+            kind: "state_json",
+            producer: "lto-rs.start",
+            state: &state,
+            summary: "machine state",
+            tags: &["state"],
+        },
+    )?;
+    util::register_artifact(
+        repo,
+        &run_id,
+        &run_state_path,
+        util::ArtifactMeta {
+            kind: "run_state_md",
+            producer: "lto-rs.start",
+            state: &state,
+            summary: "human-readable run state",
+            tags: &["state"],
+        },
+    )?;
+    Ok(run_dir)
+}
+
+fn default_run_id(goal: &str) -> String {
+    let slug = slugify(goal);
+    let digest = format!("{:x}", Sha256::digest(goal.as_bytes()));
+    format!(
+        "{}-{}-{}",
+        Utc::now().format("%Y%m%d-%H%M%S"),
+        slug,
+        &digest[..8]
+    )
+}
+
+fn slugify(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.trim().to_ascii_lowercase().chars() {
+        let ch = if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+            ch
+        } else {
+            '-'
+        };
+        if ch == '-' {
+            if !last_dash && !out.is_empty() {
+                out.push(ch);
+            }
+            last_dash = true;
+        } else {
+            out.push(ch);
+            last_dash = false;
+        }
+        if out.len() >= 40 {
+            break;
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        "task".to_string()
+    } else {
+        out
+    }
+}
+
 fn assert_command_count() {
     let clap_count = Args::command()
         .get_subcommands()
@@ -792,6 +940,55 @@ mod tests {
         Args::try_parse_from(["lto-rs", "check", "--strict", "--to", "closed", "--json"]).unwrap();
         Args::try_parse_from(["lto-rs", "check", "--to", "implementation"]).unwrap();
         assert!(Args::try_parse_from(["lto-rs", "check", "--to", "deploy"]).is_err());
+    }
+
+    #[test]
+    fn start_accepts_python_migration_metadata() {
+        Args::try_parse_from([
+            "lto-rs",
+            "start",
+            "--run-id",
+            "rust-start",
+            "--goal",
+            "ship rust",
+            "--why",
+            "reduce python fallback risk",
+            "--done-when",
+            "release binaries exist",
+            "--host",
+            "codex",
+            "--force",
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn start_persists_run_state_and_current_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        crate::process::git(repo, ["init"]).unwrap();
+        let run_dir = start_run(
+            repo,
+            Some("r1".to_string()),
+            "ship rust".to_string(),
+            "reduce python fallback risk".to_string(),
+            "release binaries exist".to_string(),
+            "codex".to_string(),
+            false,
+        )
+        .unwrap();
+        assert!(run_dir.join("state.json").exists());
+        assert!(run_dir.join("run-state.md").exists());
+        assert!(run_dir.join("artifacts.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(repo.join(".lto").join("current")).unwrap(),
+            "r1\n"
+        );
+        let state = state::load_state(run_dir.join("state.json")).unwrap();
+        assert_eq!(state.goal, "ship rust");
+        assert_eq!(state.why, "reduce python fallback risk");
+        assert_eq!(state.done_when, "release binaries exist");
+        assert_eq!(state.host_runtime, "codex");
     }
 
     #[test]

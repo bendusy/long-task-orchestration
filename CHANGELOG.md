@@ -2,14 +2,20 @@
 
 ## Unreleased
 
-### Rust v2 core track — typed contracts without replacing Python yet
+### Development and closeout gates — architecture, docs, history, clean rebuild
 
-- **Summary**: Added the first Rust v2 workspace (`lto-rs`) from the staged 2026-06-15 specs. This is a verified core track, not a wrapper cutover: Python remains the source of truth until full parity passes.
+- **Summary**: Added explicit pre-implementation/optimization and pre-closeout/release evidence gates to LTO docs and templates. Host agents should align with architecture before coding, reason from first principles, check simplification/deduplication opportunities, require value measurement for tuning work, align documentation, clean stale history, return the worktree to a clean state, and rebuild/repackage from the final state.
+- **Artifacts**: `AGENTS.md`, `SKILL.md`, `references/workflow-playbook.md`, `references/run-state-workflow.md`, and `templates/run-state.md` now name the development evidence lines (`architecture_alignment`, `first_principles`, `simplification_dedupe`, `value_measurement`) and closeout evidence lines (`documentation_alignment`, `historical_cleanup`, `clean_worktree`, `rebuild_package`).
+- **Boundary**: This remains a host-agent judgment gate and evidence contract, not a new automatic router or mandatory ceremony.
+
+### Rust v2 core track — typed contracts and takeover path
+
+- **Summary**: Added the Rust v2 workspace (`lto-rs`) from the staged 2026-06-15 specs and aligned the public docs around Rust as the takeover path. The Python CLI remains as a compatibility fallback until the wrapper default is flipped after parity verification.
 - **Rust-native boundaries**: runner output is parsed into tagged enums (`pi` reply from `message_update/text_delta`, `codex` usage from `turn.completed`, `claude` result fallback); `Sandbox`/`ExitState`/`JobStatus`/`TaskSize` are typed; `state` uses `serde(flatten)` to preserve unknown Python keys; `RankedCandidate` has no execute method; `MergeReview` requires deterministic diff + test result and keeps `audit_opinion` optional.
 - **Reusable core modules**: shared `process` helpers centralize shell/git CLI execution so worktree and merge-review logic do not each maintain their own git wrappers. `scheduler` now exposes the reusable deterministic core for batch validation, exit classification, health re-probe, retry backoff, and attempt-to-result conversion before the runner I/O layer is cut over. Plugins remain data-only JSON/Markdown; Rust validates existing manifests instead of migrating plugin code.
 - **Heterogeneous review guard**: the decision reviewer gate now requires at least two valid non-empty reviewers from distinct runner families, so same-family aliases such as `codex`/`openai-gpt-5` cannot satisfy the heterogeneity contract.
 - **Coverage**: `cargo test` covers runner parsers, scheduler classifier/backoff/health gates, budget semantics, state compatibility, worktree sandbox redlines, dispatch three-cell scoring, decision 2-vote/needs-human semantics, judge isolation, plugin validation, and CLI command-count parity (24).
-- **CI**: added `.github/workflows/rust-v2.yml` for fmt/check/clippy/test on Linux/macOS/Windows and tag-time release binary builds. `unsafe_code = "forbid"` is set at the crate lint layer.
+- **CI**: added `.github/workflows/rust-v2.yml` for fmt/check/clippy/test on Linux/macOS and tag-time Linux/macOS release binary builds. Windows is deferred while the built-in runner protocol remains shell-script based. `unsafe_code = "forbid"` is set at the crate lint layer.
 
 ### Run-level budget contract — graded brake on autonomous over-run
 

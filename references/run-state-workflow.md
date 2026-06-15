@@ -1,7 +1,9 @@
 # LTO run-state workflow
 
-Use `scripts/lto_run.py` when a long task needs durable repo-local state instead
-of chat-memory coordination. The script is a thin dispatcher to `lto/commands/`.
+Legacy Python command reference. Use this when maintaining the compatibility
+fallback in `scripts/lto_run.py` or comparing old behavior. For the Rust v2
+takeover CLI, use `COMMANDS.md`, `src/cli.rs`, and
+`references/rust-migration-release.md`.
 
 ## Start
 
@@ -35,6 +37,25 @@ python3 scripts/lto_run.py start \
 `--why` / `--done-when` feed `recap`'s human-facing view. `--install-hooks` is
 opt-in (default off). `--with-audit` only creates `audit-ledger.md`; the actual
 adversarial audit + convergence runs via the `audit` command.
+
+Before entering implementation or optimization, record four evidence lines in
+`run-state.md` or task evidence:
+
+- `architecture_alignment`: layer, module boundary, and existing pattern being reused.
+- `first_principles`: real constraint, user value, or root cause that justifies the change.
+- `simplification_dedupe`: what was deleted, merged, reused, or why new abstraction is necessary.
+- `value_measurement`: baseline, metric, pass threshold, and post-change measurement command/result.
+
+Optimization without measurement is only a hypothesis; it is not closeout evidence.
+
+Before closeout, release, or long handoff, record four closure evidence lines:
+
+- `documentation_alignment`: docs checked/updated so they match the final architecture and command surface.
+- `historical_cleanup`: stale paths, legacy notes, obsolete runs, or compatibility leftovers removed, archived, or explicitly marked historical.
+- `clean_worktree`: clean `git status --short` before packaging, or a named human-approved residual dirt list.
+- `rebuild_package`: final rebuild/repackage command and result after the repo reached its final state.
+
+Packaging before the last edit is not release evidence; rebuild from the final state.
 
 Optional **budget caps** (all default unlimited → zero break for runs that omit
 them): `--max-turns N` / `--max-tokens N` / `--deadline ISO8601`. See the Budget
@@ -240,6 +261,11 @@ Default mode reports missing phase evidence but keeps rc 0 when the base
 `--json` prints one JSON object to stdout and suppresses text/WARN output so
 other host runtimes can parse it directly.
 
+The four development evidence lines and four closure evidence lines are host
+contracts today. Until both Python and Rust `check` paths enforce them, record
+them in run-state/task evidence and let `judge`/human review treat missing
+fields as closeout blockers.
+
 ## Closeout
 
 ```bash
@@ -264,7 +290,7 @@ These batch-run **shell commands** (not agent fan-out — same names as
 pi-dynamic-workflows but different semantics).
 
 ```bash
-L="python3 scripts/lto_run.py"
+L="cargo run --quiet --"
 
 # parallel: run many tasks' shell verify commands concurrently, record evidence
 $L parallel --phase implementation --concurrency 4 --command "pytest -x"

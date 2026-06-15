@@ -50,7 +50,7 @@ bash scripts/install.sh --check
 
 - wrapper 带 `# long-task-orchestration managed lto wrapper` sentinel；重装只覆盖托管文件。
 - 如果同名 `lto` 已存在但没有 sentinel，安装按冲突退出 2，不覆盖用户文件。
-- wrapper 内部指向当前 checkout 的 `scripts/lto_run.py`，仓库移动后重跑安装。
+- wrapper 内部同时记录当前 checkout 的 `target/release/lto-rs` 和 `scripts/lto_run.py`。兼容期默认可回退 Python；传 `--use-rust` 或 `LTO_USE_RUST=1` 显式走 Rust v2。仓库移动后重跑安装。
 - 如果 `$HOME/.local/bin` 不在 `PATH`，安装会 warning；可用 `LTO_BIN_DIR=/your/bin` 改落点。
 - wrapper 透传参数，跨 repo 可用 `lto --repo /path/to/repo check` 或 `lto check --repo /path/to/repo`。
 
@@ -171,8 +171,11 @@ bash scripts/delegate/triad.sh \
 若未安装 wrapper，用绝对路径替代：
 
 ```bash
-python3 <repo>/scripts/lto_run.py \
+cargo run --manifest-path <repo>/Cargo.toml -- \
   --repo . check
+
+# compatibility fallback:
+python3 <repo>/scripts/lto_run.py --repo . check
 ```
 
 **不要做的**：

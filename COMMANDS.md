@@ -6,7 +6,7 @@ Command count: 24.
 
 | Command | Summary | Required | Optional |
 |---|---|---|---|
-| `start` | Print a new Rust v2 state skeleton. | None | `--goal` |
+| `start` | Create a new Rust v2 run directory and current marker. | None | `--run-id`, `--goal`, `--why`, `--done-when`, `--host`, `--force` |
 | `check` | Read a run and report phase/goal, optionally as JSON. | None | `--run-id`, `--json` |
 | `closeout` | Gate closeout, update state/run-state, write handoff and changelog. | `--summary` | `--run-id`, `--next-action`, `--blocked-by`, `--allow-dirty`, `--no-changelog`, `--force` |
 | `resume` | Print an active-session capsule and detect HEAD drift. | None | `--run-id` |

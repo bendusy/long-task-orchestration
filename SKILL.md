@@ -63,6 +63,10 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
   ⚠️ 问你：可以开始写代码了吗？
   ↓
 [阶段4] 写代码
+  ├─ 开发前对齐架构设计: 当前改动放在哪一层、遵守哪些边界、复用哪些既有模式
+  ├─ 从第一性原理说明为什么要做: 真实约束/用户价值/故障根因是什么
+  ├─ 先做精简去重检查: 能删旧分支/合并重复逻辑/复用现有抽象就不要新增一套
+  ├─ 调优必须有价值和测评: 先写 baseline/指标/及格线, 改完复测并落证据
   ├─ 不同模块让不同 AI 同时写（不冲突）
   └─ 写完用同样方法审代码
   ↓
@@ -72,6 +76,10 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
   └─ 正式上线 → 你真的测过新功能能用吗？（不是说「服务没挂」）
   ↓
 [阶段6] 记下来
+  ├─ 文档对齐: SKILL/README/INSTALL/AGENTS/CLAUDE/references 不能和代码口径漂移
+  ├─ 历史清理: 旧入口、旧路径、过时 run/兼容说明要清理、归档或标历史
+  ├─ 仓库干净: closeout/打包前 git status clean, 或明确列出人工接受的剩余脏文件
+  ├─ 重新打包编译: 从最终状态重新 build/package, 记录命令和结果
   └─ 这次踩了什么坑、做了哪些决策、为什么这样选
   ↓
 下一个想法 → 回到阶段1
@@ -92,7 +100,9 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 **一键编排（推荐）**：LTO 扫高风险 task、写审计简报、给派工指令、收口判收敛。下面命令默认从仓库根目录运行；装过 `scripts/install.sh` 且 `lto` 在 `PATH` 后，可把 `$LTO` 换成 `lto`。LTO 只编排不自审（harness 不是被审/写码方），派工走自带的 `scripts/delegate/`（codex/pi/claude/agy runner），强制「审者 ≠ 你这个 host」：
 
 ```bash
-LTO="python3 scripts/lto_run.py"
+LTO="cargo run --quiet --"
+# 装过 install.sh 且已 cargo build --release --bin lto-rs 后，可用：
+# LTO="lto --use-rust"
 
 # 全自动（推荐）：扫高风险 task → 自动派异构三方 → 收口判收敛
 $LTO audit --auto-dispatch
@@ -133,7 +143,7 @@ python3 scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
 
 它会打出一行 `verdict:`——数量降到 0 是 CONVERGED（收敛了，可以收尾），还在降但没到 0 是 CONVERGING（继续修），数量反弹是 REBOUND、卡在原地不动（`--strict`）是 STALLED，这俩它会喊停，让你别自我感觉良好地往下冲。
 
-`lto_run.py check` 会顺手帮你跑这个：反弹/停滞默认只**提醒**（WARN），`--strict` 下才**拦住**（ERROR）——提醒不等于强制停，最终还是你拍板。但 `closeout` 不一样：只要 ledger 填了轮次且没降到 0（CONVERGING/REBOUND/STALLED），它会**直接拒绝收尾**（除非你 `--force` 明确越过）。也就是说——脚本算的 Round Summary 收敛才是收尾的硬条件，你手填的 Closure Gate 字段只是辅助记录，骗不过收敛闸门。
+`lto check` 会顺手帮你跑这个：反弹/停滞默认只**提醒**（WARN），`--strict` 下才**拦住**（ERROR）——提醒不等于强制停，最终还是你拍板。但 `closeout` 不一样：只要 ledger 填了轮次且没降到 0（CONVERGING/REBOUND/STALLED），它会**直接拒绝收尾**（除非你 `--force` 明确越过）。也就是说——脚本算的 Round Summary 收敛才是收尾的硬条件，你手填的 Closure Gate 字段只是辅助记录，骗不过收敛闸门。
 
 ## 部署上线（阶段5 怎么操作）
 
@@ -187,7 +197,7 @@ $LTO memory publish --run-id <run-id> --sink legacy-rest  # 兜底：memory-flow
 用一个文件记住当前状态：
 ```bash
 # 开始（--why/--done-when 记下为什么做、做完的标准，recap 会用到）
-LTO="python3 scripts/lto_run.py"
+LTO="cargo run --quiet --"
 
 $LTO start --goal "做用户登录" \
   --why "降低登录失败率" --done-when "失败率<5%，三端覆盖"
@@ -234,6 +244,16 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 > 不自动切阶段、不替人批准。`--strict` 才把缺失的 required evidence 变成非零退出；
 > `--json` 输出单个 JSON 对象给其他 host 接手读取。
 >
+> **进入开发/调优前的四证据**：host 应在 run-state / task evidence 里写清
+> architecture_alignment（架构设计与边界）、first_principles（约束/价值/根因）、
+> simplification_dedupe（精简去重或复用判断）、value_measurement（baseline、指标、
+> 及格线、复测命令）。没有测评的“调优”只算假设，不能当完成证据。
+>
+> **收尾前的四证据**：host 应在 closeout / release / handoff 前写清
+> documentation_alignment（文档已与代码和架构对齐）、historical_cleanup（旧入口、
+> 旧说明、旧 run/兼容残留如何处理）、clean_worktree（打包前仓库 clean 或剩余 dirt
+> 已命名并获准）、rebuild_package（最终状态重新编译/打包的命令和结果）。
+>
 > **autopilot 档位**：`--supervised`（出 brief，默认）、`--auto-exec`（worktree 沙箱跑 safe 子步骤）、`--decide`（escalate 时 opt-in 派三方异构 agent 收敛，决策权仍归你）、`--autonomous`（机械证据闸门 + 机械执行）均已实现。**autonomous 不 spawn 决策 agent、不替你反思**——它只做两件机械的事：读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够诚实退回 supervised），过闸后在 worktree 沙箱机械推进 safe 子步骤。escalate / dangerous / git push（含 `git -C . push` 等变体）/ 网络副作用一律停人类，反思永远归你。与 `--decide` 互斥（autonomous 不派决策 agent）。
 >
 > **budget 刹车**：若 `start` 设了 `--max-turns/--max-tokens/--deadline`，每次 autopilot 推进先过 budget gate——任一维度超 100% 即 fail-closed `NEEDS_CONFIRM`（turn 只数 autopilot 调用，人手动操作不计），解除靠 `lto budget extend` 或重 start。缺省无限 → 老 run 零影响。软警告（80%）只在 next/recap 事实层出现，不阻断。
@@ -260,13 +280,15 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 ## Resources
 
 **入口与文档**
-- `scripts/lto_run.py` — 24 命令薄入口（分发到 `lto/commands/`）
+- `src/main.rs` / `src/cli.rs` — Rust v2 当前接管入口（24 命令 CLI）
+- `scripts/lto_run.py` — Python 兼容 fallback（旧命令分发到 `lto/commands/`）
 - `scripts/write_decision.py` — ADR-first 决策落盘 helper（写 `docs/decisions/` + state + artifact manifest）
 - `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper
 - `references/onboarding.md` — **给 agent 读一份就懂怎么装载 LTO**（跨 runtime）
 - `references/workflow-playbook.md` — `review/debug/migration/claim-verify/research` 调度先验
 - `references/run-state-workflow.md` — 完整命令详细用法手册
 - `references/execution-loop.md` — runner/judge/parallel/pipeline + agent 执行层
+- `references/rust-migration-release.md` — Rust 接管 Python、二进制下载状态、release 打包流程
 - `references/hooks.md` — pre-commit/pre-deploy/pre-closeout 边界 hook（opt-in）
 - `references/sharing-guide.md` — 怎么装、怎么给朋友用、项目级注入
 - `references/cross-runtime-host-notes.md` — 不同 AI 工具当宿主的具体用法

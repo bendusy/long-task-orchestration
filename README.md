@@ -21,14 +21,16 @@
 
 ## 最小可跑路径
 
-照着这 5 步就能跑通一个完整长任务。`L` 是入口脚本的简写。
+照着这 5 步就能跑通一个完整长任务。`L` 是 CLI 入口的简写。
 
 > 先认两个词：**task** 是「要做什么」的定义，**runner** 是「执行它一次」的动作——一个 task 可以 run 多次（失败重试、换参数）。每次 run 的结果落进状态，后面 `next` / `audit` / `closeout` 都读这些结果。
 
 
 
 ```bash
-L="python3 scripts/lto_run.py"   # 装过 install.sh 后可直接用 L="lto"
+L="cargo run --quiet --"         # Rust v2 当前接管线
+# 装过 install.sh 且已 cargo build --release --bin lto-rs 后，也可用：
+# L="lto --use-rust"
 
 # ① 开工：记下目标、为什么做、做完的标准（recap 会用到）
 $L start --goal "重构登录模块" --why "线上空指针崩溃" --done-when "测试全绿+review过"
@@ -61,21 +63,25 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 完整技术条目见 [CHANGELOG.md](./CHANGELOG.md)。
 
-## Rust v2 轨道（施工中）
+## Rust v2 轨道（当前接管线）
 
-`lto-rs` 是按 2026-06-15 v2 spec 开始落地的 Rust 核心轨道。当前状态是：Rust workspace、24/24 命令真实现、runner event parser、state/budget、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin mount` data-only provenance、COMMANDS.md 和回归测试已建立；默认 wrapper 仍走 Python，Rust 通过 feature flag 渐进早鸟实跑。
+`lto-rs` 是按 2026-06-15 v2 spec 落地的 Rust 核心轨道，也是接下来接管旧 Python CLI 的主线。当前状态是：Rust workspace、24/24 命令真实现、runner event parser、state/budget、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin mount` data-only provenance、COMMANDS.md 和回归测试已建立。
+
+当前 Rust v2 支持面聚焦 macOS 和 Linux。Windows 二进制与 runner 派工支持先暂停：内置 delegate runtime 仍是 `scripts/delegate/runners/*.sh` + `healthcheck.sh` 的 shell 协议，先把 Rust 接管旧 Python 和核心代码清理做稳，再重新评估 Windows 原生 runner。
 
 ```bash
 cargo test
 cargo run -- self-test
 cargo run -- check --run-id <run-id> --json
 
-# 默认仍是 Python；显式开启 Rust 轨道
+# 全局 wrapper 在兼容期仍可回退 Python；显式开启 Rust 轨道
 LTO_USE_RUST=1 lto recap --run-id <run-id>
 lto --use-rust check --run-id <run-id> --json
 ```
 
-Rust 侧的原则是“黑盒行为对齐，内部 Rust-native”：外部兼容 `.lto/` 历史 state 和现有插件 JSON，内部用 enum/typed struct/trait/Result/serde flatten 固化不变量，不机械翻译 Python 模块边界。
+Rust 侧的原则是“黑盒行为对齐，内部 Rust-native”：外部兼容 `.lto/` 历史 state 和现有插件 JSON，内部用 enum/typed struct/trait/Result/serde flatten 固化不变量，不机械翻译 Python 模块边界。Python 入口保留为兼容 fallback；后续重点是缩小 wrapper 回退面、清理重复实现、再切默认入口。
+
+从 Python 切到 Rust、二进制下载状态和 release 打包流程见 [references/rust-migration-release.md](./references/rust-migration-release.md)。截至 2026-06-16，GitHub Releases 还没有可下载二进制；下一次 `v*` tag 成功后才会由 CI 上传 macOS/Linux 包。
 
 ## 什么时候**不**该用
 
@@ -101,5 +107,6 @@ LTO 是给**要来回折腾好几轮、你担心做过头或做着做着跑偏**
 | 控制论 harness：run logs / telemetry / 闭环 | [references/control-loop-harness.md](./references/control-loop-harness.md) |
 | 在 codex/pi/agy 当宿主的专项坑 | [references/cross-runtime-host-notes.md](./references/cross-runtime-host-notes.md) |
 | 插件真实世界 eval-run 设计 | [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md) |
+| Rust 迁移、二进制下载和 release 打包 | [references/rust-migration-release.md](./references/rust-migration-release.md) |
 | 本机 AI coding 隐私自检 | [references/privacy-self-check.md](./references/privacy-self-check.md) |
 | 装依赖 / 给朋友用 / 项目级注入 | [references/sharing-guide.md](./references/sharing-guide.md) |
