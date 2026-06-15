@@ -34,6 +34,11 @@ from lto.agent_job import (
     PermissionPolicy,
     RetryPolicy,
 )
+from lto.heartbeat import (
+    HEARTBEAT_INTERVAL_SEC,
+    format_heartbeat,
+    heartbeat_path,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +353,8 @@ class Scheduler:
                 timeout_total=timeout_total,
                 stall_timeout=self.stall_timeout,
                 live_log_path=live_log_path,
+                job_id=job.job_id,
+                runner=job.runner,
             )
             exec_elapsed = round(time.monotonic() - exec_start, 3)
 
@@ -461,11 +468,16 @@ def _run_popen(
     timeout_total: float,
     stall_timeout: float,
     live_log_path: Path | None,
+    job_id: str = "job",
+    runner: str = "?",
 ) -> tuple[int, str]:
     """用 Popen 执行命令，双线程 drain stdout/stderr，支持 stall 检测。
 
     返回 (exit_code, stderr_text)。
     - stdout tee 到 live_log_path（若不为 None）
+    - 心跳：即便 runner 无流式输出，也每 HEARTBEAT_INTERVAL_SEC 向旁车
+      <job_id>.hb.jsonl 写一行 {ts, job_id, runner, elapsed_sec, phase, alive}，
+      证明「还活着、跑了多久」（治 pi 那种闷死，P0-1 层 1）。
     - stall_timeout > 0 时：live log size 连续 stall_timeout 秒不增长 → SIGKILL，exit_code=124
     - timeout_total 超时 → SIGKILL，exit_code=124
     - start_new_session=True 确保超时时能 killpg 杀净孙进程
@@ -476,13 +488,45 @@ def _run_popen(
     proc: subprocess.Popen | None = None
     t_out = t_err = None
 
+    # --- 心跳线程（独立旁车，不污染二进制 stdout tee）---
+    hb_path = heartbeat_path(live_log_path)
+    hb_start = time.monotonic()
+    hb_stop = threading.Event()
+    t_hb = None
+
+    def _write_heartbeat(alive: bool) -> None:
+        if hb_path is None:
+            return
+        line = format_heartbeat(
+            ts=time.time(),
+            job_id=job_id,
+            runner=runner,
+            elapsed_sec=time.monotonic() - hb_start,
+            phase="running",
+            alive=alive,
+        )
+        try:
+            with open(hb_path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass  # 写心跳失败不影响主逻辑
+
+    def _heartbeat_loop() -> None:
+        # 立即写一条「已启动」心跳，之后每 interval 写一条，直到 stop 事件。
+        _write_heartbeat(alive=True)
+        while not hb_stop.wait(HEARTBEAT_INTERVAL_SEC):
+            _write_heartbeat(alive=True)
+
     def _drain_size() -> int:
         # 内存 buf 字节数判 stall：不依赖磁盘 flush/stat（B 修复——st_size 有 flush 延迟）
         return sum(len(c) for c in stdout_buf)
 
     def _finish(rc: int, stderr_override: str | None = None) -> tuple[int, str]:
-        # 统一收尾：先关管道让 read1 收到 EOF，drain 线程自然退出，再无超时 join，
+        # 统一收尾：先停心跳，再关管道让 read1 收到 EOF，drain 线程自然退出，再无超时 join，
         # 最后才 close log_fh —— 消灭"线程仍在写 / close 后 write"竞态（A 修复）。
+        hb_stop.set()
+        if t_hb is not None:
+            t_hb.join(timeout=2.0)
         for s in (proc.stdout, proc.stderr) if proc else ():
             try:
                 s.close()
@@ -526,6 +570,11 @@ def _run_popen(
         t_out.start()
         t_err.start()
 
+        # 心跳线程：仅当能写旁车（live log 已解析）时才起。
+        if hb_path is not None:
+            t_hb = threading.Thread(target=_heartbeat_loop, daemon=True)
+            t_hb.start()
+
         deadline = time.monotonic() + timeout_total
         prev_size = -1          # -1 避免首次 size=0 误报 stall
         stall_since: float | None = None
@@ -564,7 +613,8 @@ def _run_popen(
                     prev_size = cur_size  # 首次记下基线
 
     finally:
-        # Popen 后但线程未起时若抛异常 → 兜底杀进程 + 关 log（D/孤儿修复）
+        # Popen 后但线程未起时若抛异常 → 兜底停心跳 + 杀进程 + 关 log（D/孤儿修复）
+        hb_stop.set()
         if proc is not None and proc.poll() is None:
             _kill_proc_group(proc)
         if log_fh is not None and not log_fh.closed:

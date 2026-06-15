@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 from .. import state as st
 from ..cross_run_mining import _iter_runs
+from ..heartbeat import scan_live_heartbeats, format_watch_table
 
 
 def _summarize_run(repo: Path, run_id: str) -> dict:
@@ -46,7 +48,38 @@ def _summarize_run(repo: Path, run_id: str) -> dict:
     return summary
 
 
+def _render_watch(repo: Path, run_id: str | None) -> None:
+    """Render one snapshot of live-job heartbeats (P0-1 层 1 汇总入口)."""
+    rows = scan_live_heartbeats(repo, run_id, now=time.time())
+    print(f"# LTO live jobs ({len(rows)} with heartbeats) — {time.strftime('%H:%M:%S')}")
+    print(format_watch_table(rows))
+
+
+def _run_watch(args: argparse.Namespace) -> int:
+    """`lto runs --watch`: one-line summary of all running jobs' heartbeats.
+
+    host 一条命令看全所有在跑 job（runner / 已跑多久 / 最后心跳距今 / reply 就绪），
+    不必挨个 poll。--once 出单帧（脚本/测试友好）；否则按心跳间隔轮询刷新。
+    """
+    repo = args.repo.resolve()
+    run_id = getattr(args, "run_id", None)
+    if getattr(args, "once", False):
+        _render_watch(repo, run_id)
+        return 0
+
+    interval = max(1.0, float(getattr(args, "interval", 30.0) or 30.0))
+    try:
+        while True:
+            _render_watch(repo, run_id)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
+
+
 def run(args: argparse.Namespace) -> int:
+    if getattr(args, "watch", False):
+        return _run_watch(args)
+
     repo = args.repo.resolve()
     lto_root = repo / ".lto"
     if not lto_root.is_dir():
@@ -100,4 +133,20 @@ def add_parser(subparsers) -> None:
         help="list all LTO runs in this project (.lto/ is the local memory when am isn't installed)",
     )
     p.add_argument("--json", action="store_true")
+    p.add_argument(
+        "--watch", action="store_true",
+        help="summarize all running jobs' live heartbeats (runner / elapsed / last-hb / reply)",
+    )
+    p.add_argument(
+        "--once", action="store_true",
+        help="with --watch: render a single snapshot then exit (default: poll every --interval)",
+    )
+    p.add_argument(
+        "--interval", type=float, default=30.0,
+        help="with --watch: poll interval in seconds (default 30)",
+    )
+    p.add_argument(
+        "--run-id", dest="run_id", default=None,
+        help="with --watch: target run id (default: .lto/current)",
+    )
     p.set_defaults(func=run)
