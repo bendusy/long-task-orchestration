@@ -221,6 +221,10 @@ $LTO budget extend --max-tokens 2000000 # 抬上限（不能收紧到已用量�
 # 完成
 $LTO closeout --summary "做了什么，验证了什么"      # 默认写 CHANGELOG.md
 $LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 tracked dirt
+
+# 发布（bump VERSION + CHANGELOG 归版 + git tag；全是 .git 写 → host 跑，runner sandbox 写不了）
+$LTO release --part minor --date 2026-06-15 --dry-run  # 看计划不写
+$LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CHANGELOG + commit + tag
 ```
 
 > **resume vs recap**：resume 喂 AI（git head / task 状态，防 compact 后丢上下文）；
@@ -256,7 +260,7 @@ $LTO closeout --summary "行政收尾" --no-changelog  # 已提交后避免新 t
 ## Resources
 
 **入口与文档**
-- `scripts/lto_run.py` — 23 命令薄入口（分发到 `lto/commands/`）
+- `scripts/lto_run.py` — 24 命令薄入口（分发到 `lto/commands/`）
 - `scripts/write_decision.py` — ADR-first 决策落盘 helper（写 `docs/decisions/` + state + artifact manifest）
 - `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper
 - `references/onboarding.md` — **给 agent 读一份就懂怎么装载 LTO**（跨 runtime）

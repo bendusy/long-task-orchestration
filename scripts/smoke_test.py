@@ -135,6 +135,7 @@ def main() -> int:
         ("budget_gate",     [sys.executable, str(SCRIPTS_DIR / "test_budget_gate.py")],     False),
         ("budget_softwarn", [sys.executable, str(SCRIPTS_DIR / "test_budget_softwarn.py")], False),
         ("budget_cmd",      [sys.executable, str(SCRIPTS_DIR / "test_budget_cmd.py")],      False),
+        ("release",        [sys.executable, str(SCRIPTS_DIR / "test_release.py")],         False),
     ]
     for name, argv, needs_pp in module_tests:
         proc = subprocess.run(

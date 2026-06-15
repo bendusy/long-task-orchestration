@@ -25,7 +25,7 @@ sys.path.insert(0, str(_SCRIPT_DIR))
 
 from lto.commands import start, check, closeout, resume, preflight, runner, judge, hook, selftest, parallel, pipeline, audit
 from lto.commands import next as next_cmd
-from lto.commands import autopilot, recap, task_add, task_update, phase as phase_cmd, collect_agent_run, runs as runs_cmd, memory, plugin, budget as budget_cmd
+from lto.commands import autopilot, recap, task_add, task_update, phase as phase_cmd, collect_agent_run, runs as runs_cmd, memory, plugin, budget as budget_cmd, release as release_cmd
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     autopilot.add_parser(sub)
     recap.add_parser(sub)
     budget_cmd.add_parser(sub)
+    release_cmd.add_parser(sub)
     task_add.add_parser(sub)
     task_update.add_parser(sub)
     phase_cmd.add_parser(sub)
