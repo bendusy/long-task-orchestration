@@ -50,12 +50,17 @@ def main() -> int:
     agents = read("AGENTS.md")
     rust_release = read("references/rust-migration-release.md")
     oss_req = read("references/open-source-delivery-requirements.md")
+    release_workflow = read(".github/workflows/rust-v2.yml")
 
     check("references/open-source-delivery-requirements.md" in readme, "README links open-source delivery requirements", errors)
     check("GitHub Releases 还没有可下载二进制" in readme, "README does not claim current release binaries", errors)
     check("当前 GitHub Releases 尚无可下载 Rust 二进制" in install, "INSTALL does not claim current release binaries", errors)
     check("GitHub does not provide downloadable binaries" in rust_release, "release doc states no current binaries", errors)
     check("downloadable release binaries" in oss_req, "open-source requirements preserve release asset gate", errors)
+    check("Verify packaged binary" in release_workflow, "release workflow verifies packaged binary before upload", errors)
+    check("Verify uploaded release asset" in release_workflow, "release workflow verifies uploaded GitHub Release asset", errors)
+    check("gh release download" in release_workflow, "release workflow downloads uploaded assets for verification", errors)
+    check("lto-rs\" self-test" in release_workflow, "release workflow self-tests unpacked assets", errors)
 
     for rel, text in [
         ("README.md", readme),

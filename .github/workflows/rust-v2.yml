@@ -70,10 +70,32 @@ jobs:
           cp "target/${{ matrix.target }}/release/lto-rs" "$staging/lto-rs"
           chmod +x "$staging/lto-rs"
           tar -C "$staging" -czf "dist/${{ matrix.asset }}.tar.gz" lto-rs
-          shasum -a 256 "dist/${{ matrix.asset }}.tar.gz" > "dist/${{ matrix.asset }}.tar.gz.sha256"
+          (cd dist && shasum -a 256 "${{ matrix.asset }}.tar.gz" > "${{ matrix.asset }}.tar.gz.sha256")
+      - name: Verify packaged binary
+        shell: bash
+        run: |
+          shasum -a 256 -c "dist/${{ matrix.asset }}.tar.gz.sha256"
+          verify_dir="$(mktemp -d)"
+          tar -C "$verify_dir" -xzf "dist/${{ matrix.asset }}.tar.gz"
+          "$verify_dir/lto-rs" self-test
       - name: Upload GitHub Release asset
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/${{ matrix.asset }}.tar.gz
             dist/${{ matrix.asset }}.tar.gz.sha256
+      - name: Verify uploaded release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          verify_dir="$(mktemp -d)"
+          gh release download "$GITHUB_REF_NAME" \
+            --pattern "${{ matrix.asset }}.tar.gz" \
+            --pattern "${{ matrix.asset }}.tar.gz.sha256" \
+            --dir "$verify_dir"
+          (cd "$verify_dir" && shasum -a 256 -c "${{ matrix.asset }}.tar.gz.sha256")
+          unpack_dir="$verify_dir/unpack"
+          mkdir -p "$unpack_dir"
+          tar -C "$unpack_dir" -xzf "$verify_dir/${{ matrix.asset }}.tar.gz"
+          "$unpack_dir/lto-rs" self-test

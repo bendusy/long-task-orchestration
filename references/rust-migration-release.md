@@ -82,7 +82,8 @@ Release is a host-owned gate, not a runner side effect.
 4. Update `VERSION` and `CHANGELOG.md`, commit, and create a `v*` tag using the host-owned plan from `lto release`.
 5. Push the branch and tag.
 6. Confirm GitHub Actions `rust-v2` passes and `release-binaries` uploads the `.tar.gz` and `.sha256` assets.
-7. Download one asset, verify the checksum, unpack, and run `./lto-rs self-test` before announcing binaries.
+   The workflow must verify the packaged binary before upload and then download the uploaded GitHub Release asset, verify its checksum, unpack it, and run `lto-rs self-test`.
+7. Download one asset independently, verify the checksum, unpack, and run `./lto-rs self-test` before announcing binaries.
 
 ## Development Gate
 
