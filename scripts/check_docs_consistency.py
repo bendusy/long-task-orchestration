@@ -53,10 +53,12 @@ def main() -> int:
     release_workflow = read(".github/workflows/rust-v2.yml")
 
     check("references/open-source-delivery-requirements.md" in readme, "README links open-source delivery requirements", errors)
-    check("GitHub Releases 还没有可下载二进制" in readme, "README does not claim current release binaries", errors)
-    check("当前 GitHub Releases 尚无可下载 Rust 二进制" in install, "INSTALL does not claim current release binaries", errors)
-    check("GitHub does not provide downloadable binaries" in rust_release, "release doc states no current binaries", errors)
-    check("downloadable release binaries" in oss_req, "open-source requirements preserve release asset gate", errors)
+    check("二进制下载是 release-gated" in readme, "README gates binary downloads on release assets", errors)
+    check("Rust 二进制安装是 release-gated" in install, "INSTALL gates binary installs on release assets", errors)
+    check("Binary installation is release-gated" in rust_release, "release doc gates binary availability on live assets", errors)
+    check("Verify current GitHub Releases" in rust_release, "release doc requires live release verification", errors)
+    check("shasum -a 256 -c" in rust_release and "./lto-rs self-test" in rust_release, "release doc requires checksum and self-test", errors)
+    check("Treat binary availability as release-gated" in oss_req, "open-source requirements preserve release asset gate", errors)
     check("Verify packaged binary" in release_workflow, "release workflow verifies packaged binary before upload", errors)
     check("Verify uploaded release asset" in release_workflow, "release workflow verifies uploaded GitHub Release asset", errors)
     check("gh release download" in release_workflow, "release workflow downloads uploaded assets for verification", errors)
@@ -88,8 +90,8 @@ def main() -> int:
     forbidden_public_claims = [
         "Windows native support is supported",
         "Windows native release is supported",
-        "downloadable binaries are available",
-        "GitHub Releases provide downloadable binaries",
+        "downloadable binaries are available without verification",
+        "GitHub Releases provide downloadable binaries without verification",
     ]
     public_docs = [
         "README.md",

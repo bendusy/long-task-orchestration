@@ -63,8 +63,10 @@ lto --use-python self-test       # 显式 legacy fallback
 这个脚本只安装 sentinel-managed `lto` 命令，不会自动把本仓软链到各
 runtime 的 skills 目录。skill 装载路径由你按上表复制或软链。
 
-当前 GitHub Releases 尚无可下载 Rust 二进制。二进制安装、checksum 校验和 release
-打包流程见 [`references/rust-migration-release.md`](./references/rust-migration-release.md)。
+Rust 二进制安装是 release-gated：先查 GitHub Releases 是否已有对应平台的
+`.tar.gz` 和 `.sha256`，校验 checksum 并运行 `./lto-rs self-test` 后再使用。
+二进制安装、checksum 校验和 release 打包流程见
+[`references/rust-migration-release.md`](./references/rust-migration-release.md)。
 
 ### 2. 验证加载
 

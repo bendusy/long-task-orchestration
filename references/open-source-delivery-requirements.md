@@ -3,9 +3,10 @@
 > Status: requirements and development guidance. This is not an implementation
 > patch.
 >
-> Last release-asset check: 2026-06-16. GitHub tags exist for `v0.2.0` and
-> `v0.3.0`, but the GitHub Releases API returns an empty release list, so there
-> are no downloadable release binaries.
+> Last pre-release asset check: 2026-06-16. GitHub tags existed for `v0.2.0`
+> and `v0.3.0`, but the GitHub Releases API returned an empty release list.
+> Treat binary availability as release-gated and verify the current GitHub
+> Releases assets before telling users to download binaries.
 
 ## Verdict
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.4.0 — 2026-06-16
+
 ### Development and closeout gates — architecture, docs, history, clean rebuild
 
 - **Summary**: Added explicit pre-implementation/optimization and pre-closeout/release evidence gates to LTO docs and templates. Host agents should align with architecture before coding, reason from first principles, check simplification/deduplication opportunities, require value measurement for tuning work, align documentation, clean stale history, return the worktree to a clean state, and rebuild/repackage from the final state.

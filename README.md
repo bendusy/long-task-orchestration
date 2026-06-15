@@ -89,7 +89,7 @@ lto --use-python check --run-id <run-id> --json
 
 Rust 侧的原则是“黑盒行为对齐，内部 Rust-native”：外部兼容 `.lto/` 历史 state 和现有插件 JSON，内部用 enum/typed struct/trait/Result/serde flatten 固化不变量，不机械翻译 Python 模块边界。Python 入口保留为兼容 fallback；后续重点是缩小 wrapper 回退面、清理重复实现、再切默认入口。
 
-从 Python 切到 Rust、二进制下载状态和 release 打包流程见 [references/rust-migration-release.md](./references/rust-migration-release.md)。截至 2026-06-16，GitHub Releases 还没有可下载二进制；下一次 `v*` tag 成功后才会由 CI 上传 macOS/Linux 包。
+从 Python 切到 Rust、二进制下载状态和 release 打包流程见 [references/rust-migration-release.md](./references/rust-migration-release.md)。二进制下载是 release-gated：下载前先查 GitHub Releases 是否已有对应 `.tar.gz` 和 `.sha256`，校验 checksum 后再运行 `./lto-rs self-test`。
 
 ## 什么时候**不**该用
 

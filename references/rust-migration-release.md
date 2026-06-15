@@ -1,6 +1,7 @@
 # Rust Migration And Release
 
-> Last verified: 2026-06-16. Live checks found tags `v0.2.0` and `v0.3.0`, but GitHub Releases returned an empty list, so there are currently no downloadable release binaries.
+> Last verified: 2026-06-16. Binary installation is release-gated: verify the
+> current GitHub Releases assets before telling users to download binaries.
 
 ## Migration Path
 
@@ -35,14 +36,16 @@ Python remains a compatibility fallback during the transition. Do not delete Pyt
 
 ## Binary Availability
 
-As of 2026-06-16, GitHub does not provide downloadable binaries for this repository. Verify before telling users to download:
+Do not assume binaries exist from tags alone. Verify current GitHub Releases
+before telling users to download:
 
 ```bash
 curl -fsSL https://api.github.com/repos/bendusy/long-task-orchestration/releases
 git ls-remote --tags origin
 ```
 
-After the next `v*` release tag is pushed and the workflow succeeds, expected assets are:
+For the first Rust-default binary release (`v0.4.0`) and later, the expected
+assets are:
 
 - `lto-rs-x86_64-unknown-linux-musl.tar.gz`
 - `lto-rs-x86_64-unknown-linux-musl.tar.gz.sha256`
