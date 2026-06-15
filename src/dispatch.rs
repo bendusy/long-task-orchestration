@@ -183,6 +183,7 @@ mod tests {
             artifacts: vec![],
             attempts: 1,
             error: String::new(),
+            merge_review: None,
         }];
         let cells = build_cells_from_results(&results);
         let task = TaskDescriptor {
@@ -214,6 +215,7 @@ mod tests {
                 artifacts: vec![],
                 attempts: 1,
                 error: String::new(),
+                merge_review: None,
             })
             .collect::<Vec<_>>();
         assert!(should_escalate_same_cell(

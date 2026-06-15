@@ -1,6 +1,10 @@
 use crate::agent_job::{
-    AgentJob, AgentJobError, AgentResult, JobStatus, PermissionPolicy, RetryPolicy,
+    AgentJob, AgentJobError, AgentResult, JobStatus, PermissionPolicy, RetryPolicy, Sandbox,
+    TaskSize,
 };
+use crate::dispatch::TaskDescriptor;
+use crate::merge_review::{self, TestGateAction};
+use crate::worktree::{self, WorktreeHandle};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,6 +55,8 @@ pub enum SchedulerError {
     TooManyJobs { count: usize, limit: usize },
     #[error("duplicate job_id: {0}")]
     DuplicateJobId(String),
+    #[error("job dependency graph has a cycle or unsatisfied dependency")]
+    DependencyCycle,
     #[error("job {job_id:?} invalid: {source}")]
     InvalidJob {
         job_id: String,
@@ -115,33 +121,20 @@ impl Scheduler {
 
     pub async fn submit(&self, jobs: Vec<AgentJob>) -> Result<Vec<AgentResult>, SchedulerError> {
         validate_batch(&jobs, &self.config)?;
+        let plan = DependencyPlan::new(&jobs)?;
         let runners = unique_runners(&jobs);
         let health = self.healthcheck(&runners).await;
         let scheduler = Arc::new(self.clone());
         let permits = Arc::new(Semaphore::new(self.config.max_concurrency.max(1)));
         let mut results = vec![None; jobs.len()];
-        let mut set = JoinSet::new();
 
-        for (idx, job) in jobs.into_iter().enumerate() {
-            if !health.get(&job.runner).copied().unwrap_or(false) {
-                results[idx] = Some(skipped_for_unhealthy(&job));
-                continue;
+        if plan.has_edges() {
+            run_dependency_plan(scheduler, permits, jobs, &health, &plan, &mut results).await?;
+        } else {
+            let ready = jobs.into_iter().enumerate().collect::<Vec<_>>();
+            for (idx, result) in run_parallel_jobs(scheduler, permits, ready, &health).await? {
+                results[idx] = Some(result);
             }
-            let scheduler = Arc::clone(&scheduler);
-            let permits = Arc::clone(&permits);
-            set.spawn(async move {
-                let _permit = permits
-                    .acquire_owned()
-                    .await
-                    .expect("scheduler semaphore closed unexpectedly");
-                let result = scheduler.run_job(job).await;
-                (idx, result)
-            });
-        }
-
-        while let Some(joined) = set.join_next().await {
-            let (idx, result) = joined.map_err(|err| SchedulerError::Join(err.to_string()))?;
-            results[idx] = Some(result);
         }
 
         Ok(results
@@ -271,6 +264,27 @@ impl Scheduler {
             Ok(prompt) => prompt,
             Err(err) => return failure_result(job, attempt, None, err),
         };
+        let effective_job = with_effective_dimensions(job, &prompt.path).await;
+        let job = &effective_job;
+        let write_worktree = if job_needs_worktree(job) {
+            match worktree::add_persistent_worktree(&self.repo, run_id, &job.job_id) {
+                Ok(handle) => Some(handle),
+                Err(err) => {
+                    return failure_result(
+                        job,
+                        attempt,
+                        None,
+                        format!("persistent worktree: {err}"),
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        let command_dir = write_worktree
+            .as_ref()
+            .map(|handle| handle.path.as_path())
+            .unwrap_or(self.repo.as_path());
         let reply_path = attempt_dir.path().join("reply.txt");
         let timeout_arg = job.budget.timeout_sec.to_string();
 
@@ -294,7 +308,7 @@ impl Scheduler {
             .arg(prompt.path.as_os_str())
             .arg(reply_path.as_os_str())
             .arg(timeout_arg)
-            .current_dir(&self.repo)
+            .current_dir(command_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -371,8 +385,204 @@ impl Scheduler {
             .cost
             .insert("stdout_bytes".to_string(), json!(stdout_text.len()));
         result.permissions = permission_snapshot(&job.permission_policy);
+        if let Some(handle) = write_worktree {
+            result = self.finalize_write_task(job, result, handle);
+        }
         result
     }
+
+    fn finalize_write_task(
+        &self,
+        job: &AgentJob,
+        mut result: AgentResult,
+        mut handle: WorktreeHandle,
+    ) -> AgentResult {
+        if result.status != JobStatus::Ok {
+            let _ = worktree::prune_worktree(&self.repo, &handle);
+            return result;
+        }
+
+        let diff = match merge_review::emit_diff(&handle, job.test_cmd.as_deref()) {
+            Ok(diff) => diff,
+            Err(err) => {
+                let _ = worktree::prune_worktree(&self.repo, &handle);
+                result.status = JobStatus::Failed;
+                result.error = format!("emit diff: {err}");
+                return result;
+            }
+        };
+        if diff.diff.trim().is_empty() {
+            let _ = worktree::prune_worktree(&self.repo, &handle);
+            result.status = JobStatus::Failed;
+            result.error = "write task produced no worktree changes".to_string();
+            return result;
+        }
+
+        let gate = merge_review::test_gate_action(&diff);
+        let review = merge_review::build_merge_review(diff);
+        handle.keep = true;
+        result
+            .artifacts
+            .push(format!("worktree:{}", handle.path.display()));
+        result.merge_review = Some(review);
+        result.cost.insert(
+            "test_gate_action".to_string(),
+            json!(match gate {
+                TestGateAction::Batchable => "batchable",
+                TestGateAction::ImmediateReport => "immediate_report",
+            }),
+        );
+        if gate == TestGateAction::ImmediateReport {
+            result.status = JobStatus::Failed;
+            result.error =
+                "test gate failed; merge review requires immediate host attention".to_string();
+        }
+        result
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DependencyPlan {
+    parents_by_idx: Vec<BTreeSet<usize>>,
+}
+
+impl DependencyPlan {
+    fn new(jobs: &[AgentJob]) -> Result<Self, SchedulerError> {
+        let index = jobs
+            .iter()
+            .enumerate()
+            .map(|(idx, job)| (job.job_id.clone(), idx))
+            .collect::<BTreeMap<_, _>>();
+        let mut parents_by_idx = vec![BTreeSet::new(); jobs.len()];
+        for (parent_idx, parent) in jobs.iter().enumerate() {
+            for child in &parent.children {
+                let Some(child_idx) = index.get(child).copied() else {
+                    continue;
+                };
+                parents_by_idx[child_idx].insert(parent_idx);
+            }
+        }
+        Ok(Self { parents_by_idx })
+    }
+
+    fn has_edges(&self) -> bool {
+        self.parents_by_idx
+            .iter()
+            .any(|parents| !parents.is_empty())
+    }
+}
+
+async fn run_dependency_plan(
+    scheduler: Arc<Scheduler>,
+    permits: Arc<Semaphore>,
+    jobs: Vec<AgentJob>,
+    health: &HealthProbe,
+    plan: &DependencyPlan,
+    results: &mut [Option<AgentResult>],
+) -> Result<(), SchedulerError> {
+    let mut remaining = (0..jobs.len()).collect::<BTreeSet<_>>();
+    while !remaining.is_empty() {
+        let blocked = dependency_blocked_jobs(&remaining, results, plan);
+        for (idx, reason) in blocked {
+            results[idx] = Some(skipped_for_dependency(&jobs[idx], reason));
+            remaining.remove(&idx);
+        }
+
+        let ready = remaining
+            .iter()
+            .copied()
+            .filter(|idx| dependencies_satisfied(&plan.parents_by_idx[*idx], results))
+            .map(|idx| (idx, jobs[idx].clone()))
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            if remaining.is_empty() {
+                break;
+            }
+            return Err(SchedulerError::DependencyCycle);
+        }
+        for (idx, result) in
+            run_parallel_jobs(Arc::clone(&scheduler), Arc::clone(&permits), ready, health).await?
+        {
+            results[idx] = Some(result);
+            remaining.remove(&idx);
+        }
+    }
+    Ok(())
+}
+
+async fn run_parallel_jobs(
+    scheduler: Arc<Scheduler>,
+    permits: Arc<Semaphore>,
+    jobs: Vec<(usize, AgentJob)>,
+    health: &HealthProbe,
+) -> Result<Vec<(usize, AgentResult)>, SchedulerError> {
+    let mut out = Vec::with_capacity(jobs.len());
+    let mut set = JoinSet::new();
+    for (idx, job) in jobs {
+        if !health.get(&job.runner).copied().unwrap_or(false) {
+            out.push((idx, skipped_for_unhealthy(&job)));
+            continue;
+        }
+        let scheduler = Arc::clone(&scheduler);
+        let permits = Arc::clone(&permits);
+        set.spawn(async move {
+            let _permit = permits
+                .acquire_owned()
+                .await
+                .expect("scheduler semaphore closed unexpectedly");
+            let result = scheduler.run_job(job).await;
+            (idx, result)
+        });
+    }
+    while let Some(joined) = set.join_next().await {
+        out.push(joined.map_err(|err| SchedulerError::Join(err.to_string()))?);
+    }
+    Ok(out)
+}
+
+fn dependency_blocked_jobs(
+    remaining: &BTreeSet<usize>,
+    results: &[Option<AgentResult>],
+    plan: &DependencyPlan,
+) -> Vec<(usize, String)> {
+    let mut blocked = Vec::new();
+    for idx in remaining {
+        for parent_idx in &plan.parents_by_idx[*idx] {
+            let Some(parent) = results[*parent_idx].as_ref() else {
+                continue;
+            };
+            if parent.status != JobStatus::Ok {
+                blocked.push((
+                    *idx,
+                    format!(
+                        "dependency {} did not complete successfully ({:?})",
+                        parent.job_id, parent.status
+                    ),
+                ));
+                break;
+            }
+            if parent.merge_review.is_some() {
+                blocked.push((
+                    *idx,
+                    format!(
+                        "dependency {} produced a merge review; host must merge it before this job opens",
+                        parent.job_id
+                    ),
+                ));
+                break;
+            }
+        }
+    }
+    blocked
+}
+
+fn dependencies_satisfied(parents: &BTreeSet<usize>, results: &[Option<AgentResult>]) -> bool {
+    parents.iter().all(|idx| {
+        matches!(
+            results.get(*idx).and_then(Option::as_ref),
+            Some(result) if result.status == JobStatus::Ok && result.merge_review.is_none()
+        )
+    })
 }
 
 pub fn validate_batch(jobs: &[AgentJob], config: &SchedulerConfig) -> Result<(), SchedulerError> {
@@ -485,6 +695,7 @@ pub fn result_from_attempt(
         error: classified.error,
         task_type: job.task_type.clone(),
         size: job.size,
+        merge_review: None,
     }
 }
 
@@ -504,6 +715,7 @@ pub fn skipped_for_unhealthy(job: &AgentJob) -> AgentResult {
         error: format!("runner unhealthy: {}", job.runner),
         task_type: job.task_type.clone(),
         size: job.size,
+        merge_review: None,
     }
 }
 
@@ -619,6 +831,39 @@ async fn materialize_prompt(
     Ok(MaterializedPrompt { path })
 }
 
+async fn with_effective_dimensions(job: &AgentJob, prompt_path: &Path) -> AgentJob {
+    if job.size != TaskSize::Unknown {
+        return job.clone();
+    }
+    let prompt_tokens = estimate_prompt_tokens(prompt_path).await;
+    let expected_output_tokens = job.budget.max_tokens.unwrap_or_default();
+    let task_type = job.task_type.as_deref().unwrap_or("unknown");
+    let descriptor = TaskDescriptor::from_tokens(task_type, prompt_tokens, expected_output_tokens);
+    let mut effective = job.clone();
+    effective.size = descriptor.size;
+    effective
+}
+
+async fn estimate_prompt_tokens(path: &Path) -> u64 {
+    let Ok(text) = fs::read_to_string(path).await else {
+        return 0;
+    };
+    ((text.chars().count() as u64).saturating_add(3)) / 4
+}
+
+fn job_needs_worktree(job: &AgentJob) -> bool {
+    job.needs_worktree
+        || job.isolation == "worktree"
+        || (job.permission_policy.sandbox == Sandbox::WorkspaceWrite && is_write_task_type(job))
+}
+
+fn is_write_task_type(job: &AgentJob) -> bool {
+    matches!(
+        job.task_type.as_deref(),
+        Some("write" | "implementation" | "feature" | "migration" | "refactor")
+    )
+}
+
 fn runner_env(job: &AgentJob) -> BTreeMap<String, String> {
     let mut env = job.env.clone();
     env.insert(
@@ -660,6 +905,7 @@ fn failure_result(
         error: error.into(),
         task_type: job.task_type.clone(),
         size: job.size,
+        merge_review: None,
     }
 }
 
@@ -675,6 +921,26 @@ fn timeout_result(
         reply_text,
         error: error.into(),
         ..failure_result(job, attempts, Some(124), "")
+    }
+}
+
+fn skipped_for_dependency(job: &AgentJob, reason: String) -> AgentResult {
+    AgentResult {
+        job_id: job.job_id.clone(),
+        runner: job.runner.clone(),
+        model: job.model.clone(),
+        status: JobStatus::Skipped,
+        exit_code: None,
+        findings: vec![],
+        reply_text: String::new(),
+        cost: BTreeMap::new(),
+        permissions: permission_snapshot(&job.permission_policy),
+        artifacts: vec![],
+        attempts: 0,
+        error: reason,
+        task_type: job.task_type.clone(),
+        size: job.size,
+        merge_review: None,
     }
 }
 
@@ -822,6 +1088,7 @@ fn millis_u64(duration: Duration) -> u64 {
 mod tests {
     use super::*;
     use crate::agent_job::{Budget, Pattern, Sandbox, TaskSize};
+    use crate::process;
     use std::fs as std_fs;
     use std::io::Write;
     use std::time::Instant;
@@ -923,6 +1190,8 @@ mod tests {
             children: vec![],
             task_type: Some("audit".to_string()),
             size: TaskSize::Small,
+            test_cmd: None,
+            needs_worktree: false,
             meta: BTreeMap::new(),
         }
     }
@@ -947,6 +1216,13 @@ time.sleep(float(behaviour.get("sleep", 0)))
 output = str(behaviour.get("output", ""))
 if "output_env" in behaviour:
     output = json.dumps({k: os.environ.get(k) for k in behaviour["output_env"]}, sort_keys=True)
+if "write_file" in behaviour:
+    target = behaviour["write_file"]
+    parent = os.path.dirname(target)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(target, "w") as f:
+        f.write(str(behaviour.get("write_content", "")))
 with open(reply_file, "w") as f:
     f.write(output)
 sys.exit(int(behaviour.get("exit_code", 0)))
@@ -1026,6 +1302,39 @@ print(json.dumps(data))
 
     #[cfg(not(unix))]
     fn make_executable(_path: &Path) {}
+
+    fn init_git_repo(path: &Path) {
+        process::git(path, ["init", "-q"]).unwrap();
+        process::git(path, ["config", "user.name", "T"]).unwrap();
+        process::git(path, ["config", "user.email", "t@example.com"]).unwrap();
+        std_fs::write(path.join("base.txt"), "base\n").unwrap();
+        process::git(path, ["add", "."]).unwrap();
+        process::git(path, ["commit", "-q", "-m", "init"]).unwrap();
+    }
+
+    fn write_job(harness: &Harness, id: &str) -> AgentJob {
+        let mut job = harness.job(id);
+        job.permission_policy = PermissionPolicy {
+            sandbox: Sandbox::WorkspaceWrite,
+            reason: "implementation write task".to_string(),
+            user_approved: true,
+            tools: Vec::new(),
+        };
+        job.task_type = Some("write".to_string());
+        job.size = TaskSize::Unknown;
+        job.needs_worktree = true;
+        job.test_cmd = Some("true".to_string());
+        job
+    }
+
+    fn worktree_path(result: &AgentResult) -> PathBuf {
+        let entry = result
+            .artifacts
+            .iter()
+            .find_map(|artifact| artifact.strip_prefix("worktree:"))
+            .expect("worktree artifact present");
+        PathBuf::from(entry)
+    }
 
     #[test]
     fn classify_exit_keeps_429_in_successful_reply_as_content() {
@@ -1424,6 +1733,113 @@ print(json.dumps(data))
                 .join(".lto/rust-scheduler/live/stall.hb.jsonl")
                 .exists()
         );
+    }
+
+    #[tokio::test]
+    async fn write_task_emits_merge_review_and_keeps_worktree_without_merging() {
+        let harness = Harness::new();
+        init_git_repo(&harness.repo);
+        harness.set_control(json!({
+            "write_ok": {
+                "exit_code": 0,
+                "output": "implemented",
+                "write_file": "feature.txt",
+                "write_content": "new feature\n"
+            }
+        }));
+        let mut job = write_job(&harness, "write_ok");
+        job.needs_worktree = false;
+        let result = harness.scheduler().submit(vec![job]).await.unwrap();
+
+        let result = &result[0];
+        assert_eq!(result.status, JobStatus::Ok);
+        assert_eq!(result.size, TaskSize::Small);
+        assert_eq!(result.cost["test_gate_action"], "batchable");
+        let review = result.merge_review.as_ref().expect("merge review");
+        assert!(review.diff.diff.contains("feature.txt"));
+        assert!(matches!(
+            review.diff.test_result.status,
+            merge_review::TestStatus::Passed
+        ));
+        let wt = worktree_path(result);
+        assert_eq!(
+            std_fs::read_to_string(wt.join("feature.txt")).unwrap(),
+            "new feature\n"
+        );
+        assert!(!harness.repo.join("feature.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn write_task_with_no_artifact_fails_closed() {
+        let harness = Harness::new();
+        init_git_repo(&harness.repo);
+        harness.set_control(json!({
+            "noop_write": {"exit_code": 0, "output": "done without write"}
+        }));
+        let mut job = write_job(&harness, "noop_write");
+        job.permission_policy = PermissionPolicy::default();
+
+        let result = harness.scheduler().submit(vec![job]).await.unwrap();
+
+        assert_eq!(result[0].status, JobStatus::Failed);
+        assert!(result[0].error.contains("no worktree changes"));
+        assert!(result[0].merge_review.is_none());
+    }
+
+    #[tokio::test]
+    async fn failing_test_gate_returns_merge_review_for_immediate_report() {
+        let harness = Harness::new();
+        init_git_repo(&harness.repo);
+        harness.set_control(json!({
+            "write_bad_tests": {
+                "exit_code": 0,
+                "output": "implemented",
+                "write_file": "broken.txt",
+                "write_content": "broken\n"
+            }
+        }));
+        let mut job = write_job(&harness, "write_bad_tests");
+        job.test_cmd = Some("false".to_string());
+
+        let result = harness.scheduler().submit(vec![job]).await.unwrap();
+
+        assert_eq!(result[0].status, JobStatus::Failed);
+        assert_eq!(result[0].cost["test_gate_action"], "immediate_report");
+        assert!(result[0].merge_review.is_some());
+        assert!(worktree_path(&result[0]).join("broken.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn dependency_child_waits_for_host_merge_but_independent_job_runs() {
+        let harness = Harness::new();
+        init_git_repo(&harness.repo);
+        harness.set_control(json!({
+            "dep_parent": {
+                "exit_code": 0,
+                "output": "parent done",
+                "write_file": "parent.txt",
+                "write_content": "parent\n"
+            },
+            "dep_child": {"exit_code": 0, "output": "child should not run"},
+            "dep_independent": {"exit_code": 0, "output": "independent done"}
+        }));
+        let mut parent = write_job(&harness, "dep_parent");
+        parent.children = vec!["dep_child".to_string()];
+        let child = write_job(&harness, "dep_child");
+        let independent = harness.job("dep_independent");
+
+        let results = harness
+            .scheduler()
+            .submit(vec![parent, child, independent])
+            .await
+            .unwrap();
+
+        assert_eq!(results[0].status, JobStatus::Ok);
+        assert!(results[0].merge_review.is_some());
+        assert_eq!(results[1].status, JobStatus::Skipped);
+        assert!(results[1].error.contains("host must merge"));
+        assert_eq!(results[2].status, JobStatus::Ok);
+        assert_eq!(results[2].reply_text, "independent done");
     }
 
     #[test]

@@ -624,6 +624,7 @@ mod tests {
             artifacts: vec![],
             attempts: 1,
             error: String::new(),
+            merge_review: None,
         };
         assert!(!has_minimum_valid_reviewers(&[
             result("codex"),
@@ -660,6 +661,7 @@ mod tests {
             artifacts: vec![],
             attempts: 1,
             error: String::new(),
+            merge_review: None,
         }
     }
 }

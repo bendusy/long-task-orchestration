@@ -4,6 +4,8 @@ use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
+use crate::merge_review::MergeReview;
+
 pub const KNOWN_RUNNERS: &[&str] = &["codex", "pi", "agy", "gemini", "claude"];
 pub const CODEX_SANDBOXES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 
@@ -357,6 +359,10 @@ pub struct AgentJob {
     #[serde(default)]
     pub size: TaskSize,
     #[serde(default)]
+    pub test_cmd: Option<String>,
+    #[serde(default)]
+    pub needs_worktree: bool,
+    #[serde(default)]
     pub meta: BTreeMap<String, serde_json::Value>,
 }
 
@@ -412,6 +418,8 @@ pub struct AgentResult {
     pub task_type: Option<String>,
     #[serde(default)]
     pub size: TaskSize,
+    #[serde(default)]
+    pub merge_review: Option<MergeReview>,
 }
 
 fn default_status() -> JobStatus {

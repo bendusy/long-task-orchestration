@@ -1,3 +1,4 @@
+use crate::agent_job::AgentResult;
 use crate::budget::RunBudget;
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -154,6 +155,28 @@ pub fn validate_run_id(run_id: &str) -> anyhow::Result<&str> {
     Ok(run_id)
 }
 
+pub fn agent_results_from_agent_runs(agent_runs: &Value) -> Vec<AgentResult> {
+    let mut results = Vec::new();
+    match agent_runs {
+        Value::Object(by_job) => {
+            for runs in by_job.values() {
+                if let Value::Array(entries) = runs {
+                    results.extend(entries.iter().filter_map(parse_agent_result));
+                }
+            }
+        }
+        Value::Array(entries) => {
+            results.extend(entries.iter().filter_map(parse_agent_result));
+        }
+        _ => {}
+    }
+    results
+}
+
+fn parse_agent_result(value: &Value) -> Option<AgentResult> {
+    serde_json::from_value(value.clone()).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +201,25 @@ mod tests {
         assert!(validate_run_id("ok-123").is_ok());
         assert!(validate_run_id("../x").is_err());
         assert!(validate_run_id("a/b").is_err());
+    }
+
+    #[test]
+    fn old_agent_runs_without_dimensions_load_as_unknown() {
+        let raw = serde_json::json!({
+            "j1": [{
+                "job_id": "j1",
+                "runner": "codex",
+                "status": "ok",
+                "reply_text": "done"
+            }]
+        });
+        let results = agent_results_from_agent_runs(&raw);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].task_type, None);
+        assert_eq!(results[0].size, crate::agent_job::TaskSize::Unknown);
+        let cells = crate::dispatch::build_cells_from_results(&results);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].task_type, "unknown");
+        assert_eq!(cells[0].size, crate::agent_job::TaskSize::Unknown);
     }
 }
