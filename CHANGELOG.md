@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v0.4.1 — 2026-06-16
+
+### Open-source delivery gate hardening
+
+- Strengthened the open-source delivery requirements with a maintainer review
+  frame, repository cleanup requirements, a development-requirements design
+  gate, and a push-candidate freeze gate. The release bar now explicitly
+  requires coherent Rust/Python/platform/plugin/release stories, classified
+  cleanup decisions, and current CI/release/asset evidence before publish.
+
 ### Release workflow hardening
 
 - Fixed the tag-time release binary workflow before announcing downloadable
