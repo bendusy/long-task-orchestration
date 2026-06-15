@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Run-level budget contract — graded brake on autonomous over-run
+
+- **Why**: distilled from elvis (@omarsar0)'s *Autonomous Long-Running Coding Agents* — a strong goal is a contract that includes *the number of turns and budget*. LTO had `why`/`done_when` (human-recap free text) but no run-level turn/token/deadline cap; `--timeout` was per-dispatch only. This closes the contract gap without touching the "host is planner" core.
+- **Data model**: new optional `state.budget` block (`max_turns` / `max_tokens` / `hard_deadline`, all default `None` = unlimited → zero break for old runs). `turns_used` is a monotonic counter incremented **only** by autopilot auto-advance (human manual ops never count). `warn_ratio` defaults 0.8.
+- **Pure measurement** (`scripts/lto/budget.py`): `check_budget(state, token_total, now_iso)` — no file/time I/O (token total + now injected by caller, like `next`). Per-dimension `ok|warn|exceeded`; overall = strictest. tz-naive normalization so a tz-aware `iso_now()` and a naive `--deadline` don't crash on compare.
+- **Graded enforcement**: soft warning at `warn_ratio` surfaces in `next`/`recap` as a fact line (zero block); hard brake at 100% in autopilot emits `NEEDS_CONFIRM` + zero auto-advance (fail-closed), `turns_used += 1` happens *before* the check so the touching turn is caught. Unlocked only by explicit `lto budget extend` or re-start.
+- **New `lto budget check / extend`**: check reports per-dimension usage; extend raises caps (human action) and **cannot shrink below already-used** (anti self-lock). Command count 22 → 23; core module count 26 → 27.
+- **Verified**: `test_budget.py` (18) / `test_budget_gate.py` (11 asserts) / `test_budget_softwarn.py` (4) / `test_budget_cmd.py` (5) all green; regression green on `lto_run self-test`, `smoke_test`, `test_autonomous_gate`, `test_next`, `test_orchestration_cmds`; CLI end-to-end (start --max-tokens → check → extend → check) verified.
+
 ### dev-workflow plugin — the full idea-to-release development chain
 
 - **Enterprise audit gate**: dev-workflow `0.2.1` adds `enterprise-audit-gate-v1`, a data-only layered audit prior for high-risk work: requirements → architecture → data model → interface contract → implementation → testing → operations/observability → security → migration/rollback → acceptance. It includes `enterprise-layer-auditor-v1`, a read-only cross-family profile, redline vocabulary, a strict enterprise output schema that requires `layer` / `redline`, and an eval case that checks the path/prompt coverage contract. This deliberately stays a plugin/playbook asset, not a new core command or mandatory committee.
