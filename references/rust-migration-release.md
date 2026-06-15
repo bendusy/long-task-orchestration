@@ -33,6 +33,10 @@ Python remains a compatibility fallback during the transition. Do not delete Pyt
 
 - Current supported release targets: Linux `x86_64-unknown-linux-musl`, macOS Apple Silicon `aarch64-apple-darwin`, macOS Intel `x86_64-apple-darwin`.
 - Windows native release and runner support are paused. The built-in runner protocol is shell-script based (`scripts/delegate/runners/*.sh`, `healthcheck.sh`), so Windows support needs a separate native design and test pass.
+- The GitHub Actions release workflow must use a current Intel macOS runner
+  label for the x86_64 macOS asset, install `musl-tools` before the Linux musl
+  build, and serialize GitHub Release asset upload/verification to avoid
+  concurrent release creation races.
 
 ## Binary Availability
 
@@ -85,7 +89,10 @@ Release is a host-owned gate, not a runner side effect.
 4. Update `VERSION` and `CHANGELOG.md`, commit, and create a `v*` tag using the host-owned plan from `lto release`.
 5. Push the branch and tag.
 6. Confirm GitHub Actions `rust-v2` passes and `release-binaries` uploads the `.tar.gz` and `.sha256` assets.
-   The workflow must verify the packaged binary before upload and then download the uploaded GitHub Release asset, verify its checksum, unpack it, and run `lto-rs self-test`.
+   The workflow must verify the packaged binary before upload and then download
+   the uploaded GitHub Release asset, verify its checksum, unpack it, and run
+   `lto-rs self-test`. Linux musl builds must install `musl-tools`; macOS Intel
+   builds must use a current Intel runner label, not a retired runner image.
 7. Download one asset independently, verify the checksum, unpack, and run `./lto-rs self-test` before announcing binaries.
 
 ## Development Gate

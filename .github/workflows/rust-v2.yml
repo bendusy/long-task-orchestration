@@ -41,6 +41,7 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - os: ubuntu-latest
@@ -49,7 +50,7 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             asset: lto-rs-aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             asset: lto-rs-x86_64-apple-darwin
     steps:
@@ -59,6 +60,9 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Add release target
         run: rustup target add ${{ matrix.target }}
+      - name: Install musl toolchain
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package
@@ -90,10 +94,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           verify_dir="$(mktemp -d)"
-          gh release download "$GITHUB_REF_NAME" \
-            --pattern "${{ matrix.asset }}.tar.gz" \
-            --pattern "${{ matrix.asset }}.tar.gz.sha256" \
-            --dir "$verify_dir"
+          for attempt in 1 2 3 4 5; do
+            if gh release download "$GITHUB_REF_NAME" \
+              --pattern "${{ matrix.asset }}.tar.gz" \
+              --pattern "${{ matrix.asset }}.tar.gz.sha256" \
+              --dir "$verify_dir"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
           (cd "$verify_dir" && shasum -a 256 -c "${{ matrix.asset }}.tar.gz.sha256")
           unpack_dir="$verify_dir/unpack"
           mkdir -p "$unpack_dir"

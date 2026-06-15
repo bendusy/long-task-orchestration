@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Release workflow hardening
+
+- Fixed the tag-time release binary workflow before announcing downloadable
+  assets: Linux musl builds now install `musl-tools`, macOS Intel builds use a
+  current Intel runner label, and release asset upload/download verification is
+  serialized to avoid concurrent GitHub Release races. The docs consistency
+  gate now checks these release workflow invariants.
+
 ## v0.4.0 — 2026-06-16
 
 ### Development and closeout gates — architecture, docs, history, clean rebuild

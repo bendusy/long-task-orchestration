@@ -297,6 +297,8 @@ The release workflow must:
 4. Upload tarballs and checksum files to GitHub Releases.
 5. Verify at least one downloaded asset by checksum and `./lto-rs self-test`.
 6. Record the release evidence in the LTO run before announcing availability.
+7. Use current macOS runner labels, install the Linux musl toolchain explicitly,
+   and avoid concurrent release asset upload/verification races.
 
 Install docs must offer two paths:
 

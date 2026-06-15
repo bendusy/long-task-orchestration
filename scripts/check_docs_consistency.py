@@ -63,6 +63,10 @@ def main() -> int:
     check("Verify uploaded release asset" in release_workflow, "release workflow verifies uploaded GitHub Release asset", errors)
     check("gh release download" in release_workflow, "release workflow downloads uploaded assets for verification", errors)
     check("lto-rs\" self-test" in release_workflow, "release workflow self-tests unpacked assets", errors)
+    check("macos-15-intel" in release_workflow, "release workflow uses current Intel macOS runner label", errors)
+    check("macos-13" not in release_workflow, "release workflow avoids retired macos-13 release runner", errors)
+    check("musl-tools" in release_workflow, "release workflow installs musl toolchain for Linux asset", errors)
+    check("max-parallel: 1" in release_workflow, "release workflow serializes GitHub Release asset upload/verify", errors)
 
     for rel, text in [
         ("README.md", readme),
