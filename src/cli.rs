@@ -1,3 +1,4 @@
+use crate::audit_dispatch;
 use crate::budget;
 use crate::plugin;
 use crate::state::{self, LtoState};
@@ -67,7 +68,16 @@ pub enum Commands {
     SelfTest,
     Parallel,
     Pipeline,
-    Audit,
+    Audit {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        auto_dispatch: bool,
+        #[arg(long)]
+        discover_risks: bool,
+        #[arg(long)]
+        allow_same_family: bool,
+    },
     Next,
     Autopilot,
     Recap,
@@ -174,6 +184,48 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Audit {
+            run_id,
+            auto_dispatch,
+            discover_risks,
+            allow_same_family,
+        } => {
+            let host = run_id
+                .or_else(|| current_run_id(&args.repo))
+                .and_then(|id| state::load_state(state::state_path(&args.repo, &id)).ok())
+                .map(|state| state.host_runtime)
+                .filter(|host| !host.is_empty())
+                .unwrap_or_else(|| "unknown".to_string());
+            let auditors = audit_dispatch::pick_auditors_with(&host, allow_same_family);
+            let severity = if discover_risks {
+                vec!["high", "critical", "medium"]
+            } else {
+                vec!["critical", "high", "medium", "low"]
+            };
+            let discoverer = if discover_risks {
+                audit_dispatch::pick_healthy_discoverer(&args.repo, &auditors, &host)
+            } else {
+                None
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "rust_v2": true,
+                    "mode": if discover_risks {
+                        "discover_risks"
+                    } else if auto_dispatch {
+                        "auto_dispatch"
+                    } else {
+                        "prepare"
+                    },
+                    "host": host,
+                    "auditors": auditors,
+                    "discoverer": discoverer,
+                    "severity": severity,
+                    "scheduler_healthcheck": "used_for_discover_risks"
+                }))?
+            );
+        }
         Commands::Start { goal } => {
             let state = LtoState {
                 goal: goal.unwrap_or_default(),
@@ -214,5 +266,11 @@ mod tests {
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
         assert_eq!(COMMANDS.len(), 24);
+    }
+
+    #[test]
+    fn audit_flags_are_registered() {
+        Args::try_parse_from(["lto-rs", "audit", "--auto-dispatch"]).unwrap();
+        Args::try_parse_from(["lto-rs", "audit", "--discover-risks"]).unwrap();
     }
 }

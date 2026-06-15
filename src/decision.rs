@@ -128,7 +128,12 @@ pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
         return edge_outcome(
             request.kind,
             "budget_exhausted",
-            build_budget_brief(request.kind, request.budget_remaining, est_cost),
+            build_budget_brief(
+                request.kind,
+                &request.auditors,
+                request.budget_remaining,
+                est_cost,
+            ),
         );
     }
     if request
@@ -140,7 +145,10 @@ pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
             "same escalate point already spawned once - refusing re-spawn (G5 limit)",
             build_needs_human_brief(
                 request.kind,
+                &request.auditors,
                 "same escalate point already spawned once - refusing re-spawn (G5 limit)",
+                request.budget_remaining,
+                est_cost,
             ),
         );
     }
@@ -157,7 +165,10 @@ pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
                 "direction track: fewer than two valid heterogeneous reviewers",
                 build_needs_human_brief(
                     request.kind,
+                    &request.auditors,
                     "direction track: fewer than two valid heterogeneous reviewers",
+                    request.budget_remaining,
+                    est_cost,
                 ),
             )
             .with_record(request.escalate_key);
@@ -175,7 +186,10 @@ pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
                 "review track: fewer than two valid heterogeneous reviewers",
                 build_needs_human_brief(
                     request.kind,
+                    &request.auditors,
                     "review track: fewer than two valid heterogeneous reviewers",
+                    request.budget_remaining,
+                    est_cost,
                 ),
             )
             .with_record(request.escalate_key);
@@ -187,12 +201,21 @@ pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
 
     let status = compose_status(request.kind, direction.as_ref());
     let result = compose_payload(request.kind, direction, review);
+    let brief = build_decision_brief(
+        request.kind,
+        status,
+        result.as_ref(),
+        &dissent,
+        &request.auditors,
+        est_cost,
+        request.budget_remaining,
+    );
     DecisionOutcome {
         status,
         kind: request.kind,
         result,
         dissent,
-        brief: build_decision_brief(request.kind, status, &request.auditors, est_cost),
+        brief,
         dispatched_to: request.auditors,
         budget_consumed_est: est_cost,
         record_escalate_key: Some(request.escalate_key),
@@ -402,26 +425,248 @@ impl DecisionOutcome {
     }
 }
 
-fn build_budget_brief(kind: DecisionKind, remaining: u64, required: u64) -> String {
-    format!(
-        "decision {kind:?}: budget exhausted; remaining={remaining}, required={required}; host decision required"
-    )
+fn build_budget_brief(
+    kind: DecisionKind,
+    auditors: &[String],
+    remaining: u64,
+    required: u64,
+) -> String {
+    [
+        "# LTO Decision Convergence Brief".to_string(),
+        String::new(),
+        "## Budget Exhausted".to_string(),
+        String::new(),
+        "- **Status**: NEEDS_HUMAN".to_string(),
+        format!("- **Kind**: {}", decision_kind_label(kind)),
+        format!("- **Available agents**: {}", join_or_none(auditors)),
+        format!("- **Budget remaining**: ~{remaining} tokens"),
+        format!("- **Estimated cost for this round**: ~{required} tokens"),
+        String::new(),
+        "Insufficient budget to spawn this deterministic decision round.".to_string(),
+        "Host judgment is required; no decision has been made by the tool.".to_string(),
+        budget_footer(0, remaining, required),
+    ]
+    .join("\n")
 }
 
-fn build_needs_human_brief(kind: DecisionKind, reason: &str) -> String {
-    format!("decision {kind:?}: needs human; reason={reason}")
+fn build_needs_human_brief(
+    kind: DecisionKind,
+    auditors: &[String],
+    reason: &str,
+    budget_remaining: u64,
+    est_cost: u64,
+) -> String {
+    [
+        "# LTO Decision Convergence Brief".to_string(),
+        String::new(),
+        "## Needs Human".to_string(),
+        String::new(),
+        "- **Status**: NEEDS_HUMAN".to_string(),
+        format!("- **Kind**: {}", decision_kind_label(kind)),
+        format!("- **Reason**: {}", md_inline(reason)),
+        format!("- **Available agents**: {}", join_or_none(auditors)),
+        String::new(),
+        "The deterministic gate could not continue. The host must decide the next action."
+            .to_string(),
+        budget_footer(0, budget_remaining, est_cost),
+    ]
+    .join("\n")
 }
 
 fn build_decision_brief(
     kind: DecisionKind,
     status: DecisionStatus,
+    result: Option<&DecisionResultPayload>,
+    dissent: &DecisionDissent,
     auditors: &[String],
-    budget: u64,
+    budget_consumed_est: u64,
+    budget_available_before: u64,
 ) -> String {
-    format!(
-        "decision {kind:?}: status={status:?}; dispatched_to={}; budget_consumed_est={budget}",
-        auditors.join(",")
-    )
+    let mut lines = vec![
+        "# LTO Decision Convergence Brief".to_string(),
+        String::new(),
+        "This is a deterministic fact brief. It presents votes, findings, and budget; the host owns the final judgment.".to_string(),
+        String::new(),
+        format!("- **Status**: {}", decision_status_label(status)),
+        format!("- **Kind**: {}", decision_kind_label(kind)),
+        format!("- **Dispatched to**: {}", join_or_none(auditors)),
+        format!(
+            "- **Budget consumed (est)**: ~{} tokens",
+            budget_consumed_est
+        ),
+        String::new(),
+    ];
+
+    match result {
+        Some(DecisionResultPayload::Direction(direction)) => {
+            append_direction_brief(&mut lines, direction, dissent)
+        }
+        Some(DecisionResultPayload::Review(review)) => append_review_brief(&mut lines, review),
+        Some(DecisionResultPayload::Both(both)) => {
+            append_direction_brief(&mut lines, &both.direction, dissent);
+            append_review_brief(&mut lines, &both.review);
+        }
+        None => {}
+    }
+
+    lines.push("## Host Readout".to_string());
+    lines.push(String::new());
+    if status == DecisionStatus::Converged {
+        lines.push(
+            "The deterministic gates converged. Review the facts above before acting.".to_string(),
+        );
+    } else {
+        lines.push(
+            "The deterministic gates did not converge cleanly. Host judgment is required."
+                .to_string(),
+        );
+    }
+    lines.push(budget_footer(
+        budget_consumed_est,
+        budget_available_before,
+        budget_consumed_est,
+    ));
+    lines.join("\n")
+}
+
+fn append_direction_brief(
+    lines: &mut Vec<String>,
+    direction: &DirectionPayload,
+    dissent: &DecisionDissent,
+) {
+    lines.push("## Direction Track".to_string());
+    lines.push(String::new());
+    lines.push(format!(
+        "- **Majority pick**: {}",
+        direction.pick.as_deref().unwrap_or("none")
+    ));
+    lines.push(format!(
+        "- **Majority count**: {}/{}",
+        direction.count, direction.total
+    ));
+    lines.push(format!(
+        "- **NEEDS_HUMAN votes**: {}",
+        dissent.needs_human_votes
+    ));
+    if dissent.needs_human_votes >= 2 {
+        lines.push(
+            "- **Escalation signal**: >=2 reviewers voted NEEDS_HUMAN; this is a strong display signal, distinct from the >=1 hard veto gate.".to_string(),
+        );
+    }
+    lines.push(String::new());
+    lines.push("| source | decision | value | reasoning |".to_string());
+    lines.push("|---|---|---|---|".to_string());
+    for vote in &direction.votes {
+        lines.push(format!(
+            "| {} | {} | {} | {} |",
+            md_cell(&vote.source),
+            direction_decision_label(&vote.decision),
+            md_cell(&vote.value),
+            md_cell(&vote.reasoning)
+        ));
+    }
+    if !dissent.invalid_votes.is_empty() {
+        lines.push(String::new());
+        lines.push("### Invalid Votes".to_string());
+        for vote in &dissent.invalid_votes {
+            lines.push(format!(
+                "- {}: {} -> {} ({})",
+                md_inline(&vote.source),
+                direction_decision_label(&vote.decision),
+                md_inline(&vote.value),
+                md_inline(&vote.reasoning)
+            ));
+        }
+    }
+    if !direction.minority.is_empty() {
+        lines.push(String::new());
+        lines.push("### Minority / Dissent".to_string());
+        for vote in &direction.minority {
+            lines.push(format!(
+                "- {}: {} -> {} ({})",
+                md_inline(&vote.source),
+                direction_decision_label(&vote.decision),
+                md_inline(&vote.value),
+                md_inline(&vote.reasoning)
+            ));
+        }
+    }
+    lines.push(String::new());
+}
+
+fn append_review_brief(lines: &mut Vec<String>, review: &ReviewPayload) {
+    lines.push("## Review Track".to_string());
+    lines.push(String::new());
+    lines.push(format!("- **Merged findings**: {}", review.findings.len()));
+    for finding in &review.findings {
+        lines.push(format!(
+            "- **{:?}** [{}] {}",
+            finding.severity,
+            finding.source.as_deref().unwrap_or("unknown"),
+            md_inline(&finding.claim)
+        ));
+        if let Some(file) = &finding.file {
+            lines.push(format!("  - File: `{}`", md_inline(file)));
+        }
+        if let Some(evidence) = &finding.evidence_to_check {
+            lines.push(format!("  - Evidence: {}", md_inline(evidence)));
+        }
+    }
+    lines.push(String::new());
+}
+
+fn budget_footer(consumed: u64, available_before: u64, next_round_cost: u64) -> String {
+    let remaining_after = available_before.saturating_sub(consumed);
+    let enough_next_round = next_round_cost == 0 || remaining_after >= next_round_cost;
+    [
+        String::new(),
+        "---".to_string(),
+        format!(
+            "**Budget note**: consumed_est={} tokens; remaining_est={} tokens; enough_for_next_round={}. Token counts are approximate runner estimates.",
+            consumed, remaining_after, enough_next_round
+        ),
+    ]
+    .join("\n")
+}
+
+fn decision_kind_label(kind: DecisionKind) -> &'static str {
+    match kind {
+        DecisionKind::Direction => "direction",
+        DecisionKind::Review => "review",
+        DecisionKind::Both => "both",
+    }
+}
+
+fn decision_status_label(status: DecisionStatus) -> &'static str {
+    match status {
+        DecisionStatus::Converged => "converged",
+        DecisionStatus::NeedsInfo => "needs_human",
+        DecisionStatus::NeedsHuman => "needs_human",
+    }
+}
+
+fn direction_decision_label(decision: &DirectionDecision) -> &'static str {
+    match decision {
+        DirectionDecision::PickTask => "pick_task",
+        DirectionDecision::PickPattern => "pick_pattern",
+        DirectionDecision::NeedsHuman => "needs_human",
+    }
+}
+
+fn join_or_none(items: &[String]) -> String {
+    if items.is_empty() {
+        "none".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn md_cell(value: &str) -> String {
+    md_inline(value).replace('|', "\\|")
+}
+
+fn md_inline(value: &str) -> String {
+    value.replace('\n', " ").trim().to_string()
 }
 
 #[cfg(test)]
@@ -634,6 +879,50 @@ mod tests {
             result("codex"),
             result("pi")
         ]));
+    }
+
+    #[test]
+    fn decision_brief_expands_votes_strong_signal_and_budget() {
+        let outcome = run_decision(DecisionRunRequest {
+            kind: DecisionKind::Direction,
+            auditors: vec!["codex".into(), "pi".into(), "agy".into()],
+            budget_remaining: 100_000,
+            escalate_key: "brief".into(),
+            spawned_escalate_keys: BTreeSet::new(),
+            valid_task_ids: Some(BTreeSet::from(["T1".into()])),
+            direction_votes: vec![
+                vote("codex", DirectionDecision::NeedsHuman, "ambiguous"),
+                vote("pi", DirectionDecision::NeedsHuman, "missing evidence"),
+                vote("agy", DirectionDecision::PickTask, "T1"),
+            ],
+            review_results: vec![],
+        });
+        assert_eq!(outcome.status, DecisionStatus::NeedsInfo);
+        assert!(
+            outcome
+                .brief
+                .contains("| source | decision | value | reasoning |")
+        );
+        assert!(outcome.brief.contains(">=2 reviewers voted NEEDS_HUMAN"));
+        assert!(outcome.brief.contains("Budget note"));
+        assert!(outcome.brief.contains("enough_for_next_round=true"));
+    }
+
+    #[test]
+    fn budget_exhausted_brief_uses_budget_template() {
+        let outcome = run_decision(DecisionRunRequest {
+            kind: DecisionKind::Both,
+            auditors: vec!["codex".into(), "pi".into()],
+            budget_remaining: 1,
+            escalate_key: "budget".into(),
+            spawned_escalate_keys: BTreeSet::new(),
+            valid_task_ids: None,
+            direction_votes: vec![],
+            review_results: vec![],
+        });
+        assert_eq!(outcome.status, DecisionStatus::NeedsHuman);
+        assert!(outcome.brief.contains("## Budget Exhausted"));
+        assert!(outcome.brief.contains("Estimated cost for this round"));
     }
 
     fn vote(source: &str, decision: DirectionDecision, value: &str) -> DirectionVote {

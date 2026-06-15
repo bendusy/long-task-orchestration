@@ -1,10 +1,12 @@
 pub mod agent_job;
 pub mod audit;
+pub mod audit_dispatch;
 pub mod budget;
 pub mod cli;
 pub mod decision;
 pub mod dispatch;
 pub mod effect;
+pub mod llm_judge;
 pub mod merge_review;
 pub mod plugin;
 pub mod process;

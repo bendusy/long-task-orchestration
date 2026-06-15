@@ -68,6 +68,18 @@ pub enum SchedulerError {
     Runtime(String),
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum HealthcheckError {
+    #[error("healthcheck script not found: {0}")]
+    ScriptUnavailable(String),
+    #[error("healthcheck command failed to start: {0}")]
+    Io(String),
+    #[error("healthcheck command returned non-zero: {0}")]
+    NonZero(String),
+    #[error("healthcheck command returned invalid JSON: {0}")]
+    InvalidJson(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassifiedExit {
     pub exit_code: i32,
@@ -144,7 +156,10 @@ impl Scheduler {
     }
 
     pub async fn healthcheck(&self, runners: &[String]) -> HealthProbe {
-        let mut healthy = self.run_healthcheck_probe(runners).await;
+        let mut healthy = match self.run_healthcheck_probe_checked(runners).await {
+            Ok(health) => health,
+            Err(_) => return empty_health_probe(runners),
+        };
         for _ in 0..self.config.healthcheck_retries {
             let still_bad = runners
                 .iter()
@@ -154,7 +169,10 @@ impl Scheduler {
             if still_bad.is_empty() {
                 break;
             }
-            let retry = self.run_healthcheck_probe(&still_bad).await;
+            let retry = self
+                .run_healthcheck_probe_checked(&still_bad)
+                .await
+                .unwrap_or_else(|_| empty_health_probe(&still_bad));
             for runner in still_bad {
                 if retry.get(&runner).copied().unwrap_or(false) {
                     healthy.insert(runner, true);
@@ -164,31 +182,58 @@ impl Scheduler {
         healthy
     }
 
-    async fn run_healthcheck_probe(&self, runners: &[String]) -> HealthProbe {
-        let mut health = runners
-            .iter()
-            .map(|runner| (runner.clone(), false))
-            .collect::<HealthProbe>();
+    pub async fn healthcheck_checked(
+        &self,
+        runners: &[String],
+    ) -> Result<HealthProbe, HealthcheckError> {
+        let mut healthy = self.run_healthcheck_probe_checked(runners).await?;
+        for _ in 0..self.config.healthcheck_retries {
+            let still_bad = runners
+                .iter()
+                .filter(|runner| !healthy.get(*runner).copied().unwrap_or(false))
+                .cloned()
+                .collect::<Vec<_>>();
+            if still_bad.is_empty() {
+                break;
+            }
+            let retry = self.run_healthcheck_probe_checked(&still_bad).await?;
+            for runner in still_bad {
+                if retry.get(&runner).copied().unwrap_or(false) {
+                    healthy.insert(runner, true);
+                }
+            }
+        }
+        Ok(healthy)
+    }
+
+    async fn run_healthcheck_probe_checked(
+        &self,
+        runners: &[String],
+    ) -> Result<HealthProbe, HealthcheckError> {
+        let mut health = empty_health_probe(runners);
         let script = self.runners_dir.join("healthcheck.sh");
         if fs::metadata(&script).await.is_err() {
-            return health;
+            return Err(HealthcheckError::ScriptUnavailable(
+                script.display().to_string(),
+            ));
         }
         let output = Command::new(&script)
             .arg("--json")
             .args(runners)
             .output()
             .await;
-        let Ok(output) = output else {
-            return health;
-        };
+        let output = output.map_err(|err| HealthcheckError::Io(err.to_string()))?;
         if !output.status.success() {
-            return health;
+            return Err(HealthcheckError::NonZero(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
         }
-        let Ok(entries) = serde_json::from_slice::<Vec<HealthcheckEntry>>(&output.stdout) else {
-            return health;
-        };
+        let entries = serde_json::from_slice::<Vec<HealthcheckEntry>>(&output.stdout)
+            .map_err(|err| HealthcheckError::InvalidJson(err.to_string()))?;
         if entries.len() > runners.len() {
-            return health;
+            return Err(HealthcheckError::InvalidJson(
+                "more health entries than requested runners".to_string(),
+            ));
         }
         for entry in entries {
             if let std::collections::btree_map::Entry::Occupied(mut slot) =
@@ -197,7 +242,7 @@ impl Scheduler {
                 slot.insert(entry.verdict.eq_ignore_ascii_case("OK"));
             }
         }
-        health
+        Ok(health)
     }
 
     async fn run_job(self: Arc<Self>, job: AgentJob) -> AgentResult {
@@ -760,6 +805,13 @@ pub fn retry_delay_after_attempt(
 }
 
 pub type HealthProbe = BTreeMap<String, bool>;
+
+fn empty_health_probe(runners: &[String]) -> HealthProbe {
+    runners
+        .iter()
+        .map(|runner| (runner.clone(), false))
+        .collect()
+}
 
 pub fn healthcheck_with_retries(
     runners: &[String],
@@ -1678,6 +1730,55 @@ print(json.dumps(data))
             result,
             BTreeMap::from([("codex".into(), true), ("pi".into(), false)])
         );
+    }
+
+    #[tokio::test]
+    async fn healthcheck_checked_distinguishes_probe_failure_from_all_unhealthy() {
+        let harness = Harness::new();
+        let scheduler = harness.scheduler();
+        harness.set_health(json!([
+            {"agent":"codex","verdict":"TIMEOUT"},
+            {"agent":"pi","verdict":"ERROR"}
+        ]));
+        let result = scheduler
+            .healthcheck_checked(&["codex".to_string(), "pi".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            BTreeMap::from([("codex".into(), false), ("pi".into(), false)])
+        );
+
+        std_fs::remove_file(harness.runners_dir.join("healthcheck.sh")).unwrap();
+        let err = scheduler
+            .healthcheck_checked(&["codex".to_string()])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HealthcheckError::ScriptUnavailable(_)));
+        let fail_closed = scheduler.healthcheck(&["codex".to_string()]).await;
+        assert_eq!(fail_closed, BTreeMap::from([("codex".into(), false)]));
+    }
+
+    #[tokio::test]
+    async fn healthcheck_lenient_api_preserves_initial_success_when_retry_probe_fails() {
+        let harness = Harness::new();
+        let scheduler = harness.scheduler();
+        harness.set_health(json!({"__sequence__": [
+            [{"agent":"codex","verdict":"OK"}, {"agent":"pi","verdict":"TIMEOUT"}],
+            {"agent":"pi","verdict":"OK"}
+        ]}));
+        let result = scheduler
+            .healthcheck(&["codex".to_string(), "pi".to_string()])
+            .await;
+        assert_eq!(
+            result,
+            BTreeMap::from([("codex".into(), true), ("pi".into(), false)])
+        );
+        let err = scheduler
+            .healthcheck_checked(&["codex".to_string(), "pi".to_string()])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HealthcheckError::InvalidJson(_)));
     }
 
     #[tokio::test]
