@@ -1,7 +1,10 @@
 use crate::agent_job::{AgentResult, JobStatus};
 use crate::audit::{Finding, family, parse_findings_text, parse_findings_values};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 pub const EST_TOKENS_PER_ROUND: u64 = 18_000;
 
@@ -37,6 +40,13 @@ pub struct DirectionVote {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidatePool {
+    pub candidates: Vec<DirectionVote>,
+    pub invalid_candidates: Vec<DirectionVote>,
+    pub sources: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tally {
     pub supermajority_met: bool,
@@ -56,10 +66,16 @@ pub struct DecisionRunRequest {
     pub auditors: Vec<String>,
     pub budget_remaining: u64,
     pub escalate_key: String,
+    #[serde(default = "default_diverge")]
+    pub diverge: bool,
     #[serde(default)]
     pub spawned_escalate_keys: BTreeSet<String>,
     #[serde(default)]
     pub valid_task_ids: Option<BTreeSet<String>>,
+    #[serde(default)]
+    pub task_universe: BTreeSet<String>,
+    #[serde(default)]
+    pub candidate_results: Vec<AgentResult>,
     #[serde(default)]
     pub direction_votes: Vec<DirectionVote>,
     #[serde(default)]
@@ -95,6 +111,8 @@ pub struct DirectionPayload {
     pub total: usize,
     pub votes: Vec<DirectionVote>,
     pub minority: Vec<DirectionVote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_pool: Option<CandidatePool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,13 +135,16 @@ pub struct DecisionDissent {
     #[serde(default)]
     pub invalid_votes: Vec<DirectionVote>,
     #[serde(default)]
+    pub invalid_candidates: Vec<DirectionVote>,
+    #[serde(default)]
     pub needs_human_votes: usize,
     #[serde(default)]
     pub findings_for_host_judgment: Vec<Finding>,
 }
 
 pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
-    let est_cost = EST_TOKENS_PER_ROUND.saturating_mul(rounds_needed(request.kind));
+    let est_cost =
+        EST_TOKENS_PER_ROUND.saturating_mul(rounds_needed(request.kind, request.diverge));
     if request.budget_remaining < est_cost {
         return edge_outcome(
             request.kind,
@@ -158,7 +179,7 @@ pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
     let mut dissent = DecisionDissent::default();
 
     if matches!(request.kind, DecisionKind::Direction | DecisionKind::Both) {
-        let tally = tally_votes(&request.direction_votes, request.valid_task_ids.as_ref());
+        let (tally, candidate_pool, fallback_reason) = run_direction_phases(&request);
         if !has_minimum_vote_families(&tally.votes) {
             return edge_outcome(
                 request.kind,
@@ -173,10 +194,16 @@ pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
             )
             .with_record(request.escalate_key);
         }
+        if let Some(reason) = fallback_reason {
+            dissent.reason = Some(reason);
+        }
         dissent.minority_votes = tally.minority.clone();
         dissent.invalid_votes = tally.invalid_votes.clone();
+        if let Some(pool) = candidate_pool.as_ref() {
+            dissent.invalid_candidates = pool.invalid_candidates.clone();
+        }
         dissent.needs_human_votes = tally.needs_human_votes;
-        direction = Some(direction_payload(&tally));
+        direction = Some(direction_payload(&tally, candidate_pool));
     }
 
     if matches!(request.kind, DecisionKind::Review | DecisionKind::Both) {
@@ -221,6 +248,223 @@ pub fn run_decision(request: DecisionRunRequest) -> DecisionOutcome {
         record_escalate_key: Some(request.escalate_key),
     }
 }
+
+fn default_diverge() -> bool {
+    true
+}
+
+fn run_direction_phases(
+    request: &DecisionRunRequest,
+) -> (Tally, Option<CandidatePool>, Option<String>) {
+    if !request.diverge || request.candidate_results.is_empty() {
+        return (
+            converge_phase(&request.direction_votes, request.valid_task_ids.as_ref()),
+            None,
+            None,
+        );
+    }
+
+    let candidate_pool = diverge_phase(request);
+    if !has_minimum_vote_families(&candidate_pool.candidates) {
+        return (
+            converge_phase(&request.direction_votes, request.valid_task_ids.as_ref()),
+            Some(candidate_pool),
+            Some(
+                "direction diverge: fewer than two heterogeneous candidate sources; fell back to single-stage convergence"
+                    .to_string(),
+            ),
+        );
+    }
+
+    let candidate_task_ids = candidate_task_ids(&candidate_pool);
+    let tally = converge_phase(&request.direction_votes, Some(&candidate_task_ids));
+    (tally, Some(candidate_pool), None)
+}
+
+fn diverge_phase(request: &DecisionRunRequest) -> CandidatePool {
+    let proposed = merge_candidates(&request.candidate_results);
+    let task_base = candidate_task_base(request);
+    let mut candidates = Vec::new();
+    let mut invalid_candidates = Vec::new();
+
+    for candidate in proposed {
+        if validate_candidate(&candidate, task_base) {
+            candidates.push(candidate);
+        } else {
+            invalid_candidates.push(candidate);
+        }
+    }
+
+    CandidatePool {
+        sources: candidate_sources(&candidates, &invalid_candidates),
+        candidates,
+        invalid_candidates,
+    }
+}
+
+fn converge_phase(votes: &[DirectionVote], valid_task_ids: Option<&BTreeSet<String>>) -> Tally {
+    tally_votes(votes, valid_task_ids)
+}
+
+pub fn merge_candidates(results: &[AgentResult]) -> Vec<DirectionVote> {
+    let mut out = Vec::new();
+    for result in results {
+        if result.status != JobStatus::Ok {
+            continue;
+        }
+        if !result.findings.is_empty()
+            && let Some(mut candidates) = parse_direction_vote_values(&result.findings)
+        {
+            fill_missing_sources(&mut candidates, &result.runner);
+            out.extend(candidates);
+            continue;
+        }
+        if let Some(mut candidates) = parse_direction_votes_text(&result.reply_text) {
+            fill_missing_sources(&mut candidates, &result.runner);
+            out.extend(candidates);
+        }
+    }
+    out
+}
+
+fn validate_candidate(candidate: &DirectionVote, task_base: Option<&BTreeSet<String>>) -> bool {
+    match candidate.decision {
+        DirectionDecision::PickTask => task_base
+            .map(|ids| ids.contains(&candidate.value))
+            .unwrap_or(false),
+        DirectionDecision::PickPattern => is_legal_pattern(&candidate.value),
+        DirectionDecision::NeedsHuman => true,
+    }
+}
+
+fn candidate_task_base(request: &DecisionRunRequest) -> Option<&BTreeSet<String>> {
+    if !request.task_universe.is_empty() {
+        Some(&request.task_universe)
+    } else {
+        request.valid_task_ids.as_ref()
+    }
+}
+
+fn candidate_task_ids(pool: &CandidatePool) -> BTreeSet<String> {
+    pool.candidates
+        .iter()
+        .filter(|candidate| candidate.decision == DirectionDecision::PickTask)
+        .map(|candidate| candidate.value.clone())
+        .collect()
+}
+
+fn candidate_sources(
+    candidates: &[DirectionVote],
+    invalid_candidates: &[DirectionVote],
+) -> Vec<String> {
+    candidates
+        .iter()
+        .chain(invalid_candidates)
+        .map(|candidate| candidate.source.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn fill_missing_sources(candidates: &mut [DirectionVote], runner: &str) {
+    for candidate in candidates {
+        if candidate.source.trim().is_empty() {
+            candidate.source = runner.to_string();
+        }
+    }
+}
+
+fn parse_direction_votes_text(text: &str) -> Option<Vec<DirectionVote>> {
+    parse_direction_votes_json(text.trim()).or_else(|| {
+        JSON_FENCE_RE.captures_iter(text).find_map(|captures| {
+            captures
+                .get(1)
+                .and_then(|body| parse_direction_votes_json(body.as_str()))
+        })
+    })
+}
+
+fn parse_direction_votes_json(text: &str) -> Option<Vec<DirectionVote>> {
+    let value = serde_json::from_str::<Value>(text.trim()).ok()?;
+    parse_direction_vote_value(&value)
+}
+
+fn parse_direction_vote_values(values: &[Value]) -> Option<Vec<DirectionVote>> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut candidates = Vec::new();
+    for value in values {
+        candidates.extend(parse_direction_vote_value(value)?);
+    }
+    Some(candidates)
+}
+
+fn parse_direction_vote_value(value: &Value) -> Option<Vec<DirectionVote>> {
+    if let Some(items) = value.as_array() {
+        let mut candidates = Vec::new();
+        for item in items {
+            candidates.push(parse_direction_vote_object(item)?);
+        }
+        return Some(candidates);
+    }
+    if let Some(items) = value.get("candidates").and_then(Value::as_array) {
+        return parse_direction_vote_values(items);
+    }
+    if value.get("decision").is_some() {
+        return Some(vec![parse_direction_vote_object(value)?]);
+    }
+    None
+}
+
+fn parse_direction_vote_object(value: &Value) -> Option<DirectionVote> {
+    #[derive(Deserialize)]
+    struct RawDirectionVote {
+        decision: DirectionDecision,
+        value: String,
+        reasoning: String,
+        #[serde(default)]
+        source: String,
+    }
+
+    serde_json::from_value::<RawDirectionVote>(value.clone())
+        .ok()
+        .map(|raw| DirectionVote {
+            decision: raw.decision,
+            value: raw.value,
+            reasoning: raw.reasoning,
+            source: raw.source,
+        })
+}
+
+fn is_legal_pattern(value: &str) -> bool {
+    matches!(
+        value,
+        "linear" | "fan-out" | "adversarial" | "tournament" | "loop"
+    )
+}
+
+pub fn direction_convergence_instruction(pool: &CandidatePool) -> String {
+    let candidates = pool
+        .candidates
+        .iter()
+        .map(vote_key)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Evaluate every merged candidate, including candidates proposed by other agents. Do not favor your own proposal. Valid candidates: {}",
+        if candidates.is_empty() {
+            "none".to_string()
+        } else {
+            candidates
+        }
+    )
+}
+
+static JSON_FENCE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)```json\s*(.*?)\s*```").unwrap());
 
 pub fn tally_votes(votes: &[DirectionVote], valid_task_ids: Option<&BTreeSet<String>>) -> Tally {
     let mut invalid_votes = Vec::new();
@@ -338,10 +582,12 @@ pub fn has_minimum_valid_reviewers(results: &[AgentResult]) -> bool {
     families.len() >= 2
 }
 
-fn rounds_needed(kind: DecisionKind) -> u64 {
-    match kind {
-        DecisionKind::Both => 2,
-        DecisionKind::Direction | DecisionKind::Review => 1,
+fn rounds_needed(kind: DecisionKind, diverge: bool) -> u64 {
+    match (kind, diverge) {
+        (DecisionKind::Both, true) => 3,
+        (DecisionKind::Both, false) => 2,
+        (DecisionKind::Direction, true) => 2,
+        (DecisionKind::Direction, false) | (DecisionKind::Review, _) => 1,
     }
 }
 
@@ -356,7 +602,7 @@ fn has_minimum_vote_families(votes: &[DirectionVote]) -> bool {
     families.len() >= 2
 }
 
-fn direction_payload(tally: &Tally) -> DirectionPayload {
+fn direction_payload(tally: &Tally, candidate_pool: Option<CandidatePool>) -> DirectionPayload {
     DirectionPayload {
         converged: tally.supermajority_met,
         pick: tally.majority_pick.clone(),
@@ -364,6 +610,7 @@ fn direction_payload(tally: &Tally) -> DirectionPayload {
         total: tally.total_voters,
         votes: tally.votes.clone(),
         minority: tally.minority.clone(),
+        candidate_pool,
     }
 }
 
@@ -553,6 +800,12 @@ fn append_direction_brief(
             "- **Escalation signal**: >=2 reviewers voted NEEDS_HUMAN; this is a strong display signal, distinct from the >=1 hard veto gate.".to_string(),
         );
     }
+    if let Some(reason) = dissent.reason.as_deref() {
+        lines.push(format!("- **Divergence note**: {}", md_inline(reason)));
+    }
+    if let Some(pool) = direction.candidate_pool.as_ref() {
+        append_candidate_pool_brief(lines, pool, direction.votes.len());
+    }
     lines.push(String::new());
     lines.push("| source | decision | value | reasoning |".to_string());
     lines.push("|---|---|---|---|".to_string());
@@ -592,6 +845,56 @@ fn append_direction_brief(
         }
     }
     lines.push(String::new());
+}
+
+fn append_candidate_pool_brief(
+    lines: &mut Vec<String>,
+    pool: &CandidatePool,
+    convergence_votes: usize,
+) {
+    let proposed = pool.candidates.len() + pool.invalid_candidates.len();
+    lines.push(String::new());
+    lines.push("### Divergence Candidate Pool".to_string());
+    lines.push(format!("- **Sources**: {}", join_or_none(&pool.sources)));
+    lines.push(format!("- **Produced candidates**: {proposed}"));
+    lines.push(format!(
+        "- **Accepted into pool**: {}",
+        pool.candidates.len()
+    ));
+    lines.push(format!(
+        "- **Rejected by candidate gate**: {}",
+        pool.invalid_candidates.len()
+    ));
+    lines.push(format!("- **Convergence votes**: {convergence_votes}"));
+    lines.push(format!(
+        "- **Convergence instruction**: {}",
+        md_inline(&direction_convergence_instruction(pool))
+    ));
+    lines.push(String::new());
+    lines.push("| source | proposal | value | reasoning |".to_string());
+    lines.push("|---|---|---|---|".to_string());
+    for candidate in &pool.candidates {
+        lines.push(format!(
+            "| {} | {} | {} | {} |",
+            md_cell(&candidate.source),
+            direction_decision_label(&candidate.decision),
+            md_cell(&candidate.value),
+            md_cell(&candidate.reasoning)
+        ));
+    }
+    if !pool.invalid_candidates.is_empty() {
+        lines.push(String::new());
+        lines.push("#### Invalid Candidates".to_string());
+        for candidate in &pool.invalid_candidates {
+            lines.push(format!(
+                "- {}: {} -> {} ({})",
+                md_inline(&candidate.source),
+                direction_decision_label(&candidate.decision),
+                md_inline(&candidate.value),
+                md_inline(&candidate.reasoning)
+            ));
+        }
+    }
 }
 
 fn append_review_brief(lines: &mut Vec<String>, review: &ReviewPayload) {
@@ -743,8 +1046,11 @@ mod tests {
             auditors: vec!["codex".into(), "pi".into(), "agy".into()],
             budget_remaining: 100_000,
             escalate_key: "phase|blocked=|pending=T1".into(),
+            diverge: false,
             spawned_escalate_keys: BTreeSet::new(),
             valid_task_ids: Some(BTreeSet::from(["T1".into()])),
+            task_universe: BTreeSet::new(),
+            candidate_results: vec![],
             direction_votes: vec![
                 vote("codex", DirectionDecision::PickTask, "T1"),
                 vote("pi", DirectionDecision::PickTask, "T1"),
@@ -777,8 +1083,11 @@ mod tests {
             auditors: vec!["codex".into()],
             budget_remaining: EST_TOKENS_PER_ROUND,
             escalate_key: "k".into(),
+            diverge: false,
             spawned_escalate_keys: BTreeSet::new(),
             valid_task_ids: None,
+            task_universe: BTreeSet::new(),
+            candidate_results: vec![],
             direction_votes: vec![],
             review_results: vec![],
         });
@@ -794,8 +1103,11 @@ mod tests {
             auditors: vec!["codex".into(), "pi".into()],
             budget_remaining: 100_000,
             escalate_key: "same".into(),
+            diverge: false,
             spawned_escalate_keys: BTreeSet::from(["same".into()]),
             valid_task_ids: None,
+            task_universe: BTreeSet::new(),
+            candidate_results: vec![],
             direction_votes: vec![vote("codex", DirectionDecision::PickPattern, "linear")],
             review_results: vec![],
         });
@@ -811,8 +1123,11 @@ mod tests {
             auditors: vec!["codex".into(), "pi".into(), "agy".into()],
             budget_remaining: 100_000,
             escalate_key: "both".into(),
+            diverge: false,
             spawned_escalate_keys: BTreeSet::new(),
             valid_task_ids: None,
+            task_universe: BTreeSet::new(),
+            candidate_results: vec![],
             direction_votes: vec![
                 vote("codex", DirectionDecision::PickPattern, "linear"),
                 vote("pi", DirectionDecision::PickPattern, "linear"),
@@ -840,8 +1155,11 @@ mod tests {
             auditors: vec!["codex".into(), "openai-gpt".into()],
             budget_remaining: 100_000,
             escalate_key: "review".into(),
+            diverge: false,
             spawned_escalate_keys: BTreeSet::new(),
             valid_task_ids: None,
+            task_universe: BTreeSet::new(),
+            candidate_results: vec![],
             direction_votes: vec![],
             review_results: vec![
                 result_with_text("codex", r#"[{"severity":"high","claim":"A"}]"#),
@@ -888,8 +1206,11 @@ mod tests {
             auditors: vec!["codex".into(), "pi".into(), "agy".into()],
             budget_remaining: 100_000,
             escalate_key: "brief".into(),
+            diverge: false,
             spawned_escalate_keys: BTreeSet::new(),
             valid_task_ids: Some(BTreeSet::from(["T1".into()])),
+            task_universe: BTreeSet::new(),
+            candidate_results: vec![],
             direction_votes: vec![
                 vote("codex", DirectionDecision::NeedsHuman, "ambiguous"),
                 vote("pi", DirectionDecision::NeedsHuman, "missing evidence"),
@@ -915,14 +1236,158 @@ mod tests {
             auditors: vec!["codex".into(), "pi".into()],
             budget_remaining: 1,
             escalate_key: "budget".into(),
+            diverge: false,
             spawned_escalate_keys: BTreeSet::new(),
             valid_task_ids: None,
+            task_universe: BTreeSet::new(),
+            candidate_results: vec![],
             direction_votes: vec![],
             review_results: vec![],
         });
         assert_eq!(outcome.status, DecisionStatus::NeedsHuman);
         assert!(outcome.brief.contains("## Budget Exhausted"));
         assert!(outcome.brief.contains("Estimated cost for this round"));
+    }
+
+    #[test]
+    fn request_deserialization_defaults_diverge_to_true() {
+        let request = serde_json::from_value::<DecisionRunRequest>(serde_json::json!({
+            "kind": "direction",
+            "auditors": ["codex", "pi"],
+            "budget_remaining": 100000,
+            "escalate_key": "k"
+        }))
+        .unwrap();
+        assert!(request.diverge);
+    }
+
+    #[test]
+    fn merge_candidates_unions_sources_without_deduplication() {
+        let candidates = merge_candidates(&[
+            result_with_text(
+                "codex",
+                r#"[{"decision":"pick_task","value":"T1","reasoning":"first"}]"#,
+            ),
+            result_with_text(
+                "pi",
+                r#"{"candidates":[{"decision":"pick_task","value":"T1","reasoning":"duplicate from another source"}]}"#,
+            ),
+            result_with_text(
+                "agy",
+                r#"```json
+{"decision":"pick_pattern","value":"fan-out","reasoning":"parallelize"}
+```"#,
+            ),
+        ]);
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates[0].source, "codex");
+        assert_eq!(candidates[1].source, "pi");
+        assert_eq!(candidates[2].source, "agy");
+        assert_eq!(
+            candidates
+                .iter()
+                .filter(|candidate| candidate.value == "T1")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn diverge_filters_invalid_candidates_and_uses_pool_task_whitelist() {
+        let outcome = run_decision(DecisionRunRequest {
+            kind: DecisionKind::Direction,
+            auditors: vec!["codex".into(), "pi".into(), "agy".into()],
+            budget_remaining: 100_000,
+            escalate_key: "diverge".into(),
+            diverge: true,
+            spawned_escalate_keys: BTreeSet::new(),
+            valid_task_ids: Some(BTreeSet::from(["T1".into(), "T2".into(), "T99".into()])),
+            task_universe: BTreeSet::from(["T1".into(), "T2".into()]),
+            candidate_results: vec![
+                result_with_text(
+                    "codex",
+                    r#"[{"decision":"pick_task","value":"T1","reasoning":"primary"}]"#,
+                ),
+                result_with_text(
+                    "pi",
+                    r#"[{"decision":"pick_task","value":"T2","reasoning":"alternate"}]"#,
+                ),
+                result_with_text(
+                    "agy",
+                    r#"[{"decision":"pick_task","value":"DROP","reasoning":"bad task"},{"decision":"pick_pattern","value":"chaos","reasoning":"bad pattern"}]"#,
+                ),
+            ],
+            direction_votes: vec![
+                vote("codex", DirectionDecision::PickTask, "T1"),
+                vote("pi", DirectionDecision::PickTask, "T1"),
+                vote("agy", DirectionDecision::PickTask, "T99"),
+            ],
+            review_results: vec![],
+        });
+        assert_eq!(outcome.status, DecisionStatus::Converged);
+        assert_eq!(outcome.budget_consumed_est, EST_TOKENS_PER_ROUND * 2);
+        assert_eq!(outcome.dissent.invalid_candidates.len(), 2);
+        assert_eq!(outcome.dissent.invalid_votes.len(), 1);
+        assert!(outcome.brief.contains("### Divergence Candidate Pool"));
+        assert!(outcome.brief.contains("Produced candidates**: 4"));
+        assert!(outcome.brief.contains("Accepted into pool**: 2"));
+        assert!(outcome.brief.contains("Rejected by candidate gate**: 2"));
+        assert!(outcome.brief.contains("Do not favor your own proposal"));
+        match outcome.result {
+            Some(DecisionResultPayload::Direction(DirectionPayload {
+                candidate_pool: Some(pool),
+                pick: Some(pick),
+                count,
+                total,
+                ..
+            })) => {
+                assert_eq!(pick, "pick_task:T1");
+                assert_eq!(count, 2);
+                assert_eq!(total, 2);
+                assert_eq!(pool.sources, vec!["agy", "codex", "pi"]);
+                assert_eq!(pool.candidates.len(), 2);
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn diverge_with_too_few_candidate_families_falls_back_to_single_stage_convergence() {
+        let outcome = run_decision(DecisionRunRequest {
+            kind: DecisionKind::Direction,
+            auditors: vec!["codex".into(), "pi".into(), "agy".into()],
+            budget_remaining: 100_000,
+            escalate_key: "fallback".into(),
+            diverge: true,
+            spawned_escalate_keys: BTreeSet::new(),
+            valid_task_ids: Some(BTreeSet::from(["T2".into()])),
+            task_universe: BTreeSet::from(["T1".into()]),
+            candidate_results: vec![result_with_text(
+                "codex",
+                r#"[{"decision":"pick_task","value":"T1","reasoning":"only one family"}]"#,
+            )],
+            direction_votes: vec![
+                vote("codex", DirectionDecision::PickTask, "T2"),
+                vote("pi", DirectionDecision::PickTask, "T2"),
+            ],
+            review_results: vec![],
+        });
+        assert_eq!(outcome.status, DecisionStatus::Converged);
+        assert_eq!(
+            outcome.dissent.reason.as_deref(),
+            Some(
+                "direction diverge: fewer than two heterogeneous candidate sources; fell back to single-stage convergence"
+            )
+        );
+        assert!(outcome.brief.contains("Divergence note"));
+        assert!(matches!(
+            outcome.result,
+            Some(DecisionResultPayload::Direction(DirectionPayload {
+                pick: Some(_),
+                candidate_pool: Some(_),
+                ..
+            }))
+        ));
     }
 
     fn vote(source: &str, decision: DirectionDecision, value: &str) -> DirectionVote {
