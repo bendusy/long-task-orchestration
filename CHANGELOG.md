@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.4.2 — 2026-06-16
+
 ### Release package checksum verification
 
 - Fixed tag-time package checksum verification to run `shasum -c` from the
