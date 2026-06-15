@@ -85,8 +85,8 @@ Codex `exec resume <session-id>` can continue a thread, but LTO must still rebui
 
 ```bash
 git status --short
-python3 scripts/lto_run.py resume
-python3 scripts/lto_run.py next
+lto resume
+lto next
 ```
 
 Do not trust transcript memory like "background task still running" or "already fixed". Trust `.lto/<run-id>/state.json`, `artifacts.json`, git SHA, reply files, and current filesystem.

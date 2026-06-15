@@ -1,9 +1,12 @@
 # Protocol-first LTO evolution and language strategy
 
-**STATUS: Roadmap / research plan. Not an implementation spec for a rewrite.**
+**STATUS: protocol strategy, updated for Rust v2. Historical Python/Go/Rust
+roadmap language in older revisions is superseded.**
 
-This document exists to prevent future agents from jumping straight to a Go,
-Rust, or TypeScript rewrite before LTO's durable protocol is clear.
+This document exists to keep language work subordinate to LTO's durable file
+protocol. It no longer argues for Python as primary or for a future Go shadow
+CLI. Rust v2 is the current default core path; Python is an explicit legacy
+fallback.
 
 ## Short version
 
@@ -22,15 +25,15 @@ real LTO use
   -> more useful next run
 ```
 
-Language roadmap:
+Current language posture:
 
 ```text
-Now:      Python core, because protocols are still changing.
-Next:     Protocol freeze candidates + conformance tests.
-Later:    Go shadow CLI reading/writing same .lto protocol.
-Only then: consider Go as primary CLI core.
-TS:       integration layer only.
-Rust:     not needed unless a narrow security/sandbox component appears.
+Now:          Rust v2 default core path.
+Compatibility: Python legacy fallback via --use-python / LTO_USE_PYTHON=1.
+Protocol:     .lto/ files remain the product boundary.
+Future:       conformance fixtures decide any additional implementation.
+TS:           wrappers/MCP/editor integration only.
+Go:           no near-term core path.
 ```
 
 ## What “越用越聪明” means
@@ -132,9 +135,10 @@ whitespace collapsed, truncated to 500 chars.
    signal beyond `actor`; if they don't, they collapse to a single `blame`
    enum (`system_should_prevent` | `human_judgment_required`).
 
-## Minimum protocol checklist before any rewrite
+## Minimum protocol checklist for takeover or future rewrites
 
-Do not start a Go/Rust/TS rewrite until these are true:
+Do not change the primary implementation strategy or remove fallback behavior
+until these are true:
 
 - `state.json` schema has a documented compatibility contract.
 - `artifacts.json` kind list and path rules are documented.
@@ -147,51 +151,47 @@ Do not start a Go/Rust/TS rewrite until these are true:
 
 ## Language choices
 
-### Python now
+### Rust v2 default
 
-Use Python while the protocol is still moving.
+Rust v2 is the current default CLI/core path.
 
 Why:
 
-- fast iteration;
-- easy local file/JSON/Markdown work;
-- easy agent modification;
-- current implementation and tests already exist.
+- single-binary distribution is the release target;
+- typed state, scheduler, budget, delivery-contract, and plugin static paths
+  make invariants explicit;
+- installer and wrapper now default to Rust;
+- macOS/Linux CI already exercises the Rust workspace.
 
 Risk:
 
-- packaging is weaker;
-- type boundaries are looser;
-- single-binary distribution is poor.
+- duplicated behavior can drift while Python fallback remains;
+- old `.lto` runs may expose compatibility gaps;
+- release claims can get ahead of GitHub assets.
 
-Decision: keep Python as primary implementation until protocol freeze candidates
-exist.
+Decision: Rust owns generic harness primitives. Every new core feature should
+prefer Rust unless it is explicitly a legacy fallback or a Python-only test
+fixture.
 
-### Go later
+### Python legacy fallback
 
-Go is the best candidate for the eventual core CLI.
+Python remains valuable as a compatibility bridge and comparison oracle.
 
 Why:
 
-- single binary;
-- predictable distribution;
-- good subprocess/concurrency support;
-- good enough JSON/file tooling;
-- simpler operational story than Python or Node.
+- old behavior and historical tests still exist there;
+- some legacy plugin/eval surfaces are not fully Rust-owned yet;
+- fallback protects users while release binaries and downstream integrations
+  settle.
 
-But Go should start as a **shadow implementation**, not a rewrite.
+Risk:
 
-Phase:
+- hidden fallback can become a second product;
+- active docs can accidentally teach Python as the default;
+- duplicate command behavior can hide bugs until release.
 
-```text
-lto-go check
-lto-go judge
-lto-go closeout
-lto-go next
-```
-
-It must read/write the same `.lto` protocol and pass conformance tests against
-Python outputs.
+Decision: Python must stay explicit: `lto --use-python ...` or
+`LTO_USE_PYTHON=1 lto ...`. Shrink it only after parity evidence exists.
 
 ### TypeScript as integration layer
 
@@ -205,17 +205,13 @@ TypeScript is useful for:
 Do not move core control logic to TS just because other agent frameworks use TS.
 LTO is local file-protocol harness first, not web/app framework first.
 
-### Rust only for narrow components
+### Go
 
-Rust is not currently worth the cost for LTO core.
+Go is not a near-term core path. A future Go experiment must start from
+protocol conformance fixtures, not from taste or packaging anxiety.
 
-Potential future uses:
-
-- path/security validation library;
-- sandbox launcher;
-- high-assurance redaction component.
-
-No Rust rewrite without a specific narrow problem.
+Decision: no Go core work until Rust takeover and release distribution are
+boring, documented, and measured.
 
 ## Research plan
 
@@ -273,16 +269,17 @@ Expected outputs:
 - intervention summary;
 - artifact manifest handling.
 
-### Round 4: Go shadow decision
+### Round 4: implementation strategy review
 
-Question: is the protocol stable enough to justify a Go shadow CLI?
+Question: is the protocol stable enough to justify another implementation or
+major fallback shrink?
 
-Start Go only if:
+Change strategy only if:
 
 - conformance tests exist;
-- Python behavior is no longer changing weekly;
+- Rust behavior is no longer changing weekly;
 - packaging/distribution pain is a real bottleneck;
-- Go prototype can pass fixtures without special cases.
+- another implementation can pass fixtures without special cases.
 
 ## Non-goals
 
@@ -293,16 +290,19 @@ Do not use this roadmap as permission to build:
 - worker marketplace;
 - automatic model/router selection;
 - executable plugin system;
-- Go rewrite before protocol freeze;
+- another core rewrite before protocol freeze;
 - telemetry that stores raw transcripts or private paths.
 
 ## Current recommendation
 
-Keep shipping small protocol-backed improvements in Python.
+Keep shipping small protocol-backed improvements in Rust core while shrinking
+Python fallback deliberately.
 
 Next best steps:
 
-1. Finish `interventions.jsonl` v0.
-2. Add `next` / `resume` advisory use of intervention summary if real runs show value.
-3. Write schema fixtures for existing protocol files.
-4. Only after fixtures stabilize, design a Go shadow CLI.
+1. Keep Rust default and wrapper/fallback behavior verified.
+2. Add conformance fixtures for existing protocol files.
+3. Classify Python surfaces as ported, fallback-only, legacy-plugin, or
+   removal-candidate.
+4. Only after fixtures stabilize, decide whether any additional implementation
+   is justified.

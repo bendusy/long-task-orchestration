@@ -27,21 +27,21 @@
 
 | 步 | 阶段 | 输入 | 输出 | 脚本化？ | 落点 |
 |---|---|---|---|---|---|
-| S0 | 开局 | `--goal` `--host` `--profile` | `.lto/<run-id>/` state.json + run-state.md + `current` | ✅ 全 | `lto_run.py start` |
+| S0 | 开局 | `--goal` `--host` `--profile` | `.lto/<run-id>/` state.json + run-state.md + `current` | ✅ 全 | `lto start` |
 | S1 | intake | 用户想法 / 「以后可能要 X」 | 该做 / 砍到最小版 | ❌ 判断 | SKILL §三原则·刹车1 |
 | S2 | spec | 需求 | 方案 md + 待审点清单 | ❌ 创作 | SKILL §六阶段 P2；`references/decision-logging.md` |
 | S3a | audit·派工 | 方案 md + auditors | 各 runner 的回复 md | ✅ 全 | `agent-delegate` runners |
-| S3b | audit·健康 | runner 名单 | 每 runner exit/elapsed/bytes/verdict | ✅ 全 | `lto_run.py preflight` + `agent-delegate/.../healthcheck.sh` |
+| S3b | audit·健康 | runner 名单 | 每 runner exit/elapsed/bytes/verdict | ✅ 全 | `lto preflight` + `scripts/delegate/runners/healthcheck.sh` |
 | S3c | audit·记账 | 每轮 blocker 计数 | `audit-ledger.md` 表格 | 🟡 半 | `templates/audit-ledger.md`（人填表） |
 | S3d | audit·收敛判定 | `audit-ledger.md` | CONVERGED / CONVERGING / REBOUND / STALLED + rc | ✅ **新脚本** | `scripts/audit_ledger_check.py` |
 | S3e | audit·逐条核验 | 每条 blocker claim | 采纳(怎么修)/否决(证伪依据) | ❌ 判断 | `references/audit-convergence.md` §二 |
-| G1 | 写码闸 | 收敛状态 + entry evidence | 证据报告 + 人「可以写代码了」| 🟡 证据脚本化 / 人拍板 | `lto_run.py check --to implementation` + SKILL §刹车3 |
+| G1 | 写码闸 | 收敛状态 + entry evidence | 证据报告 + 人「可以写代码了」| 🟡 证据脚本化 / 人拍板 | `lto check --to implementation` + SKILL §刹车3 |
 | S4 | implementation | 方案 | 代码 + 代码审计 | ❌ 创作（审同 S3） | SKILL P4 |
 | S5 | deploy | 改动 | schema→试运行→只读→正式→真实测 | 🟡 半 | `references/deploy-sequencing.md` |
 | S6 | observe | 真实用户流程 | 「新功能真通电」证据 | ❌ 判断 | SKILL §常见错觉「服务没挂≠上线成功」 |
 | S7 | 落盘 | 本轮决策/天花板/反例 | memory-flow 条目 / `docs/decisions/` ADR + manifest | 🟡 半 | `write_decision.py` + `references/decision-logging.md` |
-| S8 | 收尾 | summary + next_action | `current_phase=closed` + `handoff.md` | ✅ 全 | `lto_run.py closeout` |
-| S9 | 恢复 | compact 后断点 | 上下文胶囊 + 真实进度（git+state.json+ledger 三层证据） | ✅ 校验 / ❌ 续推判断 | `lto_run.py resume` + `lto_run.py check` + `references/long-loop-state.md` |
+| S8 | 收尾 | summary + next_action | `current_phase=closed` + `handoff.md` | ✅ 全 | `lto closeout` |
+| S9 | 恢复 | compact 后断点 | 上下文胶囊 + 真实进度（git+state.json+ledger 三层证据） | ✅ 校验 / ❌ 续推判断 | `lto resume` + `lto check` + `references/long-loop-state.md` |
 
 图例：✅ 已/可脚本化　🟡 半脚本化（脚本兜一部分，剩下靠人）　❌ 本质靠人判断/创作
 
@@ -49,25 +49,25 @@
 
 | 脚本 | 职责 | 输入 | 输出 | 运行 |
 |---|---|---|---|---|
-| `lto_run.py start` | 建状态文件（state.json + run-state.md；audit/deploy 加 audit-ledger；deploy 再落 preflight 快照） | `--goal --host --profile{minimal\|audit\|deploy}` [--with-audit] | `.lto/<run-id>/` | `python3 scripts/lto_run.py start --goal X` |
-| `lto_run.py resume` | 跨 session 断点恢复 | `[--run-id]` | 上下文胶囊 + state.json 更新 | `python3 scripts/lto_run.py resume` |
-| `lto_run.py check` | 校验状态完整+git 锚定+收敛趋势；可附 phase-entry 证据报告 | `[--run-id] [--strict] [--to implementation\|closed] [--json]` | WARN/ERROR + `OK <dir>`；phase evidence；rc 0/1 | `python3 scripts/lto_run.py check --to implementation --strict` |
+| `lto start` | 建状态文件（state.json + run-state.md；audit/deploy 加 audit-ledger；deploy 再落 preflight 快照） | `--goal --host --profile{minimal\|audit\|deploy}` [--with-audit] | `.lto/<run-id>/` | `lto start --goal X` |
+| `lto resume` | 跨 session 断点恢复 | `[--run-id]` | 上下文胶囊 + state.json 更新 | `lto resume` |
+| `lto check` | 校验状态完整+git 锚定+收敛趋势；可附 phase-entry 证据报告 | `[--run-id] [--strict] [--to implementation\|closed] [--json]` | WARN/ERROR + `OK <dir>`；phase evidence；rc 0/1 | `lto check --to implementation --strict` |
 | `write_decision.py` | 生成 ADR 决策记录，更新 state.user_decisions，并登记 `decision_record` artifact | `--repo --run-id --title --context --decision --consequences [--slug]` | `docs/decisions/YYYY-MM-DD-<slug>.md` + manifest entry | `python3 scripts/write_decision.py --run-id <id> --title "..." ...` |
-| `lto_run.py preflight` | 即时探活 stdout | `[--record]` | 环境健康报告 | `python3 scripts/lto_run.py preflight` |
-| `lto_run.py task-add` | 给当前 run 加一个 task（runner/next/audit 的操作对象） | `--task-id --title [--phase] [--command]` | state.json tasks 追加 + commands_run 记录 | `python3 scripts/lto_run.py task-add --task-id T1 --title "..."` |
-| `lto_run.py runner` | 单 task 执行+证据记录 | `--task-id --kind --command [--cwd] [--timeout]` | evidence + state.json 更新 | `python3 scripts/lto_run.py runner --task-id T1 --kind test --command "..."` |
-| `lto_run.py judge` | 只读审查+YAML verdict | `[--phase] [--task-id] [--rerun-tests]` | `.lto/<id>/judge/*.yaml` | `python3 scripts/lto_run.py judge --phase implementation` |
-| `lto_run.py hook` | 外部边界闸门 | `pre-commit\|pre-deploy\|pre-closeout [--force --reason]` | rc 0/1 | `python3 scripts/lto_run.py hook pre-commit` |
-| `lto_run.py closeout` | 标 closed + 出 handoff，默认写 CHANGELOG；`--no-changelog` 用于已提交后的行政收尾 | `--summary [--next-action] [--force] [--no-changelog]` | `handoff.md`；rc 0/非0 | `python3 scripts/lto_run.py closeout --summary "…"` |
+| `lto preflight` | 即时探活 stdout | `[--record]` | 环境健康报告 | `lto preflight` |
+| `lto task-add` | 给当前 run 加一个 task（runner/next/audit 的操作对象） | `--task-id --title [--phase] [--command]` | state.json tasks 追加 + commands_run 记录 | `lto task-add --task-id T1 --title "..."` |
+| `lto runner` | 单 task 执行+证据记录 | `--task-id --kind --command [--cwd] [--timeout]` | evidence + state.json 更新 | `lto runner --task-id T1 --kind test --command "..."` |
+| `lto judge` | 只读审查+YAML verdict | `[--phase] [--task-id] [--rerun-tests]` | `.lto/<id>/judge/*.yaml` | `lto judge --phase implementation` |
+| `lto hook` | 外部边界闸门 | `pre-commit\|pre-deploy\|pre-closeout [--force --reason]` | rc 0/1 | `lto hook pre-commit` |
+| `lto closeout` | 标 closed + 出 handoff，默认写 CHANGELOG；`--no-changelog` 用于已提交后的行政收尾 | `--summary [--next-action] [--force] [--no-changelog]` | `handoff.md`；rc 0/非0 | `lto closeout --summary "…"` |
 | `audit_ledger_check.py` | 判 blocker 单调收敛 | `<ledger.md>` 或 `--run-id` `[--strict]` | verdict + rc 0/1/2 | `python3 scripts/audit_ledger_check.py .lto/<id>/audit-ledger.md` |
-| `lto_run.py self-test` | 离线自检 start→resume→check→closeout→hook | — | `SELFTEST OK`；rc 0/1 | `python3 scripts/lto_run.py self-test` |
+| `lto self-test` | 离线自检 start→resume→check→closeout→hook | — | `SELFTEST OK`；rc 0/1 | `lto self-test` |
 | `audit_ledger_check.py self-test` | 离线自检四档收敛 | — | `LEDGERCHECK SELFTEST OK`；rc 0/1 | `python3 scripts/audit_ledger_check.py self-test` |
-| `lto_run.py parallel` | 并发批量跑多 task 的 shell 校验命令 | `--phase\|--task-ids [--concurrency] [--command]` | evidence + state.json | `python3 scripts/lto_run.py parallel --phase impl --concurrency 4` |
-| `lto_run.py pipeline` | 每 task 串行过多 stage（item 并发） | `--stages "..." [--phase] [--concurrency]` | evidence + state.json | `python3 scripts/lto_run.py pipeline --stages "lint {task_id}" "test {task_id}"` |
-| `lto_run.py audit` | 对抗审计编排+收口判收敛 | `[--auto-dispatch\|--discover-risks\|--collect <dir>]` | 审计简报 + audit-ledger.md | `python3 scripts/lto_run.py audit --auto-dispatch` |
-| `lto_run.py next` | 事实简报器（零 LLM，不接管路径选择） | `[--exec] [--json]` | 决策简报 / argv 命令 | `python3 scripts/lto_run.py next` |
-| `lto_run.py autopilot` | 受约束推进 harness | `--supervised [--auto-exec] [--decide [--decide-kind] [--decide-budget]]` / `--autonomous`（机械证据闸门+机械执行，不 spawn 决策 agent，与 --decide 互斥）| 决策简报 / 沙箱执行 + evidence / 三方收敛 brief / 闸门简报 | `python3 scripts/lto_run.py autopilot --supervised --decide` |
-| `lto_run.py recap` | 面向人类的回顾视图 | `[--run-id]` | 人话回顾（六问） | `python3 scripts/lto_run.py recap` |
+| `lto parallel` | 并发批量跑多 task 的 shell 校验命令 | `--phase\|--task-ids [--concurrency] [--command]` | evidence + state.json | `lto parallel --phase impl --concurrency 4` |
+| `lto pipeline` | 每 task 串行过多 stage（item 并发） | `--stages "..." [--phase] [--concurrency]` | evidence + state.json | `lto pipeline --stages "lint {task_id}" "test {task_id}"` |
+| `lto audit` | 对抗审计编排+收口判收敛 | `[--auto-dispatch\|--discover-risks\|--collect <dir>]` | 审计简报 + audit-ledger.md | `lto audit --auto-dispatch` |
+| `lto next` | 事实简报器（零 LLM，不接管路径选择） | `[--exec] [--json]` | 决策简报 / argv 命令 | `lto next` |
+| `lto autopilot` | 受约束推进 harness | `--supervised [--auto-exec] [--decide [--decide-kind] [--decide-budget]]` / `--autonomous`（机械证据闸门+机械执行，不 spawn 决策 agent，与 --decide 互斥）| 决策简报 / 沙箱执行 + evidence / 三方收敛 brief / 闸门简报 | `lto autopilot --supervised --decide` |
+| `lto recap` | 面向人类的回顾视图 | `[--run-id]` | 人话回顾（六问） | `lto recap` |
 | `smoke_test.py` | skill 自检（结构+脚本+模板+eval+ref） | — | `SMOKE OK`；rc 0/1 | `python3 scripts/smoke_test.py` |
 | `scripts/install.sh` | 安装 skill 软链，并生成/检查全局 `lto` wrapper | `[--check] [target]` + `LTO_BIN_DIR` | skill links + sentinel-managed wrapper；冲突 rc 2 | `bash scripts/install.sh --check` |
 

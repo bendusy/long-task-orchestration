@@ -3,9 +3,9 @@
 > Status: requirements and development guidance. This is not an implementation
 > patch.
 >
-> Last checked: 2026-06-16. Local branch `feat/runner-fixes` is at `6e03dec`.
-> GitHub tags exist for `v0.2.0` and `v0.3.0`, but the GitHub Releases API
-> returns an empty release list, so there are no downloadable release binaries.
+> Last release-asset check: 2026-06-16. GitHub tags exist for `v0.2.0` and
+> `v0.3.0`, but the GitHub Releases API returns an empty release list, so there
+> are no downloadable release binaries.
 
 ## Verdict
 

@@ -116,5 +116,6 @@ LTO 是给**要来回折腾好几轮、你担心做过头或做着做着跑偏**
 | 在 codex/pi/agy 当宿主的专项坑 | [references/cross-runtime-host-notes.md](./references/cross-runtime-host-notes.md) |
 | 插件真实世界 eval-run 设计 | [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md) |
 | Rust 迁移、二进制下载和 release 打包 | [references/rust-migration-release.md](./references/rust-migration-release.md) |
+| 开源交付硬门槛、文档清理和完整验证矩阵 | [references/open-source-delivery-requirements.md](./references/open-source-delivery-requirements.md) |
 | 本机 AI coding 隐私自检 | [references/privacy-self-check.md](./references/privacy-self-check.md) |
 | 装依赖 / 给朋友用 / 项目级注入 | [references/sharing-guide.md](./references/sharing-guide.md) |

@@ -201,7 +201,7 @@ v1 用普通环境变量 `LTO_RUNNER_SANDBOX` 是错的——会被子进程/前
 - **写型派工零回归**：approved=workspace-write 且父 env 预设残留只读变量 → scheduler 隔离 env spawn 后按写权限跑，不被误判。
 - **agy+workspace-write**：validate 阶段拒绝（§3.3）。
 - **四家 perm.json 字段/类型一致性**（codex M-v2）：schema 校验四家 sidecar 同构。
-- `python3 scripts/lto_run.py self-test` + 现有 pytest（含更新后断言）全绿。
+- `lto self-test` + `lto --use-python self-test` + 现有 pytest（含更新后断言）全绿。
 
 ## 7. item 0 实测结论（2026-06-10，真实 CLI 黑盒探针）
 

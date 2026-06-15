@@ -213,6 +213,20 @@ def main() -> int:
             errors += check(n_lines >= min_lines, f"reference {ref} has substance ({n_lines} lines)")
 
     # 9. Doc/code consistency lint
+    docs_consistency = SCRIPTS_DIR / "check_docs_consistency.py"
+    errors += check(docs_consistency.exists(), "check_docs_consistency.py exists")
+    if docs_consistency.exists():
+        proc = subprocess.run(
+            [sys.executable, str(docs_consistency)],
+            cwd=str(SKILL_DIR),
+            capture_output=True, text=True, timeout=30,
+        )
+        last = (proc.stdout.strip().split(chr(10)) or [""])[-1]
+        errors += check(proc.returncode == 0, f"docs consistency: {last or 'rc=' + str(proc.returncode)}")
+        if proc.returncode != 0:
+            print(proc.stdout[-2000:], file=sys.stderr)
+            print(proc.stderr[-2000:], file=sys.stderr)
+
     md_files = list(SKILL_DIR.glob("*.md")) + list((SKILL_DIR / "references").glob("*.md"))
     stale_path = "skills/long-task-orchestration/scripts"
     for md_file in md_files:
