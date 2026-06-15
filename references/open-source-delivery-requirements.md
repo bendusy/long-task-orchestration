@@ -51,6 +51,29 @@ The target open-source experience is:
    `lto plugin list`, `validate`, `render-profile`, `eval`, and `mount`.
 7. Resume old `.lto` runs without data loss or schema crashes.
 
+## Maintainer Review Frame
+
+Review this repository like a maintainer who will be paged by every bad public
+claim. The question is not "does the code mostly work on my machine"; the
+question is "can a stranger recover the same behavior from the repository,
+release assets, docs, and CI without private context".
+
+The release candidate must have:
+
+- one default execution path: Rust;
+- one compatibility story: Python fallback is explicit and tested;
+- one platform story: macOS/Linux supported, Windows native paused;
+- one public state contract: `.lto/` files are documented and backward
+  compatible;
+- one plugin authority model: data-only plugins compile into existing
+  primitives and cannot execute or promote themselves;
+- one verification chain: local gates, PR CI, tag CI, downloaded-asset
+  checksum, downloaded-asset self-test, and recorded LTO evidence.
+
+If two active documents disagree, the repository is not ready. If code and docs
+disagree, the repository is not ready. If a command works only because the
+maintainer remembers private context, the repository is not ready.
+
 ## Hard Non-Goals
 
 - No Windows native release until the runner protocol has a native design,
@@ -183,6 +206,29 @@ Required cleanup:
 8. Keep plugin docs explicit that Rust owns static data-only commands and
    Python legacy owns any unported real eval-run path.
 
+## Repository Cleanup Requirements
+
+"The repo is messy" is not a style complaint. It is a release blocker when the
+mess changes user behavior, hides ownership, leaks private context, or makes
+verification non-reproducible.
+
+Before a public push or release candidate, classify every confusing surface:
+
+| Surface | Required decision |
+|---|---|
+| Root files | Keep only active user/developer entry points or clearly named project metadata. |
+| `references/` | Mark stale roadmaps historical, rewrite active docs, or delete obsolete drafts. |
+| `scripts/lto/` Python | Classify each surface as fallback, legacy plugin, test support, or removal candidate. |
+| `src/` Rust | Keep public command ownership in Rust; avoid adding second owners for the same behavior. |
+| `plugins/` | Keep data-only manifests/prompts/evals; no executable plugin side effects. |
+| `samples/` and `fixtures/` | Keep only redacted, public-safe, regression-useful examples. |
+| `.lto/` | Never commit local run state. Record only redacted evidence or docs derived from it. |
+| release/build artifacts | Do not commit generated binaries, tarballs, or local build outputs. |
+| private paths/handoffs | Remove, redact, or classify as explicit test fixtures before release. |
+
+Cleanup is accepted only when the diff makes ownership simpler. Moving clutter
+around without deleting, labeling, or testing it is not cleanup.
+
 ## Rust Takeover Requirements
 
 Rust takeover is complete only when these are true:
@@ -207,6 +253,27 @@ The next cleanup pass must reduce duplicate logic. The correct order is:
    [`python-rust-ownership.json`](./python-rust-ownership.json), with the
    human-readable table in [`python-rust-ownership.md`](./python-rust-ownership.md).
 4. Delete unreachable or duplicated code only after rollback is preserved.
+
+## Development Requirements Design Gate
+
+Every unfinished development requirement must be designed before code is added.
+The design does not need ceremony, but it must answer the questions that decide
+ownership and verification:
+
+| Question | Required answer |
+|---|---|
+| What user-visible gap exists? | Name the missing behavior or conflicting claim. |
+| Which layer owns it? | Rust core, Python fallback, plugin data, docs, CI, release workflow, or test fixture. |
+| What is the public surface? | CLI flags, files, JSON fields, docs, release assets, or workflow jobs. |
+| What state/protocol changes? | Field definitions, optionality, redaction class, and old-run behavior. |
+| What failure modes matter? | Missing binary, stale docs, broken fallback, bad runner, dirty worktree, private leak, CI drift. |
+| What is the smallest cleanup? | Delete, merge, reuse, or explicitly defer before adding another path. |
+| How is it verified? | Local command, fixture, CI job, release-asset check, privacy scan, or LTO evidence item. |
+| How is it rolled back or retired? | Fallback path, removal gate, legacy label, or documented non-goal. |
+
+No requirement is ready for implementation until these answers are written in
+an LTO task, an ADR, or this requirements document. A vague "clean up Python" or
+"support Windows" is not a requirement; it is an unbounded hazard.
 
 ## Release And Binary Requirements
 
@@ -349,6 +416,25 @@ tar -xzf <asset>.tar.gz
 ```
 
 Only after this gate may docs say users can download binaries.
+
+### Push Candidate Freeze Gate
+
+Before pushing a release candidate branch or tag, freeze the repository and
+answer these in the LTO run:
+
+- exact branch, commit, tag, and remote target;
+- local verification commands and results;
+- PR CI run IDs or URLs for macOS/Linux;
+- tag CI run ID or URL for release assets;
+- release asset names and checksum verification result;
+- downloaded binary `self-test` result;
+- privacy scan result and classification of any hits;
+- `git status --short --branch` result;
+- remaining dirty paths, if any, and the explicit maintainer acceptance for
+  leaving them dirty.
+
+If any answer is missing, the correct status is "development branch", not
+"ready to push".
 
 ## Acceptance Checklist
 
