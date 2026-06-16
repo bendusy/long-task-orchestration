@@ -39,6 +39,9 @@
 - Kept `task-add`, `task-update`, `phase`, `parallel`, and `pipeline` as hidden
   compatibility entrypoints for one deprecation cycle, while documenting the
   new `task add/update/phase` and `run parallel/pipeline` forms.
+- Extended the ownership gate to track those hidden compatibility entrypoints
+  separately from visible help rows, and made auto-discovered audit risks
+  closeout-blocking by default through `disposition: open`.
 - Added short help descriptions for every visible top-level command and a Rust
   test that fails if future visible commands omit help text.
 - Recorded scheduler runner lifecycle events / O1-1 tracing as explicit

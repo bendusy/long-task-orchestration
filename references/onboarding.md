@@ -7,7 +7,7 @@
 
 **LTO 是一个跨 runtime 的长任务 harness：它给你 state、artifact、runner、audit、sandbox、resume/recap 和 gate。你这个 host agent 仍然是 planner；LTO 让你的选择可恢复、可审计、可自动化推进。**
 
-它不复制 Claude Code 原生任务 harness 的实现——它是给**任意 runtime**用的版本。当前接管线是 Rust v2；Python 入口只作为兼容 fallback 保留。
+它不复制 Claude Code 原生任务 harness 的实现——它是给**任意 runtime**用的版本。当前接管线是 Rust v2；Python fallback 已在 v0.5.0 退役，旧 run 兼容由 Rust fixture 和 release notes 保留。
 
 ## 术语表（读正文前先扫一遍）
 
@@ -130,7 +130,7 @@ lto --repo <目标仓库> <子命令> [参数]
 | `self-test` | 离线自检（验证 LTO 自己没坏） | — |
 
 > `runner/run parallel/run pipeline` 编排的是 **shell 命令**（pytest/lint 批处理）。
-> 真正的 **agent fan-out**（spawn 隔离 agent 做对抗审计/找风险）走 `audit --auto-dispatch` 和 `audit --discover-risks`，底层是 `agent_exec` spawn 原语 + scheduler（带并发/退避/限流/healthcheck）。
+> 真正的 **agent fan-out**（spawn 隔离 agent 做对抗审计/找风险）走 `audit --auto-dispatch` 和 `audit --discover-risks`，底层是 Rust `audit_dispatch` + scheduler（带并发/退避/限流/healthcheck）。
 
 ## Harness-first 新能力（区别于旧提示清单）
 

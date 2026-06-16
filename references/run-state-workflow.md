@@ -259,9 +259,9 @@ Default mode reports missing phase evidence but keeps rc 0 when the base
 other host runtimes can parse it directly.
 
 The four development evidence lines and four closure evidence lines are host
-contracts today. Until both Python and Rust `check` paths enforce them, record
-them in run-state/task evidence and let `judge`/human review treat missing
-fields as closeout blockers.
+contracts today. Rust `check` enforces the machine-verifiable gates; record the
+remaining host-judgment evidence in run-state/task evidence and let
+`judge`/human review treat missing fields as closeout blockers.
 
 ## Closeout
 

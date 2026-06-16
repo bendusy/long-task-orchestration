@@ -23,6 +23,13 @@
     {"command": "memory", "owner": "rust-core", "python_role": "removed"},
     {"command": "plugin", "owner": "rust-core", "python_role": "removed"}
   ],
+  "hidden_compatibility_commands": [
+    {"command": "task-add", "owner": "rust-core", "python_role": "removed", "replacement": "task add"},
+    {"command": "task-update", "owner": "rust-core", "python_role": "removed", "replacement": "task update"},
+    {"command": "phase", "owner": "rust-core", "python_role": "removed", "replacement": "task phase"},
+    {"command": "parallel", "owner": "rust-core", "python_role": "removed", "replacement": "run parallel"},
+    {"command": "pipeline", "owner": "rust-core", "python_role": "removed", "replacement": "run pipeline"}
+  ],
   "plugin_subcommands": [
     {"command": "list", "owner": "rust-core", "python_role": "removed"},
     {"command": "validate", "owner": "rust-core", "python_role": "removed"},

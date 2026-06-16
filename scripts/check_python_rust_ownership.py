@@ -56,8 +56,10 @@ def main() -> int:
     doc_text = DOC.read_text(encoding="utf-8")
 
     top_entries = data.get("top_level_commands", [])
+    hidden_entries = data.get("hidden_compatibility_commands", [])
     plugin_entries = data.get("plugin_subcommands", [])
     top_manifest = manifest_commands(top_entries)
+    hidden_manifest = manifest_commands(hidden_entries)
     plugin_manifest = manifest_commands(plugin_entries)
     rust_plugin_manifest = [
         str(entry["command"]) for entry in plugin_entries if entry.get("owner") == "rust-core"
@@ -65,6 +67,12 @@ def main() -> int:
 
     check(data.get("schema_version") == 1, "ownership manifest schema_version is 1", errors)
     check(len(top_manifest) == len(set(top_manifest)), "top-level ownership commands are unique", errors)
+    check(len(hidden_manifest) == len(set(hidden_manifest)), "hidden compatibility commands are unique", errors)
+    check(
+        not (set(top_manifest) & set(hidden_manifest)),
+        "hidden compatibility commands are not visible top-level commands",
+        errors,
+    )
     check(len(plugin_manifest) == len(set(plugin_manifest)), "plugin ownership commands are unique", errors)
 
     rust_top = parse_rust_commands(run(["cargo", "run", "--quiet", "--", "--help"]))
@@ -78,6 +86,25 @@ def main() -> int:
         check(entry.get("owner") == "rust-core", f"{command} owner is rust-core", errors)
         check(entry.get("python_role") == "removed", f"{command} Python role is removed", errors)
         check(f"`{command}`" in doc_text, f"ownership doc names top-level command {command}", errors)
+
+    for entry in hidden_entries:
+        command = str(entry["command"])
+        replacement = str(entry.get("replacement", ""))
+        check(entry.get("owner") == "rust-core", f"hidden {command} owner is rust-core", errors)
+        check(entry.get("python_role") == "removed", f"hidden {command} Python role is removed", errors)
+        check(bool(replacement), f"hidden {command} declares replacement", errors)
+        check(f"`{command}`" in doc_text, f"ownership doc names hidden command {command}", errors)
+        check(
+            f"`{replacement}`" in doc_text,
+            f"ownership doc names hidden command {command} replacement",
+            errors,
+        )
+        try:
+            run(["cargo", "run", "--quiet", "--", command, "--help"])
+            parses = True
+        except RuntimeError:
+            parses = False
+        check(parses, f"hidden {command} parses through Rust help", errors)
 
     for entry in plugin_entries:
         command = str(entry["command"])

@@ -1322,8 +1322,17 @@ fn dispatch_risk_discovery(
     }
     let state_path = run_dir.join("state.json");
     let mut state = state::load_state(&state_path)?;
+    append_discovered_risk_points(&mut state, risks);
+    state::save_state(&state_path, &state)?;
+    util::sync_run_state_md(&run_dir.join("run-state.md"), &state)?;
+    println!("risk discovery: {discoverer} added risk points");
+    Ok(())
+}
+
+fn append_discovered_risk_points(state: &mut LtoState, risks: Vec<Value>) -> usize {
     let risk_points = util::json_array_mut(&mut state.risk_points);
     let mut next = risk_points.len() + 1;
+    let mut added = 0;
     for risk in risks {
         let claim = risk
             .get("claim")
@@ -1340,14 +1349,13 @@ fn dispatch_risk_discovery(
             "evidence_to_check": risk.get("evidence_to_check").and_then(Value::as_str).unwrap_or(""),
             "severity": risk.get("severity").and_then(Value::as_str).unwrap_or("medium"),
             "status": "open",
+            "disposition": "open",
             "recorded_at": util::iso_now(),
         }));
         next += 1;
+        added += 1;
     }
-    state::save_state(&state_path, &state)?;
-    util::sync_run_state_md(&run_dir.join("run-state.md"), &state)?;
-    println!("risk discovery: {discoverer} added risk points");
-    Ok(())
+    added
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2085,6 +2093,27 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn discovered_risk_points_default_to_open_disposition() {
+        let mut state = LtoState::default();
+        let added = append_discovered_risk_points(
+            &mut state,
+            vec![
+                json!({
+                    "claim": "closeout gate misses auto risks",
+                    "evidence_to_check": "state.json risk_points",
+                    "severity": "critical"
+                }),
+                json!({"claim": "   "}),
+            ],
+        );
+        assert_eq!(added, 1);
+        let risks = state.risk_points.as_array().unwrap();
+        assert_eq!(risks.len(), 1);
+        assert_eq!(risks[0]["status"], "open");
+        assert_eq!(risks[0]["disposition"], "open");
     }
 
     #[test]

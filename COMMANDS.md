@@ -11,7 +11,9 @@ Rust-owned business commands tracked by `src/cli.rs` `COMMANDS`.
 Compatibility note: `task-add`, `task-update`, `phase`, `parallel`, and
 `pipeline` remain runnable as hidden legacy top-level commands for one
 deprecation cycle. New scripts should use `task add`, `task update`,
-`task phase`, `run parallel`, and `run pipeline`.
+`task phase`, `run parallel`, and `run pipeline`. Their Rust ownership is
+tracked separately in `references/python-rust-ownership.json` because hidden
+aliases do not appear in the public help table below.
 
 | Command | Summary | Required | Optional |
 |---|---|---|---|

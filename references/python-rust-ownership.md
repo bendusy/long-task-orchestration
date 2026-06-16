@@ -13,10 +13,10 @@ compatibility is preserved by Rust fixture tests, not by keeping a Python entryp
 Do not reintroduce a second command implementation. If a new public command is
 added, add it to this manifest and expose it through the Rust CLI.
 
-## Top-Level Commands
+## Visible Top-Level Commands
 
-All 24 top-level public commands are Rust-owned. `lto-rs --help` additionally
-shows clap's built-in `help` pseudo-command; it is not listed here.
+All 21 visible top-level business commands are Rust-owned. `lto-rs --help`
+additionally shows clap's built-in `help` pseudo-command; it is not listed here.
 
 | Command | Owner | Python Role |
 |---|---|---|
@@ -41,6 +41,28 @@ shows clap's built-in `help` pseudo-command; it is not listed here.
 | `runs` | Rust core | removed |
 | `memory` | Rust core | removed |
 | `plugin` | Rust core | removed |
+
+## Hidden Compatibility Commands
+
+These aliases are still parsed by Rust for one deprecation cycle, but they are
+hidden from `lto-rs --help` and must not be used by new scripts. They are listed
+separately so the ownership gate can verify that compatibility does not become
+a second implementation path.
+
+| Hidden Command | Replacement | Owner | Python Role |
+|---|---|---|---|
+| `task-add` | `task add` | Rust core | removed |
+| `task-update` | `task update` | Rust core | removed |
+| `phase` | `task phase` | Rust core | removed |
+| `parallel` | `run parallel` | Rust core | removed |
+| `pipeline` | `run pipeline` | Rust core | removed |
+
+## Preserved Python Helpers
+
+`scripts/write_decision.py` is intentionally preserved as a standalone
+repository helper for ADR creation and artifact registration. It is not a CLI
+fallback, does not route `lto` commands, and must not import the retired
+`scripts/lto/` package.
 
 ## Plugin Subcommands
 
@@ -79,6 +101,7 @@ The Python fallback was removed only after the staged transfer completed:
 `scripts/check_python_rust_ownership.py` fails if:
 
 - Rust help exposes a top-level command missing from the ownership manifest.
+- A hidden compatibility command stops parsing through Rust.
 - Rust plugin help exposes a subcommand not marked `rust-core`.
 - Any manifest entry still claims an active Python role.
 - This Markdown document stops naming a manifest entry.

@@ -22,18 +22,19 @@ agent 用 `scripts/delegate/delegate.sh -a codex -p prompt.md -o reply.md` 派�
 - `recap` 不显示 token 用量
 - delegate 产出的 token sidecar（`reply.md.meta.json`）落了盘，LTO 不读它
 
-## 2. 根因（已核实代码）
+## 2. 根因（2026-06-10 历史诊断）
 
-LTO 有**两条平行的派工路径**，只有一条写 `agent_runs`：
+当时的 LTO 有**两条平行的派工路径**，只有一条写 `agent_runs`：
 
 | 路径 | 入口 | 写 agent_runs? | 证据 |
 |---|---|---|---|
 | Python 调度 | `agent_exec.spawn_agents(persist=True)` | ✅ 写 | `agent_exec.py:130-133`：`state["agent_runs"][job_id].append(result.to_dict())` |
 | shell 派工 | `scripts/delegate/delegate.sh` → `runners/*.sh` | ❌ 不写 | delegate.sh 直接 exec runner 脚本，产出 reply + `.meta.json` sidecar，**完全不经过 agent_exec / state.py** |
 
-`audit --auto-dispatch` 和 `--discover-risks` 走的是 Python 路径（agent_exec），
-所以它们派的 agent **会**进 agent_runs。但 agent 手动调 `delegate.sh` 走的是
-shell 路径，产物落在文件系统（reply + sidecar），LTO 的 state 层对此一无所知。
+当时 `audit --auto-dispatch` 和 `--discover-risks` 走的是 Python 调度路径
+（agent_exec），所以它们派的 agent **会**进 agent_runs。但 agent 手动调
+`delegate.sh` 走的是 shell 路径，产物落在文件系统（reply + sidecar），LTO 的
+state 层对此一无所知。
 
 这不是 bug，是**两条路径从未打通**：delegate.sh 是给 host agent「手动 fan-out」
 用的轻量工具，agent_exec 是 LTO 内部调度原语，两者各写各的，中间没有桥。

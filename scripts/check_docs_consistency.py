@@ -133,6 +133,23 @@ def main() -> int:
         check("python3 scripts/lto_run.py" not in text, f"{rel} does not teach Python as active entrypoint", errors)
         check("`lto_run.py" not in text, f"{rel} table/prose uses lto wrapper rather than lto_run.py command names", errors)
 
+    active_runtime_docs = [
+        "references/onboarding.md",
+        "references/execution-loop.md",
+        "references/plugin-real-eval-runner.md",
+    ]
+    for rel in active_runtime_docs:
+        text = read(rel)
+        stale_modules = contains_any(text, ["agent_exec.py", "agent_job.py", "scheduler.py", "autopilot.py"])
+        check(not stale_modules, f"{rel} does not document retired Python runtime modules: {stale_modules}", errors)
+
+    plugin_real = read("references/plugin-real-eval-runner.md")
+    check(
+        "Python fallback was removed in v0.5.0" in plugin_real,
+        "plugin real eval runner doc records Python fallback removal",
+        errors,
+    )
+
     run_state = read("references/run-state-workflow.md")
     check("python3 scripts/lto_run.py" not in run_state, "run-state workflow no longer documents Python fallback commands", errors)
     check("lto start" in run_state or "cargo run --quiet -- start" in run_state, "run-state workflow documents Rust CLI commands", errors)
