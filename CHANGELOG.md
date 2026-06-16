@@ -44,6 +44,8 @@
   closeout-blocking by default through `disposition: open`.
 - Hardened closeout/check risk gates so legacy risk records with `status: open`
   and no `disposition` also block closeout instead of being silently ignored.
+- Fixed ledger evaluation so a later zero-blocker audit round converges even if
+  an earlier round rebounded before fixes landed.
 - Added short help descriptions for every visible top-level command and a Rust
   test that fails if future visible commands omit help text.
 - Recorded scheduler runner lifecycle events / O1-1 tracing as explicit

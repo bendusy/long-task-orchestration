@@ -674,6 +674,9 @@ pub fn evaluate_ledger(rounds: &[LedgerRound], strict: bool) -> LedgerVerdict {
         .iter()
         .map(|round| round.high.saturating_add(round.critical))
         .collect::<Vec<_>>();
+    if blockers.last().copied().unwrap_or_default() == 0 {
+        return LedgerVerdict::Converged;
+    }
     for idx in 1..blockers.len() {
         if blockers[idx] > blockers[idx - 1] {
             return LedgerVerdict::Rebound;
@@ -682,11 +685,7 @@ pub fn evaluate_ledger(rounds: &[LedgerRound], strict: bool) -> LedgerVerdict {
             return LedgerVerdict::Stalled;
         }
     }
-    if blockers.last().copied().unwrap_or_default() == 0 {
-        LedgerVerdict::Converged
-    } else {
-        LedgerVerdict::Converging
-    }
+    LedgerVerdict::Converging
 }
 
 pub fn ledger_sequence(rounds: &[LedgerRound]) -> String {
@@ -873,6 +872,29 @@ mod tests {
                 false,
             ),
             LedgerVerdict::Rebound
+        );
+        assert_eq!(
+            evaluate_ledger(
+                &[
+                    LedgerRound {
+                        label: "r1".into(),
+                        high: 1,
+                        critical: 0
+                    },
+                    LedgerRound {
+                        label: "r2".into(),
+                        high: 2,
+                        critical: 0
+                    },
+                    LedgerRound {
+                        label: "r3".into(),
+                        high: 0,
+                        critical: 0
+                    },
+                ],
+                true,
+            ),
+            LedgerVerdict::Converged
         );
         assert_eq!(
             evaluate_ledger(
