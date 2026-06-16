@@ -36,7 +36,7 @@ Primary outcomes:
 | Sensors | `state.json`, `artifacts.json`, runner stdout/stderr, tests, git state, issue/finding logs | Sensors can be noisy. |
 | Observer / estimator | `check`, `judge`, `audit`, privacy scan, schema parsers | Estimates truth; never truth itself. |
 | Advisory brief (host-decided) | `next`, `recap`, `autopilot --supervised`, `autopilot --decide` | Surfaces signals and candidate facts; host decides. `--decide` escalates to three-way heterogeneous agents and returns a convergence brief, still host-decided. |
-| Actuators | `runner`, `parallel`, `pipeline`, delegate runners, worktree exec | Must be bounded. |
+| Actuators | `runner`, `run parallel`, `run pipeline`, delegate runners, worktree exec | Must be bounded. |
 | Actuator limiter | `PermissionPolicy`, worktree sandbox, budget, timeout, concurrency, human approval | Prevents runaway action. |
 | Supervisor | Human + host agent | Final authority. |
 | Final stabilization | `closeout`, changelog, handoff, validation evidence | Locks what happened. |
@@ -374,7 +374,7 @@ Phase 1 event types:
 | `run.started` | `start` creates run |
 | `run.closed` | `closeout` succeeds |
 | `phase.changed` | phase transition when available |
-| `task.created` | `task-add` |
+| `task.created` | `task add` |
 | `task.status_changed` | runner/host changes task status |
 | `runner.started` | command/job begins |
 | `runner.finished` | command/job ends; may include rc, elapsed, timeout, repo-relative touched files |
@@ -521,7 +521,7 @@ Every actuator must be bounded.
 |---|---|
 | `runner` | timeout, cwd, touched files, permission snapshot |
 | `audit --auto-dispatch` | runner health, timeout, max auditors, no same-runtime self-audit |
-| `parallel`/`pipeline` | concurrency, shell command list, rc capture |
+| `run parallel` / `run pipeline` | concurrency, shell command list, rc capture |
 | `autopilot --auto-exec` | worktree sandbox, safe command allowlist, no push/deploy/delete |
 | future `eval-run` | plan-only default, execute explicit, budget, max concurrency, frozen evidence |
 | future fan-out | barrier object, max workers, synthesis requirement, contradiction report |

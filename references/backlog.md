@@ -16,6 +16,7 @@
 | ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | ✅ 已实现 | am 0.7.0 AmCliSink 落地真跑；am 可选，无 am 优雅降级 |
 | ⑤ | `AgentJobKind.TOURNAMENT` / `LOOP` 枚举 | ☆ 低 | **P3 不做** | YAGNI | 无真实触发场景，保持占位 |
 | ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
+| ⑨ | Scheduler runner lifecycle events / O1-1 tracing | ★★ 高 | P1 | Deferred | Python 退役不阻塞；应从 `scheduler.rs` 单点发 runner started/finished/retry/healthcheck 事件 |
 
 ## 依赖链
 
@@ -89,6 +90,17 @@
 - **触发条件（满足才动手）**：ACP 协议出 **1.0 / 摘掉 unstable 标 + remote agent 做完**，或 acpx 摘 alpha。在此之前**只观察不立项**。
 - **接的时候接什么**：接 **ACP 协议**（标准、可复用），不绑 acpx 这一个 alpha CLI。
 
----
+## ⑨ Scheduler runner lifecycle events / O1-1 tracing（P1）
+
+- **是什么**：从 `src/scheduler.rs` 单点发出 runner lifecycle 事件，包括
+  runner.started、runner.finished、retry、timeout、healthcheck failure/recovery。
+- **为何延期**：Python fallback 退役的硬前置是 Rust 能写 `events.jsonl` /
+  `telemetry.json` 并保护 start/closeout/runner 证据；这一点已由
+  `src/events.rs` / `src/telemetry.rs` 和 obs-smoke 验证。scheduler chokepoint
+  全量 tracing 会影响 audit/judge/parallel/pipeline/eval-run 多条路径，适合作为
+  独立可观测性迭代，而不是混进 Python 删除提交。
+- **验收线**：scheduler spawn/finish/timeout/retry/healthcheck 路径有结构化 event；
+  plugin eval-run 和 audit 自动继承事件；`telemetry.json` 能派生 runner lifecycle
+  计数；隐私脚本仍为 0 unclassified hits。
 
 > 维护：项落地后更新本表「状态」列并在 `CHANGELOG.md` 记一笔；新 deferred 入此表，勿散落记忆。

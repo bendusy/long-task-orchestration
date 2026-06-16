@@ -67,7 +67,7 @@ lto collect-agent-run --task-id T1 --runner codex \
 ```
 
 - **优点**：不碰 runner 语义、不碰 agent_exec、不让 runner 接 agent。纯粹补一个
-  「事后登记」入口，和刚加的 `task-update` 同构（都是「把已发生的事实记进
+  「事后登记」入口，和 `task update` 同构（都是「把已发生的事实记进
   state」）。工作量小（~一个命令 + 复用 AgentResult schema）。
 - **缺点**：要 agent 多走一步（派完工手动 collect）。容错靠人——忘了 collect
   就还是不进 state。sidecar 格式各 runner 不一（pi 有 totalTokens，agy 标
@@ -88,7 +88,7 @@ lto collect-agent-run --task-id T1 --runner codex \
 
 ## 5. 倾向（供参考，非决定）
 
-倾向**方案 A**：它和今天刚加的 `task-update` / `phase` 是同一类东西——「把已
+倾向**方案 A**：它和 `task update` / `task phase` 是同一类东西——「把已
 发生的事实补登进 state 的薄命令」，不碰核心边界，容错代价（要手动多走一步）
 可接受，且可以在 `next` / `recap` 的简报里提示「检测到未登记的 sidecar，跑
 collect-agent-run 收进来」来补容错。

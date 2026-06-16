@@ -1,13 +1,13 @@
 # LTO 执行循环器：harness primitives
 
-> runner 执行 task + 自动记录证据，judge 只读审查 + YAML verdict，parallel/pipeline 批量执行多个 task 的校验命令。它们是 host agent 组合 workflow 的 primitive，不是完整业务流程执行层。
+> runner 执行 task + 自动记录证据，judge 只读审查 + YAML verdict，`run parallel` / `run pipeline` 批量执行多个 task 的校验命令。它们是 host agent 组合 workflow 的 primitive，不是完整业务流程执行层。
 
-> **命名诚实说明**：LTO 的 `parallel`/`pipeline` 借用了 pi-dynamic-workflows 的**命令名**，但**语义不同**。
+> **命名诚实说明**：LTO 的 `run parallel` / `run pipeline` 借用了 pi-dynamic-workflows 的**命令名**，但**语义不同**。
 > pi-dynamic-workflows 编排的单元是 `agent(prompt)`——拉独立子 agent 跑 LLM 任务（fan-out + 隔离 + 沙箱确定性）。
 > LTO 编排的单元是 **shell 命令**（`pytest`/`lint` 等批量校验），跑在同一个 repo cwd、共享 git HEAD。
 > 这是**命令批处理**，不是 agent fan-out。需要真正的多 agent 分工走 `lto audit --auto-dispatch`（Rust CLI 路径，scheduler 派异构审计方）或 repo 自带 `scripts/delegate/`（codex/pi/agy 手动 fan-out）。
 
-## parallel
+## run parallel
 
 并发批量执行多个 task 的 shell 校验命令，每个 task 落 evidence。
 
@@ -15,13 +15,13 @@
 L="lto"  # or: L="cargo run --quiet --"
 
 # 并发执行某 phase 下所有 pending task
-$L parallel --phase implementation --concurrency 4
+$L run parallel --phase implementation --concurrency 4
 
 # 并发执行指定 task
-$L parallel --task-ids T1 T2 T3 --concurrency 3
+$L run parallel --task-ids T1 T2 T3 --concurrency 3
 
 # 自定义命令
-$L parallel --kind test --command "pytest tests/ -x" --timeout 600
+$L run parallel --kind test --command "pytest tests/ -x" --timeout 600
 ```
 
 输出实时进度：
@@ -33,13 +33,13 @@ $L parallel --kind test --command "pytest tests/ -x" --timeout 600
 ◆ 2/3 passed (12.3s)
 ```
 
-## pipeline
+## run pipeline
 
 让每个 task 串行通过多个 shell stage（item 间并发），每个 stage 落 evidence。stage 命令里用 `{task_id}` 占位符。
 
 ```bash
 # 每个 task 依次跑 lint → test 两个 stage
-$L pipeline --phase implementation \
+$L run pipeline --phase implementation \
   --stages "ruff check {task_id}" "pytest -k {task_id}" --concurrency 4
 ```
 

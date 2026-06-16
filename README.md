@@ -43,7 +43,7 @@ $L start --goal "提升检索召回" \
   --entropy-check "on stall, try a non-keyword-list hypothesis and log overfit reflection"
 
 # ② 加一个任务，然后执行它（task 要先建，runner 不会自动建）
-$L task-add --task-id T1 --title "给 login 加判空" --command "pytest tests/ -x"
+$L task add --task-id T1 --title "给 login 加判空" --command "pytest tests/ -x"
 $L runner  --task-id T1 --kind test
 
 # ③ 迷路了就问：现在该干什么？
@@ -58,7 +58,7 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 **跨天回来接着干**：`$L resume`（给 AI 拉上下文）或 `$L recap`（给人看人话回顾）。
 
-> 想看全部 24 个业务命令和参数摘要，先看 **[COMMANDS.md](./COMMANDS.md)**；`lto-rs --help` 会额外显示 clap 内置 `help`，所以 help 行数是 25。想看先后关系、autopilot 自动化怎么用，去 **[onboarding.md](./references/onboarding.md)**，那是给 agent 读的完整手册。
+> 想看全部 21 个可见业务命令和参数摘要，先看 **[COMMANDS.md](./COMMANDS.md)**；`lto-rs --help` 会额外显示 clap 内置 `help`，所以 help 行数是 22。想看先后关系、autopilot 自动化怎么用，去 **[onboarding.md](./references/onboarding.md)**，那是给 agent 读的完整手册。
 
 ## v0.3.0 新增（2026-06-09）
 
@@ -72,7 +72,7 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 ## Rust v2 轨道（当前接管线）
 
-`lto-rs` 是按 2026-06-15 v2 spec 落地的 Rust 核心轨道，也是当前唯一支持的 LTO CLI。Python fallback 已在 v0.5.0 退役；历史 `.lto` state 兼容由 Rust fixture 测试保留。当前状态是：Rust workspace、24/24 个业务命令真实现（`--help` 另含 clap 内置 `help` 行）、runner event parser、state/budget、delivery contract、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin validate/render-profile/eval/mount/source-note/eval-run`、events/telemetry、COMMANDS.md 和回归测试已建立。
+`lto-rs` 是按 2026-06-15 v2 spec 落地的 Rust 核心轨道，也是当前唯一支持的 LTO CLI。Python fallback 已在 v0.5.0 退役；历史 `.lto` state 兼容由 Rust fixture 测试保留。当前状态是：Rust workspace、21 个可见业务命令真实现（旧 `task-add`/`task-update`/`phase`/`parallel`/`pipeline` 作为隐藏兼容入口保留；`--help` 另含 clap 内置 `help` 行）、runner event parser、state/budget、delivery contract、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin validate/render-profile/eval/mount/source-note/eval-run`、events/telemetry、COMMANDS.md 和回归测试已建立。
 
 当前 Rust v2 支持面聚焦 macOS 和 Linux。Windows 二进制与 runner 派工支持先暂停：内置 delegate runtime 仍是 `scripts/delegate/runners/*.sh` + `healthcheck.sh` 的 shell 协议，先把 Rust 接管旧 Python 和核心代码清理做稳，再重新评估 Windows 原生 runner。
 

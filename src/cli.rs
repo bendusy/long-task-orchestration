@@ -22,17 +22,14 @@ pub const COMMANDS: &[&str] = &[
     "judge",
     "hook",
     "self-test",
-    "parallel",
-    "pipeline",
     "audit",
     "next",
     "autopilot",
     "recap",
     "budget",
     "release",
-    "task-add",
-    "task-update",
-    "phase",
+    "task",
+    "run",
     "collect-agent-run",
     "runs",
     "memory",
@@ -50,6 +47,7 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    #[command(about = "Create a new local LTO run")]
     Start {
         #[arg(long)]
         run_id: Option<String>,
@@ -72,6 +70,7 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
+    #[command(about = "Check run gates, phase evidence, and ledger status")]
     Check {
         #[arg(long)]
         run_id: Option<String>,
@@ -82,6 +81,7 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = "Close a finished run and write handoff artifacts")]
     Closeout {
         #[arg(long)]
         run_id: Option<String>,
@@ -98,18 +98,23 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
+    #[command(about = "Print an agent resume capsule for the active run")]
     Resume {
         #[arg(long)]
         run_id: Option<String>,
     },
+    #[command(about = "Probe repo, git, and runner health before work")]
     Preflight {
         #[arg(long)]
         run_id: Option<String>,
         #[arg(long)]
         record: bool,
     },
+    #[command(about = "Run or dispatch one scheduler-backed task")]
     Runner(RunnerCommand),
+    #[command(about = "Record or run an evidence-based judgment")]
     Judge(JudgeCommand),
+    #[command(about = "Run an opt-in boundary hook")]
     Hook {
         gate: String,
         #[arg(long)]
@@ -117,9 +122,18 @@ pub enum Commands {
         #[arg(long, default_value = "")]
         reason: String,
     },
+    #[command(about = "Run the built-in CLI contract self-test")]
     SelfTest,
+    #[command(about = "Run batch and staged job primitives")]
+    Run {
+        #[command(subcommand)]
+        command: RunCommand,
+    },
+    #[command(hide = true)]
     Parallel(ParallelCommand),
+    #[command(hide = true)]
     Pipeline(PipelineCommand),
+    #[command(about = "Dispatch and collect heterogeneous audit rounds")]
     Audit {
         #[arg(long)]
         run_id: Option<String>,
@@ -130,12 +144,14 @@ pub enum Commands {
         #[arg(long)]
         allow_same_family: bool,
     },
+    #[command(about = "Print deterministic next-step facts")]
     Next {
         #[arg(long)]
         run_id: Option<String>,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = "Advance safe mechanical steps under LTO gates")]
     Autopilot {
         #[arg(long)]
         run_id: Option<String>,
@@ -148,16 +164,19 @@ pub enum Commands {
         #[arg(long, default_value_t = 300)]
         timeout: u64,
     },
+    #[command(about = "Render a human progress recap")]
     Recap {
         #[arg(long)]
         run_id: Option<String>,
         #[arg(long)]
         artifacts: bool,
     },
+    #[command(about = "Inspect budget usage")]
     Budget {
         #[command(subcommand)]
         command: BudgetCommand,
     },
+    #[command(about = "Plan a host-owned release")]
     Release {
         #[arg(long, default_value = "minor")]
         part: String,
@@ -166,6 +185,12 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    #[command(about = "Manage tasks and run phase")]
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+    #[command(hide = true)]
     TaskAdd {
         #[arg(long)]
         run_id: Option<String>,
@@ -178,6 +203,7 @@ pub enum Commands {
         #[arg(long)]
         command: Option<String>,
     },
+    #[command(hide = true)]
     TaskUpdate {
         #[arg(long)]
         run_id: Option<String>,
@@ -192,12 +218,14 @@ pub enum Commands {
         #[arg(long)]
         touch: Vec<String>,
     },
+    #[command(hide = true)]
     Phase {
         #[arg(long)]
         run_id: Option<String>,
         #[arg(long = "set")]
         set_phase: Option<String>,
     },
+    #[command(about = "Register an existing agent reply artifact")]
     CollectAgentRun {
         #[arg(long)]
         run_id: Option<String>,
@@ -218,14 +246,64 @@ pub enum Commands {
         #[arg(long)]
         note: Option<String>,
     },
+    #[command(about = "List local LTO runs")]
     Runs,
+    #[command(about = "Export, publish, or resume redacted run memory")]
     Memory {
         #[command(subcommand)]
         command: MemoryCommand,
     },
+    #[command(about = "Manage data-only plugins and eval packs")]
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RunCommand {
+    #[command(about = "Run multiple task commands concurrently")]
+    Parallel(ParallelCommand),
+    #[command(about = "Run staged commands for selected tasks")]
+    Pipeline(PipelineCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TaskCommand {
+    #[command(about = "Add a pending task")]
+    Add {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        phase: Option<String>,
+        #[arg(long)]
+        command: Option<String>,
+    },
+    #[command(about = "Update task status, notes, phase, or touched paths")]
+    Update {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        phase: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        touch: Vec<String>,
+    },
+    #[command(about = "Show or set the current run phase")]
+    Phase {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long = "set")]
+        set_phase: Option<String>,
     },
 }
 
@@ -827,6 +905,39 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 },
             )?;
         }
+        Commands::Run { command } => match command {
+            RunCommand::Parallel(cmd) => {
+                ops::cmd_parallel(
+                    &args.repo,
+                    ops::ParallelOptions {
+                        run_id: cmd.run_id,
+                        task_ids: cmd.task_ids,
+                        phase: cmd.phase,
+                        kind: cmd.kind,
+                        command: cmd.command,
+                        timeout: cmd.timeout,
+                        concurrency: cmd.concurrency,
+                        job_file: cmd.job_file,
+                    },
+                )?;
+            }
+            RunCommand::Pipeline(cmd) => {
+                ops::cmd_pipeline(
+                    &args.repo,
+                    ops::PipelineOptions {
+                        run_id: cmd.run_id,
+                        task_ids: cmd.task_ids,
+                        phase: cmd.phase,
+                        stages: cmd.stages,
+                        kind: cmd.kind,
+                        timeout: cmd.timeout,
+                        concurrency: cmd.concurrency,
+                        continue_on_error: cmd.continue_on_error,
+                        job_file: cmd.job_file,
+                    },
+                )?;
+            }
+        },
         Commands::Parallel(cmd) => {
             ops::cmd_parallel(
                 &args.repo,
@@ -892,6 +1003,49 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 },
             )?;
         }
+        Commands::Task { command } => match command {
+            TaskCommand::Add {
+                run_id,
+                task_id,
+                title,
+                phase,
+                command,
+            } => {
+                ops::cmd_task_add(
+                    &args.repo,
+                    ops::TaskAddOptions {
+                        run_id,
+                        task_id,
+                        title,
+                        phase,
+                        command,
+                    },
+                )?;
+            }
+            TaskCommand::Update {
+                run_id,
+                task_id,
+                status,
+                phase,
+                note,
+                touch,
+            } => {
+                ops::cmd_task_update(
+                    &args.repo,
+                    ops::TaskUpdateOptions {
+                        run_id,
+                        task_id,
+                        status,
+                        phase,
+                        note,
+                        touch,
+                    },
+                )?;
+            }
+            TaskCommand::Phase { run_id, set_phase } => {
+                ops::cmd_phase(&args.repo, ops::PhaseOptions { run_id, set_phase })?;
+            }
+        },
         Commands::TaskAdd {
             run_id,
             task_id,
@@ -1632,7 +1786,21 @@ mod tests {
     #[test]
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
-        assert_eq!(COMMANDS.len(), 24);
+        assert_eq!(COMMANDS.len(), 21);
+    }
+
+    #[test]
+    fn visible_commands_have_short_help() {
+        for cmd in Args::command().get_subcommands() {
+            let name = cmd.get_name();
+            if COMMANDS.contains(&name) {
+                let about = cmd
+                    .get_about()
+                    .map(|text| text.to_string())
+                    .unwrap_or_default();
+                assert!(!about.trim().is_empty(), "{name} is missing short help");
+            }
+        }
     }
 
     #[test]
@@ -1647,6 +1815,68 @@ mod tests {
     fn audit_flags_are_registered() {
         Args::try_parse_from(["lto-rs", "audit", "--auto-dispatch"]).unwrap();
         Args::try_parse_from(["lto-rs", "audit", "--discover-risks"]).unwrap();
+    }
+
+    #[test]
+    fn grouped_run_commands_and_legacy_aliases_are_registered() {
+        Args::try_parse_from([
+            "lto-rs",
+            "run",
+            "parallel",
+            "--task-ids",
+            "T1",
+            "--command",
+            "cargo test",
+        ])
+        .unwrap();
+        Args::try_parse_from([
+            "lto-rs",
+            "run",
+            "pipeline",
+            "--task-ids",
+            "T1",
+            "--stages",
+            "fmt",
+        ])
+        .unwrap();
+        Args::try_parse_from(["lto-rs", "parallel", "--task-ids", "T1"]).unwrap();
+        Args::try_parse_from(["lto-rs", "pipeline", "--stages", "fmt"]).unwrap();
+    }
+
+    #[test]
+    fn grouped_task_commands_and_legacy_aliases_are_registered() {
+        Args::try_parse_from([
+            "lto-rs",
+            "task",
+            "add",
+            "--task-id",
+            "T1",
+            "--title",
+            "Grouped task",
+        ])
+        .unwrap();
+        Args::try_parse_from([
+            "lto-rs",
+            "task",
+            "update",
+            "--task-id",
+            "T1",
+            "--status",
+            "done",
+        ])
+        .unwrap();
+        Args::try_parse_from(["lto-rs", "task", "phase", "--set", "implementation"]).unwrap();
+        Args::try_parse_from(["lto-rs", "task-add", "--task-id", "T1", "--title", "Old"]).unwrap();
+        Args::try_parse_from([
+            "lto-rs",
+            "task-update",
+            "--task-id",
+            "T1",
+            "--status",
+            "done",
+        ])
+        .unwrap();
+        Args::try_parse_from(["lto-rs", "phase", "--set", "implementation"]).unwrap();
     }
 
     #[test]
@@ -1862,8 +2092,8 @@ mod tests {
         let doc =
             std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("COMMANDS.md"))
                 .unwrap();
-        assert!(doc.contains("Command count: 25."));
-        assert!(doc.contains("24 Rust-owned business"));
+        assert!(doc.contains("Command count: 22."));
+        assert!(doc.contains("21 Rust-owned business"));
         assert!(doc.contains("clap built-in `help`"));
         for command in COMMANDS {
             assert!(

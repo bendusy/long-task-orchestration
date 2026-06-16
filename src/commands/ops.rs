@@ -1176,7 +1176,7 @@ pub fn cmd_task_update(repo: &Path, options: TaskUpdateOptions) -> anyhow::Resul
         && options.touch.is_empty()
     {
         anyhow::bail!(
-            "task-update is a no-op: pass at least one of --status / --phase / --note / --touch"
+            "task update is a no-op: pass at least one of --status / --phase / --note / --touch"
         );
     }
     let task = find_task_mut(&mut ctx.state.tasks, &options.task_id)?;

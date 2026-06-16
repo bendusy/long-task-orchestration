@@ -54,7 +54,7 @@
 | `lto check` | 校验状态完整+git 锚定+收敛趋势；可附 phase-entry 证据报告 | `[--run-id] [--strict] [--to implementation\|closed] [--json]` | WARN/ERROR + `OK <dir>`；phase evidence；rc 0/1 | `lto check --to implementation --strict` |
 | `write_decision.py` | 生成 ADR 决策记录，更新 state.user_decisions，并登记 `decision_record` artifact | `--repo --run-id --title --context --decision --consequences [--slug]` | `docs/decisions/YYYY-MM-DD-<slug>.md` + manifest entry | `python3 scripts/write_decision.py --run-id <id> --title "..." ...` |
 | `lto preflight` | 即时探活 stdout | `[--record]` | 环境健康报告 | `lto preflight` |
-| `lto task-add` | 给当前 run 加一个 task（runner/next/audit 的操作对象） | `--task-id --title [--phase] [--command]` | state.json tasks 追加 + commands_run 记录 | `lto task-add --task-id T1 --title "..."` |
+| `lto task add` | 给当前 run 加一个 task（runner/next/audit 的操作对象） | `--task-id --title [--phase] [--command]` | state.json tasks 追加 + commands_run 记录 | `lto task add --task-id T1 --title "..."` |
 | `lto runner` | 单 task 执行+证据记录 | `--task-id --kind --command [--cwd] [--timeout]` | evidence + state.json 更新 | `lto runner --task-id T1 --kind test --command "..."` |
 | `lto judge` | 只读审查+YAML verdict | `[--phase] [--task-id] [--rerun-tests]` | `.lto/<id>/judge/*.yaml` | `lto judge --phase implementation` |
 | `lto hook` | 外部边界闸门 | `pre-commit\|pre-deploy\|pre-closeout [--force --reason]` | rc 0/1 | `lto hook pre-commit` |
@@ -62,8 +62,8 @@
 | `audit_ledger_check.py` | 判 blocker 单调收敛 | `<ledger.md>` 或 `--run-id` `[--strict]` | verdict + rc 0/1/2 | `python3 scripts/audit_ledger_check.py .lto/<id>/audit-ledger.md` |
 | `lto self-test` | 离线自检 start→resume→check→closeout→hook | — | `SELFTEST OK`；rc 0/1 | `lto self-test` |
 | `audit_ledger_check.py self-test` | 离线自检四档收敛 | — | `LEDGERCHECK SELFTEST OK`；rc 0/1 | `python3 scripts/audit_ledger_check.py self-test` |
-| `lto parallel` | 并发批量跑多 task 的 shell 校验命令 | `--phase\|--task-ids [--concurrency] [--command]` | evidence + state.json | `lto parallel --phase impl --concurrency 4` |
-| `lto pipeline` | 每 task 串行过多 stage（item 并发） | `--stages "..." [--phase] [--concurrency]` | evidence + state.json | `lto pipeline --stages "lint {task_id}" "test {task_id}"` |
+| `lto run parallel` | 并发批量跑多 task 的 shell 校验命令 | `--phase\|--task-ids [--concurrency] [--command]` | evidence + state.json | `lto run parallel --phase impl --concurrency 4` |
+| `lto run pipeline` | 每 task 串行过多 stage（item 并发） | `--stages "..." [--phase] [--concurrency]` | evidence + state.json | `lto run pipeline --stages "lint {task_id}" "test {task_id}"` |
 | `lto audit` | 对抗审计编排+收口判收敛 | `[--auto-dispatch\|--discover-risks\|--collect <dir>]` | 审计简报 + audit-ledger.md | `lto audit --auto-dispatch` |
 | `lto next` | 事实简报器（零 LLM，不接管路径选择） | `[--exec] [--json]` | 决策简报 / argv 命令 | `lto next` |
 | `lto autopilot` | 受约束推进 harness | `--supervised [--auto-exec] [--decide [--decide-kind] [--decide-budget]]` / `--autonomous`（机械证据闸门+机械执行，不 spawn 决策 agent，与 --decide 互斥）| 决策简报 / 沙箱执行 + evidence / 三方收敛 brief / 闸门简报 | `lto autopilot --supervised --decide` |

@@ -19,7 +19,7 @@ LTO 文档里反复出现这些词。第一次见不用全记，卡住了回这�
 | **host agent（宿主）** | **就是你**——正在用 LTO 的这个 LLM（claude / codex / pi / agy …）。LTO 不替你做决策，你才是 planner。 |
 | **primitive** | LTO 提供的可组合基础动作：`runner` / `judge` / `audit` / `next` / `recap` 等。你把它们拼起来，而不是选一个预设流程。 |
 | **run** | 一次长任务。`start` 创建一个 run，数据存在 `.lto/<run-id>/`。 |
-| **task** | run 里一个可独立执行的单元（如「给 login 加判空」），有命令、有产出、有证据。`runner` 不会自动建 task，你得先 `task-add`。 |
+| **task** | run 里一个可独立执行的单元（如「给 login 加判空」），有命令、有产出、有证据。`runner` 不会自动建 task，你得先 `task add`。 |
 | **phase（阶段）** | 任务的逻辑阶段：spec → 审计 → 开发 → 部署 → 实测 → 收尾。`--phase` 参数按阶段批量操作 task。 |
 | **artifact** | task 产出的证据：日志、代码 diff、审计报告。「说做完了」得拿得出 artifact。 |
 | **runner** | LTO 派出去执行一个 task 的角色（可以是 codex/pi/agy/claude，或就跑一条 shell 命令）。 |
@@ -97,7 +97,7 @@ lto --repo <目标仓库> <子命令> [参数]
 
 跨 runtime 当宿主的专项坑（沙箱、派工、preflight）见 `cross-runtime-host-notes.md`——不同家差异大，派工前先读。
 
-## 24 个业务命令速查
+## 21 个可见业务命令速查
 
 > 参数真源摘要见仓库根目录 [COMMANDS.md](../COMMANDS.md)。下表按常用工作流排序；`audit --discover-risks` 是 audit 的重要变体，与主命令同计。
 
@@ -110,13 +110,13 @@ lto --repo <目标仓库> <子命令> [参数]
 | `next` | **事实简报**：分析状态 → 给下一步 primitive 建议或决策简报 | 导航 |
 | `check [--strict] [--to implementation\|closed] [--json]` | 校验状态完整性；只读输出 phase-entry 证据 | 自检 |
 | `preflight` | 探活环境（sandbox/network/git/mcp/tmux） | 自检 |
-| `task-add --task-id T1 --title "..."` | 给当前 run 加一个 task（runner/next 的操作对象） | 开工 |
-| `task-update --task-id T1 --status done` | 改 task 状态/证据/touched_files，**不跑 subprocess**（标记完成别滥用 runner --command true） | 执行 |
-| `phase [--set audit]` | 看 / 推进 run 的 current_phase（轻量，无 evidence 闸门；正式收尾走 check --to/closeout） | 导航 |
+| `task add --task-id T1 --title "..."` | 给当前 run 加一个 task（runner/next 的操作对象） | 开工 |
+| `task update --task-id T1 --status done` | 改 task 状态/证据/touched_files，**不跑 subprocess**（标记完成别滥用 runner --command true） | 执行 |
+| `task phase [--set audit]` | 看 / 推进 run 的 current_phase（轻量，无 evidence 闸门；正式收尾走 check --to/closeout） | 导航 |
 | `runner --task-id T1 --command "..."` | 执行单 task（跑命令）+ 落证据 | 执行 |
 | `collect-agent-run --task-id T1 --runner codex --reply r.md` | 把 delegate.sh 手动派工的产物（reply+token sidecar）登记进 agent_runs，让 recap 看见 | 执行 |
-| `parallel --phase X` | 并发批量跑多 task 的 shell 校验命令 | 执行 |
-| `pipeline --stages "..." "..."` | 每 task 串行过多 stage（item 间并发） | 执行 |
+| `run parallel --phase X` | 并发批量跑多 task 的 shell 校验命令 | 执行 |
+| `run pipeline --stages "..." "..."` | 每 task 串行过多 stage（item 间并发） | 执行 |
 | `judge --phase X [--rerun-tests]` | 只读审查 + YAML verdict | 审查 |
 | `audit [--auto-dispatch]` | **对抗审计**：派异构审计方 + 收口判收敛 | 审计 |
 | `audit --discover-risks` | 派独立 agent 主动发现漏掉的风险点 | 审计 |
@@ -129,7 +129,7 @@ lto --repo <目标仓库> <子命令> [参数]
 | `release --date ... [--dry-run]` | 打印 host-owned VERSION/CHANGELOG/git tag 发布计划；不替 host 写 `.git` | 发布 |
 | `self-test` | 离线自检（验证 LTO 自己没坏） | — |
 
-> `runner/parallel/pipeline` 编排的是 **shell 命令**（pytest/lint 批处理）。
+> `runner/run parallel/run pipeline` 编排的是 **shell 命令**（pytest/lint 批处理）。
 > 真正的 **agent fan-out**（spawn 隔离 agent 做对抗审计/找风险）走 `audit --auto-dispatch` 和 `audit --discover-risks`，底层是 `agent_exec` spawn 原语 + scheduler（带并发/退避/限流/healthcheck）。
 
 ## Harness-first 新能力（区别于旧提示清单）
@@ -203,7 +203,7 @@ $L start --goal "提升检索召回" \
   --entropy-check "on stall, change hypothesis and log overfit reflection"
 
 # 2. 加任务（task 是 runner/next/audit 的操作对象，先建出来）
-$L task-add --task-id T1 --title "给 login 加判空" --command "pytest tests/test_auth.py -x"
+$L task add --task-id T1 --title "给 login 加判空" --command "pytest tests/test_auth.py -x"
 
 # 3. 干活：执行 task + 落证据
 $L runner --task-id T1 --kind test --command "pytest tests/test_auth.py -x" --note "验证空指针修复"

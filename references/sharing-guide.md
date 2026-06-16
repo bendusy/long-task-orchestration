@@ -188,4 +188,4 @@ cargo run --manifest-path <repo>/Cargo.toml -- \
 
 Pi tool 命名上 LTO 用了 `lto_` 前缀（`lto_pipeline` / `lto_parallel`），与 pi-dynamic-workflows 注册的 `workflow` 工具不撞名。同装时模型两种能力都有：要派 agent 做 fan-out 审查/重构走 pi-dynamic-workflows，要长任务导航走 LTO。
 
-> 注意：LTO 的 `parallel` / `pipeline` 子命令**借了 pi-dynamic-workflows 的命令名但语义不同**——LTO 编排的是 shell 命令（`pytest`/`lint`）不是 agent。这是命令批处理，不是 agent fan-out。别因为同名就以为它们能互相替代。
+> 注意：LTO 的 `run parallel` / `run pipeline` 子命令**借了 pi-dynamic-workflows 的命令名但语义不同**——LTO 编排的是 shell 命令（`pytest`/`lint`）不是 agent。这是命令批处理，不是 agent fan-out。别因为同名就以为它们能互相替代。

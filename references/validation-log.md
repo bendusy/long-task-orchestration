@@ -40,6 +40,23 @@ Python fallback 删除。
 均已改为 Rust-only；rollback 依赖 git history、legacy `.lto` fixture、release note
 与上方 parity/observability 证据。
 
+## 2026-06-16：Phase 2.5 CLI command surface simplification
+
+**目标**：按 `references/specs/2026-06-16-goal-python-retirement-and-debt-cleanup.md`
+要求先落设计，再降低顶层命令认知负担。
+
+| Gate | 命令/动作 | 结果 |
+|---|---|---|
+| Design record | `python3 scripts/write_decision.py --slug phase-25-cli-command-surface ...` | 写入 `docs/decisions/2026-06-16-phase-25-cli-command-surface.md` 并登记 LTO artifact |
+| Top-level help | `cargo run --quiet -- --help` | 可见业务命令从 24 降到 21；`task` 聚合 `add/update/phase`，`run` 聚合 `parallel/pipeline`；每个可见命令都有 short help |
+| Compatibility parse | Rust CLI tests + manual smoke | 旧 `task-add`/`task-update`/`phase`/`parallel`/`pipeline` 保留为 hidden top-level compatibility entrypoints |
+| Grouped command smoke | `lto task add/update/phase`; `lto run parallel --task-ids cli-smoke --command true` | 新分组命令可执行并落状态/evidence |
+| Docs/ownership gates | `python3 scripts/check_docs_consistency.py`; `python3 scripts/check_python_rust_ownership.py` | COMMANDS.md count `22 == 22`；ownership manifest matches visible Rust help |
+
+**边界**：本轮不把 `next`/`recap`/`resume`/`check` 合并成一个 mode-heavy 命令；
+它们服务不同读者和决策点，强并会降低语义清晰度。更激进的 12-14 顶层命令目标
+保留给有使用证据后的后续 deprecation cycle。
+
 ## 2026-05-31：cross-runtime 真执行实测（codex 当宿主）
 
 **目标**：坐实「谁当宿主都能跑这套编排 + 都能正确把另外家族当审计方」。不是问模型「如果当宿主会怎么做」（那只测阅读理解），而是让整条编排链在真机上**真的发生一遍**。

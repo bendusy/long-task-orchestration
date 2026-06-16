@@ -31,6 +31,20 @@
   monotonic event ids under `.events.lock`, tolerant duplicate reads, and
   derived telemetry without `control_recommendations`.
 
+### CLI surface and debt tracking
+
+- Added a Phase 2.5 CLI surface decision record and reduced the visible
+  top-level command surface from 24 to 21 business commands by grouping task
+  lifecycle commands under `task` and batch execution commands under `run`.
+- Kept `task-add`, `task-update`, `phase`, `parallel`, and `pipeline` as hidden
+  compatibility entrypoints for one deprecation cycle, while documenting the
+  new `task add/update/phase` and `run parallel/pipeline` forms.
+- Added short help descriptions for every visible top-level command and a Rust
+  test that fails if future visible commands omit help text.
+- Recorded scheduler runner lifecycle events / O1-1 tracing as explicit
+  deferred P1 backlog after the Python retirement, rather than leaving the
+  observability gap as an untracked audit note.
+
 ## v0.4.3 — 2026-06-16
 
 ### Binary identity and release verification

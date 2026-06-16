@@ -193,9 +193,9 @@ run-state、task evidence 或等价 artifact：
 
 可用 primitive：
 
-- `lto task-add` 拆 slice
+- `lto task add` 拆 slice
 - `lto runner` 逐 slice 落验证证据
-- `lto parallel` / `lto pipeline` 跑批量 shell 验证
+- `lto run parallel` / `lto run pipeline` 跑批量 shell 验证
 - `lto audit --auto-dispatch` 做 adversarial review
 - `lto check --to closed --strict`
 - 场景插件 `plugins/migration-refactor`：最小样例先行 + 批间回归闸门路径、diff 审计 / 语义等价 profile
@@ -304,7 +304,7 @@ run-state、task evidence 或等价 artifact：
 可用 primitive：
 
 - `lto start --goal/--why/--done-when` 记录目标与完成标准。
-- `lto task-add` 按阶段拆 task。
+- `lto task add` 按阶段拆 task。
 - 开发前补齐四证据：架构对齐、第一性原理、精简去重、价值测评。
 - specify 阶段挂 `plugins/dev-workflow`（spec co-design 审可复用
   `plugins/adversarial-audit` 的 refuter profile）。

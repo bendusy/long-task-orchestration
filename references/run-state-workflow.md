@@ -94,7 +94,7 @@ After `start`, add the tasks the run will work on. A task is the unit that
 `runner` / `next` / `audit` operate on — `runner` does NOT auto-create them.
 
 ```bash
-lto --repo . task-add \
+lto --repo . task add \
   --task-id T1 \
   --title "给 login 加判空校验" \
   --command "pytest tests/test_auth.py -x"   # optional: planned command (runner/autopilot use it)
@@ -290,10 +290,10 @@ pi-dynamic-workflows but different semantics).
 L="cargo run --quiet --"
 
 # parallel: run many tasks' shell verify commands concurrently, record evidence
-$L parallel --phase implementation --concurrency 4 --command "pytest -x"
+$L run parallel --phase implementation --concurrency 4 --command "pytest -x"
 
 # pipeline: each task runs sequential stages ({task_id} placeholder), items concurrent
-$L pipeline --phase implementation --stages "ruff check {task_id}" "pytest -k {task_id}"
+$L run pipeline --phase implementation --stages "ruff check {task_id}" "pytest -k {task_id}"
 ```
 
 Each records evidence via the shared `exec.run_command` kernel. `--auto-commit`

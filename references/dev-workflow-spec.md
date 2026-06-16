@@ -247,7 +247,7 @@ eval pack 与现有三插件同合同：
 
 - 触发信号：新需求 / 新功能从零开始；改动会产生新模块或新对外行为；
   你发现自己想跳过 spec 直接写码。
-- 可用 primitive：`lto start --goal/--why/--done-when`；`task-add` 拆阶段；
+- 可用 primitive：`lto start --goal/--why/--done-when`；`task add` 拆阶段；
   specify 阶段挂 `dev-workflow` 插件 + 可选 `adversarial-audit`；
   `runner` 落实现证据；`audit --auto-dispatch`（impl-audit）；
   `worktree_exec`（dispatch 阶段隔离写入）；`judge`；`closeout`。

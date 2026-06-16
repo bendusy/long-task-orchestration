@@ -2,11 +2,16 @@
 
 Source of truth: `src/cli.rs` `COMMANDS` plus the clap argument definitions in `src/cli.rs`.
 
-Command count: 25.
+Command count: 22.
 
-This is the `lto-rs --help` top-level row count: 24 Rust-owned business
+This is the `lto-rs --help` top-level row count: 21 Rust-owned business
 commands plus clap built-in `help`. The table below lists only the
 Rust-owned business commands tracked by `src/cli.rs` `COMMANDS`.
+
+Compatibility note: `task-add`, `task-update`, `phase`, `parallel`, and
+`pipeline` remain runnable as hidden legacy top-level commands for one
+deprecation cycle. New scripts should use `task add`, `task update`,
+`task phase`, `run parallel`, and `run pipeline`.
 
 | Command | Summary | Required | Optional |
 |---|---|---|---|
@@ -19,17 +24,14 @@ Rust-owned business commands tracked by `src/cli.rs` `COMMANDS`.
 | `judge` | Write a state verdict or run LLM judge mode over frozen evidence. | None for state mode; LLM mode requires `--brief --baseline-reply --candidate-reply --candidate-runner` | `--run-id`, `--task-id`, `--phase`, `--runner`, `--rerun-tests`, `--case-dir`, `--judge-runner`, `--execute` |
 | `hook` | Run boundary gates. | `gate` | `--force`, `--reason` |
 | `self-test` | Assert the Rust CLI command contract. | None | None |
-| `parallel` | Run multiple task commands in a batch, or submit a job file. | None | `--run-id`, `--task-ids`, `--phase`, `--kind`, `--command`, `--timeout`, `--concurrency`, `--job-file` |
-| `pipeline` | Run staged commands for selected tasks, or submit a job file. | `--stages` for command mode | `--run-id`, `--task-ids`, `--phase`, `--kind`, `--timeout`, `--concurrency`, `--continue-on-error`, `--job-file` |
+| `run` | Run batch and staged job primitives. | Subcommand: `parallel` or `pipeline` | `run parallel --run-id --task-ids --phase --kind --command --timeout --concurrency --job-file`; `run pipeline --run-id --task-ids --phase --stages --kind --timeout --concurrency --continue-on-error --job-file` |
 | `audit` | Prepare audit dispatch facts and auditor selection. | None | `--run-id`, `--auto-dispatch`, `--discover-risks`, `--allow-same-family` |
 | `next` | Print deterministic next-step facts and route suggestion. | None | `--run-id`, `--json` |
 | `autopilot` | Print supervised route facts and optionally auto-exec safe task commands. | None | `--run-id`, `--supervised`, `--auto-exec`, `--autonomous`, `--timeout` |
 | `recap` | Render a human recap of goal, why, progress, remaining work, tokens, and live jobs. | None | `--run-id`, `--artifacts` |
 | `budget` | Check budget status. | `check --run-id` | `--tokens` |
 | `release` | Print a host-owned release plan. | `--date` | `--part`, `--dry-run` |
-| `task-add` | Add a pending task to the active run. | `--task-id`, `--title` | `--run-id`, `--phase`, `--command` |
-| `task-update` | Update task status, phase, notes, or touched files. | `--task-id` plus at least one change flag | `--run-id`, `--status`, `--phase`, `--note`, `--touch` |
-| `phase` | Print or change the current run phase. | None | `--run-id`, `--set` |
+| `task` | Add/update tasks or show/set the current run phase. | Subcommand: `add`, `update`, or `phase` | `task add --run-id --task-id --title --phase --command`; `task update --run-id --task-id --status --phase --note --touch`; `task phase --run-id --set` |
 | `collect-agent-run` | Register an already-produced runner reply into `agent_runs`. | `--task-id`, `--runner`, `--reply` | `--run-id`, `--meta`, `--model`, `--status`, `--elapsed-sec`, `--note` |
 | `runs` | List local `.lto` runs with `state.json`. | None | None |
 | `memory` | Export/publish/resume redacted local run projection. | Subcommand: `export`, `publish`, or `resume` | `--run-id`, `--project`, `--am-bin`, `--timeout`, `--dry-run` |
