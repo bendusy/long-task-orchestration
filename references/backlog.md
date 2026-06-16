@@ -16,7 +16,7 @@
 | ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | ✅ 已实现 | am 0.7.0 AmCliSink 落地真跑；am 可选，无 am 优雅降级 |
 | ⑤ | `AgentJobKind.TOURNAMENT` / `LOOP` 枚举 | ☆ 低 | **P3 不做** | YAGNI | 无真实触发场景，保持占位 |
 | ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
-| ⑨ | Scheduler runner lifecycle events / O1-1 tracing | ★★ 高 | P1 | Deferred | Python 退役不阻塞；应从 `scheduler.rs` 单点发 runner started/finished/retry/healthcheck 事件 |
+| ⑨ | Scheduler runner lifecycle events / O2 caller-side wiring | ★★ 高 | P1 | ✅ 已实现 | O2 采纳 Option A：调用方 emit runner started/finished/retry/healthcheck，`scheduler.rs` 保持无 run_id / 无事件 I/O |
 
 ## 依赖链
 
