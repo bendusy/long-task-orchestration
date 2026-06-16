@@ -10,6 +10,7 @@ pub mod effect;
 pub mod llm_judge;
 pub mod merge_review;
 pub mod plugin;
+pub mod plugin_eval_run;
 pub mod process;
 pub mod runner_events;
 pub mod scheduler;

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -320,7 +321,66 @@ pub fn static_eval(
     }))
 }
 
-fn load_manifest(plugin_dir: &Path) -> Result<PluginManifest, PluginError> {
+pub fn create_source_note(
+    plugin_dir: &Path,
+    note_id: &str,
+    title: &str,
+    url: &str,
+    claims: &[String],
+    hypotheses: &[String],
+    append_manifest: bool,
+) -> Result<PathBuf, PluginError> {
+    let plugin_dir = plugin_dir.canonicalize()?;
+    if !ID_RE.is_match(note_id) {
+        return Err(PluginError::Message(
+            "source note id must match plugin id pattern".to_string(),
+        ));
+    }
+
+    let sources_dir = plugin_dir.join("sources");
+    if sources_dir.exists() && sources_dir.is_symlink() {
+        return Err(PluginError::Message(
+            "sources directory must not be a symlink".to_string(),
+        ));
+    }
+    fs::create_dir_all(&sources_dir)?;
+
+    let path = sources_dir.join(format!("{note_id}.json"));
+    ensure_inside(&plugin_dir, &path)?;
+    let data = serde_json::json!({
+        "id": note_id,
+        "title": title,
+        "url": url,
+        "captured_at": crate::state::iso_now(),
+        "claims": claims
+            .iter()
+            .enumerate()
+            .map(|(idx, claim)| serde_json::json!({
+                "id": format!("c{}", idx + 1),
+                "text": claim,
+                "status": "unverified",
+            }))
+            .collect::<Vec<_>>(),
+        "hypotheses": hypotheses
+            .iter()
+            .enumerate()
+            .map(|(idx, hypothesis)| serde_json::json!({
+                "id": format!("h{}", idx + 1),
+                "text": hypothesis,
+            }))
+            .collect::<Vec<_>>(),
+        "lto_status": "source-note-only; inert until referenced by an experimental plugin",
+    });
+    atomic_write_json(&path, &data)?;
+
+    if append_manifest {
+        append_source_note_to_manifest(&plugin_dir, &path)?;
+    }
+
+    Ok(path)
+}
+
+pub(crate) fn load_manifest(plugin_dir: &Path) -> Result<PluginManifest, PluginError> {
     let manifest_path = plugin_dir.join("plugin.json");
     if !manifest_path.exists() {
         return Err(PluginError::MissingManifest(manifest_path));
@@ -328,7 +388,10 @@ fn load_manifest(plugin_dir: &Path) -> Result<PluginManifest, PluginError> {
     Ok(serde_json::from_str(&fs::read_to_string(manifest_path)?)?)
 }
 
-fn load_profile(plugin_dir: &Path, profile_id: &str) -> Result<serde_json::Value, PluginError> {
+pub(crate) fn load_profile(
+    plugin_dir: &Path,
+    profile_id: &str,
+) -> Result<serde_json::Value, PluginError> {
     let validation = validate_plugin(plugin_dir)?;
     if !validation.ok {
         return Err(PluginError::Validation(validation.errors));
@@ -554,7 +617,7 @@ fn summarize_eval_pack(
     )
 }
 
-fn safe_plugin_file(plugin_dir: &Path, rel: &str) -> Result<PathBuf, PluginError> {
+pub(crate) fn safe_plugin_file(plugin_dir: &Path, rel: &str) -> Result<PathBuf, PluginError> {
     if rel.contains("..") || rel.starts_with('/') || rel.starts_with('\\') {
         return Err(PluginError::Message(format!(
             "invalid relative file path: {rel}"
@@ -574,6 +637,78 @@ fn safe_plugin_file(plugin_dir: &Path, rel: &str) -> Result<PathBuf, PluginError
 
 fn read_json_file(path: &Path) -> Result<serde_json::Value, PluginError> {
     Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+}
+
+fn append_source_note_to_manifest(plugin_dir: &Path, path: &Path) -> Result<(), PluginError> {
+    let manifest_path = plugin_dir.join("plugin.json");
+    ensure_inside(plugin_dir, &manifest_path)?;
+    let mut manifest = read_json_file(&manifest_path)?;
+    let Some(obj) = manifest.as_object_mut() else {
+        return Err(PluginError::Message(
+            "plugin.json must be an object".to_string(),
+        ));
+    };
+    let rel = path
+        .strip_prefix(plugin_dir)
+        .map_err(|_| PluginError::Message(format!("path escapes plugin dir: {}", path.display())))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let source_notes = obj
+        .entry("source_notes")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let Some(notes) = source_notes.as_array_mut() else {
+        return Err(PluginError::Message(
+            "plugin.json source_notes must be an array".to_string(),
+        ));
+    };
+    if !notes
+        .iter()
+        .any(|value| value.as_str() == Some(rel.as_str()))
+    {
+        notes.push(serde_json::Value::String(rel));
+        atomic_write_json(&manifest_path, &manifest)?;
+    }
+    Ok(())
+}
+
+fn ensure_inside(root: &Path, path: &Path) -> Result<(), PluginError> {
+    let root = root.canonicalize()?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| PluginError::Message(format!("path has no parent: {}", path.display())))?
+        .canonicalize()?;
+    if parent.strip_prefix(&root).is_err() {
+        return Err(PluginError::Message(format!(
+            "path escapes plugin dir: {}",
+            path.display()
+        )));
+    }
+    if path.exists() && path.is_symlink() {
+        return Err(PluginError::Message(format!(
+            "path must not be a symlink: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn atomic_write_json(path: &Path, value: &serde_json::Value) -> Result<(), PluginError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| PluginError::Message(format!("path has no parent: {}", path.display())))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("json");
+    let mut tmp = tempfile::Builder::new()
+        .prefix(&format!(".{file_name}."))
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    tmp.write_all((serde_json::to_string_pretty(value)? + "\n").as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(path)
+        .map_err(|err| PluginError::Io(err.error))?;
+    Ok(())
 }
 
 fn sandbox_rank(sandbox: &str) -> u8 {
@@ -717,6 +852,126 @@ mod tests {
     }
 
     #[test]
+    fn source_note_writes_expected_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_minimal_plugin(tmp.path(), r#""source_notes":[]"#);
+        let path = create_source_note(
+            tmp.path(),
+            "x.note",
+            "Source title",
+            "https://example.test/source",
+            &["first claim".to_string(), "second claim".to_string()],
+            &["maybe useful".to_string()],
+            false,
+        )
+        .unwrap();
+
+        let data: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(data["id"], "x.note");
+        assert_eq!(data["title"], "Source title");
+        assert_eq!(data["url"], "https://example.test/source");
+        assert!(
+            data["captured_at"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert_eq!(data["claims"][0]["id"], "c1");
+        assert_eq!(data["claims"][0]["text"], "first claim");
+        assert_eq!(data["claims"][0]["status"], "unverified");
+        assert_eq!(data["claims"][1]["id"], "c2");
+        assert_eq!(data["hypotheses"][0]["id"], "h1");
+        assert_eq!(
+            data["lto_status"],
+            "source-note-only; inert until referenced by an experimental plugin"
+        );
+    }
+
+    #[test]
+    fn source_note_rejects_invalid_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_minimal_plugin(tmp.path(), r#""source_notes":[]"#);
+        let err = create_source_note(
+            tmp.path(),
+            "../bad",
+            "bad",
+            "https://example.test",
+            &[],
+            &[],
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("source note id must match"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_note_rejects_symlink_sources_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_minimal_plugin(tmp.path(), r#""source_notes":[]"#);
+        let target = tmp.path().join("outside");
+        fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, tmp.path().join("sources")).unwrap();
+
+        let err = create_source_note(
+            tmp.path(),
+            "x.note",
+            "bad",
+            "https://example.test",
+            &[],
+            &[],
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("sources directory must not be a symlink")
+        );
+    }
+
+    #[test]
+    fn source_note_append_manifest_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_minimal_plugin(tmp.path(), r#""source_notes":[]"#);
+        for _ in 0..2 {
+            create_source_note(
+                tmp.path(),
+                "x.note",
+                "Source title",
+                "https://example.test/source",
+                &[],
+                &[],
+                true,
+            )
+            .unwrap();
+        }
+
+        let manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(tmp.path().join("plugin.json")).unwrap())
+                .unwrap();
+        let notes = manifest["source_notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0], "sources/x.note.json");
+    }
+
+    #[test]
+    fn source_note_rejects_non_object_manifest_when_appending() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("plugin.json"), "[]").unwrap();
+        let err = create_source_note(
+            tmp.path(),
+            "x.note",
+            "Source title",
+            "https://example.test/source",
+            &[],
+            &[],
+            true,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("plugin.json must be an object"));
+    }
+
+    #[test]
     fn validate_rejects_unknown_profile_family() {
         let tmp = tempfile::tempdir().unwrap();
         let plugin_dir = tmp.path().join("plugin");
@@ -815,5 +1070,17 @@ mod tests {
         let err = mount_plugin(tmp.path(), &lock).unwrap_err();
         assert!(matches!(err, PluginError::Validation(_)));
         assert!(!lock.exists());
+    }
+
+    fn write_minimal_plugin(plugin_dir: &Path, source_notes_entry: &str) {
+        let manifest = format!(
+            r#"{{
+              "id":"x.test","version":"0.1.0","kind":"path-plugin","stage":"experimental",
+              "security":{{"executable_code":false,"max_sandbox":"read-only"}},
+              {source_notes_entry},
+              "provides":{{}}
+            }}"#
+        );
+        fs::write(plugin_dir.join("plugin.json"), manifest).unwrap();
     }
 }

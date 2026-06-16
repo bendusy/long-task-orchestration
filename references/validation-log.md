@@ -1,5 +1,34 @@
 # long-task-orchestration 验证日志
 
+## 2026-06-16：Python fallback removal gate A/B Rust port parity
+
+**目标**：为 `references/specs/2026-06-16-python-removal-via-rust-port.md`
+的阶段 A/B 提供当前 worktree 证据。结论是 Rust 已接管
+`plugin source-note` 与 `plugin eval-run` 命令面；Python 仍保留为显式
+fallback，完整删除必须等待人工 gate 和阶段 C wrapper/docs/tests 清理。
+
+| Gate | 命令/动作 | 结果 |
+|---|---|---|
+| Source-note unit | `cargo test --locked source_note` | 5/5 passed；覆盖字段、非法 id、symlink `sources/`、append manifest 幂等、非 object manifest |
+| Source-note CLI smoke | 临时 plugin + `cargo run --quiet -- plugin source-note ... --append-manifest --json` | `sources/x.note.json` 写入成功，manifest `source_notes` 为 `["sources/x.note.json"]` |
+| Source-note parity | 同一临时 plugin 分别跑 Python `plugin source-note` 与 Rust `plugin source-note`，忽略 `captured_at` 后比较 JSON | `source-note parity OK` |
+| Eval-run unit | `cargo test --locked plugin_eval_run` | 6/6 passed；覆盖 A/B 两腿、token sidecar、negative scheduler reject、env allowlist/blocklist、missing eval pack |
+| Eval-run parity | 同一临时 plugin + 同一 shell fake runner 分别跑 Python `scripts/lto_run.py plugin eval-run` 与 Rust `cargo run -- plugin eval-run`，比较 `ok/plugin_id/eval_id/deferred/case verdict/status/parse/leak/delta/token` subset | `eval-run parity OK` |
+| Ownership gate | `python3 scripts/check_python_rust_ownership.py` | `PYTHON/RUST OWNERSHIP OK`，Rust help 与 manifest 均包含 `source-note`/`eval-run` |
+| Docs gate | `python3 scripts/check_docs_consistency.py` | `DOCS CONSISTENCY OK` |
+| Rust full test | `cargo test --locked --all-targets` | 146 lib tests + 2 integration tests passed |
+| Rust clippy | `cargo clippy --locked --all-targets -- -D warnings` | passed after options-struct cleanup |
+
+**安全删除说明**：`references/python-rust-ownership.md` 与
+`references/open-source-delivery-requirements.md` 已写明 Python 删除不是按文件年龄删，
+而是按「classify → Rust parity → move owner → wrapper/docs/tests cleanup →
+rollback preserved → delete」执行；`scripts/delegate/runners/*.sh` 明确不得随
+Python fallback 删除。
+
+**Phase C 状态**：未进入。`references/specs/2026-06-16-python-removal-via-rust-port.md`
+已补 C.5 执行交接单,明确删除候选、必须保留文件、active docs 改口径、v0.5.0
+版本同步、验证命令和停止条件；该清单只在用户明确批准 Phase C 后执行。
+
 ## 2026-05-31：cross-runtime 真执行实测（codex 当宿主）
 
 **目标**：坐实「谁当宿主都能跑这套编排 + 都能正确把另外家族当审计方」。不是问模型「如果当宿主会怎么做」（那只测阅读理解），而是让整条编排链在真机上**真的发生一遍**。

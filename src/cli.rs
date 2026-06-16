@@ -2,6 +2,7 @@ use crate::audit_dispatch;
 use crate::budget;
 use crate::commands::{closeout, ops, recap, resume, util};
 use crate::plugin;
+use crate::plugin_eval_run;
 use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
 use anyhow::Context;
 use chrono::Utc;
@@ -395,6 +396,42 @@ pub enum PluginCommand {
         #[arg(long)]
         json: bool,
     },
+    EvalRun {
+        dir: PathBuf,
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long = "eval-id")]
+        eval_id: Option<String>,
+        #[arg(long = "case")]
+        only_case: Option<String>,
+        #[arg(long, default_value_t = 4)]
+        max_concurrency: usize,
+        #[arg(long = "no-persist", default_value_t = true, action = clap::ArgAction::SetFalse)]
+        persist: bool,
+        #[arg(long = "runners-dir")]
+        runners_dir: Option<PathBuf>,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    SourceNote {
+        dir: PathBuf,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        url: String,
+        #[arg(long = "claim")]
+        claims: Vec<String>,
+        #[arg(long = "hypothesis")]
+        hypotheses: Vec<String>,
+        #[arg(long = "append-manifest")]
+        append_manifest: bool,
+        #[arg(long)]
+        json: bool,
+    },
     Mount {
         dir: PathBuf,
         #[arg(long)]
@@ -513,6 +550,99 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             }
             if report.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
                 anyhow::bail!("plugin eval failed");
+            }
+        }
+        Commands::Plugin {
+            command:
+                PluginCommand::EvalRun {
+                    dir,
+                    run_id,
+                    eval_id,
+                    only_case,
+                    max_concurrency,
+                    persist,
+                    runners_dir,
+                    output,
+                    json,
+                },
+        } => {
+            let run_id = run_id
+                .or_else(|| current_run_id(&args.repo))
+                .context("plugin eval-run requires --run-id or .lto/current")?;
+            let report = plugin_eval_run::eval_run(
+                &args.repo,
+                &run_id,
+                &dir,
+                plugin_eval_run::EvalRunOptions {
+                    eval_id: eval_id.as_deref(),
+                    only_case: only_case.as_deref(),
+                    max_concurrency,
+                    persist,
+                    runners_dir: runners_dir.as_deref(),
+                },
+            )?;
+            let should_print = json || output.is_none();
+            if let Some(output) = output.as_ref() {
+                if let Some(parent) = output.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(output, serde_json::to_string_pretty(&report)? + "\n")?;
+                if !json {
+                    println!(
+                        "plugin eval-run {} -> {}",
+                        if report.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+                            "OK"
+                        } else {
+                            "FAIL"
+                        },
+                        output.display()
+                    );
+                }
+            }
+            if should_print {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+            if report.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+                std::process::exit(2);
+            }
+        }
+        Commands::Plugin {
+            command:
+                PluginCommand::SourceNote {
+                    dir,
+                    id,
+                    title,
+                    url,
+                    claims,
+                    hypotheses,
+                    append_manifest,
+                    json,
+                },
+        } => {
+            let path = match plugin::create_source_note(
+                &dir,
+                &id,
+                &title,
+                &url,
+                &claims,
+                &hypotheses,
+                append_manifest,
+            ) {
+                Ok(path) => path,
+                Err(err) => {
+                    eprintln!("plugin source-note failed: {err}");
+                    std::process::exit(2);
+                }
+            };
+            let result = serde_json::json!({
+                "appended_manifest": append_manifest,
+                "id": id,
+                "path": path,
+            });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("source note: {}", path.display());
             }
         }
         Commands::Plugin {

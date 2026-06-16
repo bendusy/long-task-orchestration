@@ -1,6 +1,6 @@
 # Plugin real eval runner design
 
-> **STATUS: v0 implemented in the Python legacy path — `lto --use-python plugin eval-run` runs baseline-vs-candidate A/B with deterministic metrics** (parse_rate, timeout, permission_violations, private_path_leaks, elapsed/token deltas). Compiles each eval-pack case into two AgentJobs (baseline bare brief / candidate profile-injected), runs via the existing scheduler, writes evidence to `.lto/<run-id>/plugin-eval/<case-id>/`. Rust v2 currently owns static data-only plugin commands (`list/validate/render-profile/eval/mount`); real eval-run is not yet ported.
+> **STATUS: v0 is Rust-owned — `lto plugin eval-run` runs baseline-vs-candidate A/B with deterministic metrics** (parse_rate, timeout, permission_violations, private_path_leaks, elapsed/token deltas). Compiles each eval-pack case into two AgentJobs (baseline bare brief / candidate profile-injected), runs via the existing scheduler, writes evidence to `.lto/<run-id>/plugin-eval/<case-id>/`. The Python legacy path remains as explicit compatibility fallback until the formal removal gate deletes it.
 >
 > **judge layer implemented (2026-06-09)** — a subjective judgment layer now runs alongside the deterministic metrics: each case freezes a redacted evidence bundle (`frozen-evidence.json` with a reproducible `evidence_hash`) and dispatches a **heterogeneous** judge runner (≠ the runner that produced the candidate reply; same-family or unavailable → judge skipped, not errored). The judge sees only the redacted frozen evidence and emits structured `{blocker_quality, false_positive_suspected, rationale}`. It is written under `comparison.json["judge"]` tagged `"kind": "subjective_judgment"` and **never** mixes into deterministic metrics or promotion. See `scripts/lto/llm_judge.py`.
 >
@@ -115,7 +115,7 @@ If child-run creation is too invasive, v1 may start as a run-scoped directory un
 Default is plan-only. Execution is explicit.
 
 ```bash
-lto --use-python plugin eval-run <plugin_dir> \
+lto plugin eval-run <plugin_dir> \
   --eval-id <eval-id> \
   --case-id <case-id> \
   --candidate-profile <profile-id> \
@@ -130,7 +130,7 @@ lto --use-python plugin eval-run <plugin_dir> \
 Execution:
 
 ```bash
-lto --use-python plugin eval-run <plugin_dir> \
+lto plugin eval-run <plugin_dir> \
   --eval-id <eval-id> \
   --candidate-profile <profile-id> \
   --baseline-profile <profile-id|none> \
@@ -144,7 +144,7 @@ lto --use-python plugin eval-run <plugin_dir> \
 Parallel pilot is opt-in and constrained:
 
 ```bash
-lto --use-python plugin eval-run <plugin_dir> \
+lto plugin eval-run <plugin_dir> \
   --eval-id batch-audit-v1 \
   --candidate-profile codex-audit-readonly-v1 \
   --baseline-profile none \

@@ -32,17 +32,7 @@
     {"command": "render-profile", "owner": "rust-core", "python_role": "compatibility-fallback"},
     {"command": "eval", "owner": "rust-core", "python_role": "compatibility-fallback"},
     {"command": "mount", "owner": "rust-core", "python_role": "compatibility-fallback"},
-    {
-      "command": "eval-run",
-      "owner": "python-legacy",
-      "python_role": "legacy-plugin",
-      "reason": "real baseline-vs-candidate plugin evaluation is not yet ported to Rust"
-    },
-    {
-      "command": "source-note",
-      "owner": "python-legacy",
-      "python_role": "legacy-plugin",
-      "reason": "source-note creation remains a Python-only helper until Rust owns write-heavy plugin authoring"
-    }
+    {"command": "source-note", "owner": "rust-core", "python_role": "compatibility-fallback"},
+    {"command": "eval-run", "owner": "rust-core", "python_role": "compatibility-fallback"}
   ]
 }

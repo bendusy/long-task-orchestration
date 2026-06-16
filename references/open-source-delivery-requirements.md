@@ -141,8 +141,8 @@ Python remains only for compatibility and legacy surfaces during the takeover:
 
 - fallback command path through `--use-python` or `LTO_USE_PYTHON=1`;
 - parity checks against historical `.lto` behavior;
-- legacy plugin surfaces that are not yet Rust-owned, such as real
-  `plugin eval-run` if still unported;
+- Python mirrors for Rust-owned plugin surfaces until the formal removal gate
+  deletes the fallback tree;
 - tests that protect the fallback until a formal removal gate exists.
 
 Do not delete Python just because a Rust command exists. First classify each
@@ -203,8 +203,9 @@ Required cleanup:
    paused.
 7. State the Python migration path in every install/release-facing document:
    source build, wrapper default Rust, explicit fallback.
-8. Keep plugin docs explicit that Rust owns static data-only commands and
-   Python legacy owns any unported real eval-run path.
+8. Keep plugin docs explicit that Rust owns static data-only commands,
+   source-note creation, and real eval-run; Python remains only as explicit
+   compatibility fallback until the removal gate.
 
 ## Repository Cleanup Requirements
 
@@ -242,7 +243,7 @@ Rust takeover is complete only when these are true:
 | Gates | `check --to implementation|closed` enforces delivery contract and closeout evidence where applicable. |
 | Scheduler | Runner results are typed; timeout/rate-limit/failure states are not stringly guessed. |
 | Pi/tool wrappers | Integration paths prefer Rust and use Python only when explicitly requested. |
-| Plugin static path | `list/validate/render-profile/eval/mount` are Rust-owned and tested. |
+| Plugin path | `list/validate/render-profile/eval/mount/source-note/eval-run` are Rust-owned and tested. |
 | Release | CI builds release binaries on `v*` tags and uploads checksummed assets. |
 
 The next cleanup pass must reduce duplicate logic. The correct order is:
@@ -253,6 +254,29 @@ The next cleanup pass must reduce duplicate logic. The correct order is:
    [`python-rust-ownership.json`](./python-rust-ownership.json), with the
    human-readable table in [`python-rust-ownership.md`](./python-rust-ownership.md).
 4. Delete unreachable or duplicated code only after rollback is preserved.
+
+### Safe Python Removal Gate
+
+Deleting Python is safe only after Rust has taken ownership of every externally
+visible behavior or the behavior has a recorded retirement decision. The gate is:
+
+1. Classify the Python surface in `python-rust-ownership.json`.
+2. Port the behavior to Rust with focused tests for success, failure, security
+   boundaries, and compatibility fixtures where relevant.
+3. Produce parity evidence against the Python path using the same fixture, or
+   record why the behavior is intentionally retired.
+4. Update wrapper routing, active docs, ownership manifest, tests, and CI so no
+   required path still imports or shells into `scripts/lto/`.
+5. Preserve rollback through old-run fixtures, release notes, or a tagged
+   previous version.
+6. Only then delete the Python files. Do not delete `scripts/delegate/runners/*.sh`;
+   those shell adapters are still used by the Rust scheduler.
+
+For the 2026-06-16 removal track, `plugin source-note` and real
+`plugin eval-run` are the Rust-owned legacy ports, with B.5 parity evidence
+recorded in `references/validation-log.md`. Full Python removal still waits for
+wrapper/doc/test cleanup and the explicit human gate before any `scripts/lto/`
+deletion.
 
 ## Development Requirements Design Gate
 
@@ -489,8 +513,10 @@ If one answer is no, do not push as a release candidate.
 ### P1: Plugin Eval Boundary
 
 - Keep Rust static plugin path authoritative.
-- Decide whether real `plugin eval-run` stays legacy Python for now or ports to
-  Rust.
+- Keep Rust `plugin source-note` as the plugin-authoring path.
+- Keep Rust `plugin eval-run` as the real baseline-vs-candidate A/B path; keep
+  the Python mirror only as fallback until the full Python removal gate can
+  delete the fallback tree.
 - Preserve human-gated promotion and deterministic-vs-judged metric separation.
 
 ### P2: Windows Design, Not Fixture Chasing

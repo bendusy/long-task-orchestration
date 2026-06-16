@@ -426,6 +426,7 @@ impl Scheduler {
         result
             .cost
             .insert("elapsed_sec".to_string(), json!(elapsed));
+        merge_reply_meta_sidecar(&reply_path, &mut result.cost).await;
         result
             .cost
             .insert("stdout_bytes".to_string(), json!(stdout_text.len()));
@@ -926,6 +927,22 @@ fn runner_env(job: &AgentJob) -> BTreeMap<String, String> {
         env.insert("CODEX_MODEL".to_string(), model.clone());
     }
     env
+}
+
+async fn merge_reply_meta_sidecar(path: &Path, cost: &mut BTreeMap<String, serde_json::Value>) {
+    let meta_path = PathBuf::from(format!("{}.meta.json", path.to_string_lossy()));
+    let Ok(text) = fs::read_to_string(meta_path).await else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    let Some(obj) = value.as_object() else {
+        return;
+    };
+    for (key, value) in obj {
+        cost.insert(key.clone(), value.clone());
+    }
 }
 
 fn permission_snapshot(policy: &PermissionPolicy) -> BTreeMap<String, serde_json::Value> {

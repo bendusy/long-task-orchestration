@@ -72,7 +72,7 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 ## Rust v2 轨道（当前接管线）
 
-`lto-rs` 是按 2026-06-15 v2 spec 落地的 Rust 核心轨道，也是接下来接管旧 Python CLI 的主线。当前状态是：Rust workspace、24/24 命令真实现、runner event parser、state/budget、delivery contract、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin validate/render-profile/eval/mount` data-only provenance、COMMANDS.md 和回归测试已建立。
+`lto-rs` 是按 2026-06-15 v2 spec 落地的 Rust 核心轨道，也是接下来接管旧 Python CLI 的主线。当前状态是：Rust workspace、24/24 命令真实现、runner event parser、state/budget、delivery contract、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin validate/render-profile/eval/mount/source-note/eval-run`、COMMANDS.md 和回归测试已建立。
 
 当前 Rust v2 支持面聚焦 macOS 和 Linux。Windows 二进制与 runner 派工支持先暂停：内置 delegate runtime 仍是 `scripts/delegate/runners/*.sh` + `healthcheck.sh` 的 shell 协议，先把 Rust 接管旧 Python 和核心代码清理做稳，再重新评估 Windows 原生 runner。
 

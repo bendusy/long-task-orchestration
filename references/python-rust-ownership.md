@@ -55,8 +55,28 @@ old-run compatibility are still being verified.
 | `plugin render-profile` | Rust core | compatibility fallback | Python mirror can shrink after profile rendering parity fixtures exist. |
 | `plugin eval` | Rust core | compatibility fallback | Python mirror can shrink after static eval fixtures are Rust-owned. |
 | `plugin mount` | Rust core | compatibility fallback | Python mirror can shrink after mount-lock compatibility fixtures exist. |
-| `plugin eval-run` | Python legacy | legacy plugin | Port or retire separately; do not hide it behind the default Rust path until real model A/B evidence is Rust-owned. |
-| `plugin source-note` | Python legacy | legacy plugin | Port only if plugin authoring becomes an active Rust requirement; otherwise keep explicit legacy helper. |
+| `plugin source-note` | Rust core | compatibility fallback | Rust now owns source-note creation; Python mirror can shrink during the formal removal gate after parity evidence is recorded. |
+| `plugin eval-run` | Rust core | compatibility fallback | Rust now owns baseline-vs-candidate eval-run; Python mirror can shrink only during the formal removal gate after B.5 parity evidence and human confirmation. |
+
+## Safe Python Removal And Rust Takeover
+
+Safe deletion is a staged ownership transfer, not a file cleanup pass:
+
+1. Classify each Python surface in the manifest as `rust-core`,
+   `compatibility-fallback`, `python-legacy`, or `removal-candidate`.
+2. Port the externally visible behavior to Rust and add focused Rust tests for
+   success, failure, path safety, and old-run compatibility where applicable.
+3. Prove parity against the legacy Python behavior with the same fixture or
+   record an explicit retirement decision for behavior that will not be kept.
+4. Move the manifest owner to `rust-core` only after the Rust command is exposed
+   in help and the ownership gate passes.
+5. Keep the Python fallback callable until the staged removal gate records
+   downstream wrapper, docs, and compatibility evidence.
+6. Delete Python only after the wrapper no longer routes to it, active docs no
+   longer teach it, tests/gates no longer import it, and rollback is preserved
+   by fixtures or release notes.
+7. Do not delete `scripts/delegate/runners/*.sh`; those are Rust-owned runner
+   adapters, not Python fallback code.
 
 ## Gate
 

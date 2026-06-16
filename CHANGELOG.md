@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Rust plugin source-note port
+
+- Added Rust-owned `lto-rs plugin source-note` for creating inert plugin source
+  notes with path-safety checks, atomic JSON writes, optional idempotent
+  `plugin.json` updates, and focused unit coverage.
+- Updated the Python/Rust ownership docs and plugin boundary docs so safe
+  Python removal is documented as a staged Rust ownership gate.
+- Added Rust-owned `lto-rs plugin eval-run` for real baseline-vs-candidate A/B
+  plugin evals through the existing scheduler, with env allowlist filtering,
+  deterministic safety metrics, frozen judge evidence, token sidecar support,
+  and focused Rust tests. The Python mirror remains fallback-only until the
+  removal gate.
+
 ## v0.4.3 — 2026-06-16
 
 ### Binary identity and release verification
