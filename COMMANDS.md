@@ -29,7 +29,7 @@ aliases do not appear in the public help table below.
 | `run` | Run batch and staged job primitives. | Subcommand: `parallel` or `pipeline` | `run parallel --run-id --task-ids --phase --kind --command --timeout --concurrency --job-file`; `run pipeline --run-id --task-ids --phase --stages --kind --timeout --concurrency --continue-on-error --job-file` |
 | `audit` | Prepare audit dispatch facts and auditor selection. | None | `--run-id`, `--auto-dispatch`, `--discover-risks`, `--allow-same-family` |
 | `next` | Print deterministic next-step facts and route suggestion. | None | `--run-id`, `--json` |
-| `autopilot` | Print supervised route facts and optionally auto-exec safe task commands. | None | `--run-id`, `--supervised`, `--auto-exec`, `--autonomous`, `--timeout` |
+| `autopilot` | Print supervised route facts and optionally auto-exec task commands through sandbox or tmux workers. | None | `--run-id`, `--supervised`, `--auto-exec`, `--autonomous`, `--timeout`, `--worker-runner`, `--target`, `--tmux-bin`, `--ready-timeout` |
 | `recap` | Render a human recap of goal, why, progress, remaining work, tokens, and live jobs. | None | `--run-id`, `--artifacts` |
 | `budget` | Check budget status. | `check --run-id` | `--tokens` |
 | `release` | Print a host-owned release plan. | `--date` | `--part`, `--dry-run` |

@@ -330,13 +330,19 @@ stay with the host. Empty phases never auto-advance.
 ```bash
 $L autopilot --supervised               # brief + route, escalate to host (default)
 $L autopilot --supervised --auto-exec    # auto-run safe/reversible task commands in worktree sandbox
+$L autopilot --auto-exec --worker-runner tmux --target <session:window.pane>
+                                        # dispatch one tmux worker per pending task
 ```
 
 `--auto-exec` runs commands in an isolated git worktree (rm -rf only nuks the
 worktree; env-isolated HOME/credentials). Dangerous ops (rm -rf / git push /
 DROP / sudo / curl|sh / escape paths) are HELD for human confirm. Retry≥3 skips,
 stall detection reverts to brief-only. Autopilot can run safe substeps and collect
-decision evidence, but the host agent remains planner. `--autonomous` is implemented
+decision evidence, but the host agent remains planner. With `--worker-runner tmux`,
+autopilot uses the scheduler-backed tmux runner as a bounded worker carrier: each
+pending task gets its own worker dispatch and must write a
+`.lto/<run>/live/*.worker.json` completion contract. `state.tasks` changes only
+from that contract `rc`, not from the worker saying it is done. `--autonomous` is implemented
 as a **mechanical evidence gate + mechanical execution** — it never spawns a decision
 agent and never reflects (LTO emits facts; the host reflects). It reads cross-run
 mining to gate on accumulated real dispatch data (falls back to supervised when

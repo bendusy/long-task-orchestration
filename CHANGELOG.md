@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Tmux-backed autopilot workers
+
+- Extended `lto autopilot --auto-exec` with a `--worker-runner`
+  carrier selector. The existing sandbox path remains available, while
+  `--worker-runner tmux` dispatches one bounded worker job per pending task
+  through the Rust tmux runner.
+- Added worker completion contracts under `.lto/<run>/live/*.worker.json`.
+  Autopilot updates `state.tasks` from the contract `rc`, not from the tmux
+  pane merely signaling that it stopped.
+
 ### Tmux runner adapter
 
 - Added a Rust-owned `runner: "tmux"` scheduler path that dispatches prompts

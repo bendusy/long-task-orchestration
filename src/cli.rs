@@ -163,6 +163,14 @@ pub enum Commands {
         autonomous: bool,
         #[arg(long, default_value_t = 300)]
         timeout: u64,
+        #[arg(long = "worker-runner", default_value = "auto", value_parser = ["auto", "sandbox", "tmux"])]
+        worker_runner: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long = "tmux-bin")]
+        tmux_bin: Option<String>,
+        #[arg(long = "ready-timeout")]
+        ready_timeout: Option<u64>,
     },
     #[command(about = "Render a human progress recap")]
     Recap {
@@ -1015,6 +1023,10 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             auto_exec,
             autonomous,
             timeout,
+            worker_runner,
+            target,
+            tmux_bin,
+            ready_timeout,
         } => {
             ops::cmd_autopilot(
                 &args.repo,
@@ -1023,6 +1035,10 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     auto_exec,
                     autonomous,
                     timeout,
+                    worker_runner,
+                    tmux_target: target,
+                    tmux_bin,
+                    tmux_ready_timeout_sec: ready_timeout,
                 },
             )?;
         }

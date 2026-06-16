@@ -1,5 +1,6 @@
 use crate::agent_job::{
-    AgentJob, AgentResult, Budget, Pattern, RetryPolicy, TaskSize, readonly_intent_to_policy,
+    AgentJob, AgentResult, Budget, JobStatus, Pattern, RetryPolicy, TaskSize,
+    readonly_intent_to_policy,
 };
 use crate::budget::{self, BudgetStatus};
 use crate::commands::util;
@@ -102,6 +103,10 @@ pub struct AutopilotOptions {
     pub auto_exec: bool,
     pub autonomous: bool,
     pub timeout: u64,
+    pub worker_runner: String,
+    pub tmux_target: Option<String>,
+    pub tmux_bin: Option<String>,
+    pub tmux_ready_timeout_sec: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1107,13 +1112,17 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
         route["action"].as_str().unwrap_or("escalate")
     );
     println!("  reason: {}", route["reason"].as_str().unwrap_or(""));
+    println!(
+        "  worker carrier: {}",
+        select_worker_carrier(&options).as_str()
+    );
     if !progressed && !prev_digest.as_object().is_none_or(Map::is_empty) {
         println!("AUTOPILOT_STATUS: STALLED");
         update_autopilot_digest(&mut ctx)?;
         return Ok(());
     }
     if options.auto_exec || options.autonomous {
-        auto_exec_tasks(repo, &mut ctx, options.timeout, options.autonomous)?;
+        auto_exec_tasks(repo, &mut ctx, &options)?;
     } else {
         println!(
             "  suggested cmd: {}",
@@ -2271,13 +2280,13 @@ fn decision_brief(state: &crate::state::LtoState, facts: &Value) -> String {
 fn auto_exec_tasks(
     repo: &Path,
     ctx: &mut util::RunContext,
-    timeout: u64,
-    autonomous: bool,
+    options: &AutopilotOptions,
 ) -> anyhow::Result<()> {
     let mut executed = 0;
     let mut held = 0;
     let mut failed = 0;
     let mut retry_blocked = 0;
+    let carrier = select_worker_carrier(options);
     for task in util::json_array_mut(&mut ctx.state.tasks) {
         let status = task
             .get("status")
@@ -2317,48 +2326,87 @@ fn auto_exec_tasks(
             println!("    [{id}] SKIP -- retry_count={retry_count} >= 3 (needs human)");
             continue;
         }
-        let result = worktree::run_in_ephemeral_worktree(
-            repo,
-            &command,
-            !autonomous,
-            Duration::from_secs(timeout),
-        )?;
-        let id = task.get("id").and_then(Value::as_str).unwrap_or("?");
-        if !result.executed {
-            held += 1;
-            println!("    [{id}] HELD -- {}", result.note);
-            crate::event_emit::emit_sandbox_rejected(repo, &ctx.run_id, id, &result);
-            continue;
-        }
-        executed += 1;
-        let rc = result.rc.unwrap_or(1);
-        println!("    [{id}] rc={rc} -- {}", truncate(&command, 80));
-        util::append_to_object_array(
-            task,
-            "evidence",
-            json!({
-                "kind": "test",
-                "command": command,
-                "cwd": result.worktree.as_ref().map(|path| path.display().to_string()).unwrap_or_default(),
-                "rc": rc,
-                "summary": format!("autopilot sandbox: {}", if rc == 0 { "PASS" } else { "FAIL" }),
-                "verified_by": "autopilot",
-                "ended_at": util::iso_now(),
-            }),
-        );
-        if rc == 0 {
-            task["status"] = json!("done");
-            let evidence = task
-                .get("evidence")
-                .and_then(Value::as_array)
-                .and_then(|items| items.last())
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            resolve_blockers(task, &evidence);
-        } else {
-            failed += 1;
-            bump_retry(task, &command);
-            task["status"] = json!("blocked");
+        let id = task
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string();
+        match carrier {
+            WorkerCarrier::Sandbox => {
+                let result = worktree::run_in_ephemeral_worktree(
+                    repo,
+                    &command,
+                    !options.autonomous,
+                    Duration::from_secs(options.timeout),
+                )?;
+                if !result.executed {
+                    held += 1;
+                    println!("    [{id}] HELD -- {}", result.note);
+                    crate::event_emit::emit_sandbox_rejected(repo, &ctx.run_id, &id, &result);
+                    continue;
+                }
+                executed += 1;
+                let rc = result.rc.unwrap_or(1);
+                println!("    [{id}] rc={rc} -- {}", truncate(&command, 80));
+                util::append_to_object_array(
+                    task,
+                    "evidence",
+                    json!({
+                        "kind": "test",
+                        "command": command,
+                        "cwd": result.worktree.as_ref().map(|path| path.display().to_string()).unwrap_or_default(),
+                        "rc": rc,
+                        "summary": format!("autopilot sandbox: {}", if rc == 0 { "PASS" } else { "FAIL" }),
+                        "verified_by": "autopilot",
+                        "ended_at": util::iso_now(),
+                        "carrier": "sandbox",
+                    }),
+                );
+                if rc == 0 {
+                    task["status"] = json!("done");
+                    let evidence = task
+                        .get("evidence")
+                        .and_then(Value::as_array)
+                        .and_then(|items| items.last())
+                        .cloned()
+                        .unwrap_or_else(|| json!({}));
+                    resolve_blockers(task, &evidence);
+                } else {
+                    failed += 1;
+                    bump_retry(task, &command);
+                    task["status"] = json!("blocked");
+                }
+                task["last_update"] = json!(util::iso_now());
+            }
+            WorkerCarrier::Tmux => {
+                let outcome =
+                    run_tmux_autopilot_worker(repo, &ctx.run_id, task, &command, options)?;
+                match outcome {
+                    TmuxWorkerOutcome::Held { reason } => {
+                        held += 1;
+                        println!("    [{id}] HELD -- {reason}");
+                    }
+                    TmuxWorkerOutcome::Ran { rc, job_id } => {
+                        executed += 1;
+                        println!("    [{id}] tmux rc={rc} job={job_id}");
+                        if rc == 0 {
+                            task["status"] = json!("done");
+                            let evidence = task
+                                .get("evidence")
+                                .and_then(Value::as_array)
+                                .and_then(|items| items.last())
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+                            resolve_blockers(task, &evidence);
+                        } else {
+                            failed += 1;
+                            bump_retry(task, &command);
+                            task["status"] = json!("blocked");
+                        }
+                        task["last_update"] = json!(util::iso_now());
+                    }
+                }
+            }
         }
     }
     println!(
@@ -2377,6 +2425,277 @@ fn auto_exec_tasks(
         "auto-exec: executed={executed} held={held} failed={failed} retry_blocked={retry_blocked}"
     );
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerCarrier {
+    Sandbox,
+    Tmux,
+}
+
+impl WorkerCarrier {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Sandbox => "sandbox",
+            Self::Tmux => "tmux",
+        }
+    }
+}
+
+enum TmuxWorkerOutcome {
+    Held { reason: String },
+    Ran { rc: i32, job_id: String },
+}
+
+fn select_worker_carrier(options: &AutopilotOptions) -> WorkerCarrier {
+    match options.worker_runner.as_str() {
+        "sandbox" => WorkerCarrier::Sandbox,
+        "tmux" => WorkerCarrier::Tmux,
+        _ => {
+            let tmux_bin = options.tmux_bin.as_deref().unwrap_or("tmux");
+            let has_target = options.tmux_target.is_some();
+            let has_tmux_env = std::env::var("TMUX")
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty())
+                || std::env::var("TMUX_PANE")
+                    .ok()
+                    .is_some_and(|value| !value.trim().is_empty());
+            if (has_target || has_tmux_env) && tmux_binary_available(tmux_bin) {
+                WorkerCarrier::Tmux
+            } else {
+                WorkerCarrier::Sandbox
+            }
+        }
+    }
+}
+
+fn tmux_binary_available(tmux_bin: &str) -> bool {
+    Command::new(tmux_bin)
+        .arg("-V")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn run_tmux_autopilot_worker(
+    repo: &Path,
+    run_id: &str,
+    task: &mut Value,
+    command: &str,
+    options: &AutopilotOptions,
+) -> anyhow::Result<TmuxWorkerOutcome> {
+    let task_id = task
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("task")
+        .to_string();
+    let safe_id = sanitize_worker_id(&task_id);
+    let job_id = format!("autopilot-{safe_id}");
+    let contract_path = repo
+        .join(".lto")
+        .join(run_id)
+        .join("live")
+        .join(format!("{safe_id}.worker.json"));
+    if let Some(parent) = contract_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let _ = fs::remove_file(&contract_path);
+    let prompt = tmux_worker_prompt(repo, command, &contract_path, &task_id)?;
+    let mut meta = BTreeMap::from([
+        ("run_id".to_string(), json!(run_id)),
+        ("tmux_mode".to_string(), json!("signal")),
+        (
+            "tmux_window_name".to_string(),
+            json!(format!("lto-{safe_id}")),
+        ),
+    ]);
+    if let Some(target) = &options.tmux_target {
+        meta.insert("tmux_target".to_string(), json!(target));
+    }
+    if let Some(tmux_bin) = &options.tmux_bin {
+        meta.insert("tmux_bin".to_string(), json!(tmux_bin));
+    }
+    if let Some(timeout) = options.tmux_ready_timeout_sec {
+        meta.insert("tmux_ready_timeout_sec".to_string(), json!(timeout));
+    }
+    let job = AgentJob {
+        job_id: job_id.clone(),
+        prompt_ref: prompt,
+        runner: "tmux".to_string(),
+        prompt_is_inline: true,
+        model: None,
+        env: BTreeMap::new(),
+        permission_policy: readonly_intent_to_policy("tmux"),
+        isolation: "none".to_string(),
+        output_schema: None,
+        parent_pattern: Pattern::Linear,
+        budget: Budget {
+            timeout_sec: options.timeout,
+            max_tokens: None,
+        },
+        retry_policy: RetryPolicy {
+            max_retries: 0,
+            ..RetryPolicy::default()
+        },
+        verifier_of: None,
+        children: Vec::new(),
+        task_type: Some("autopilot_worker".to_string()),
+        size: TaskSize::Small,
+        test_cmd: None,
+        needs_worktree: false,
+        meta,
+    };
+    let jobs = vec![job.clone()];
+    crate::event_emit::emit_runner_started_jobs(
+        repo,
+        run_id,
+        None,
+        Some(&task_id),
+        "autopilot.tmux_worker",
+        &jobs,
+    );
+    let results = match submit_jobs(repo, jobs.clone()) {
+        Ok(results) => {
+            crate::event_emit::emit_runner_results(
+                repo,
+                run_id,
+                None,
+                Some(&task_id),
+                "autopilot.tmux_worker",
+                &results,
+            );
+            results
+        }
+        Err(err) => {
+            crate::event_emit::emit_runner_submission_failed_jobs(
+                repo,
+                run_id,
+                None,
+                Some(&task_id),
+                "autopilot.tmux_worker",
+                &jobs,
+                &err.to_string(),
+            );
+            return Ok(TmuxWorkerOutcome::Held {
+                reason: format!("tmux worker submission failed: {err}"),
+            });
+        }
+    };
+    let Some(result) = results.into_iter().next() else {
+        return Ok(TmuxWorkerOutcome::Held {
+            reason: "tmux worker returned no result".to_string(),
+        });
+    };
+    if result.status != JobStatus::Ok {
+        let reason = format!("tmux worker {}: {}", result.status.as_str(), result.error);
+        util::append_to_object_array(
+            task,
+            "evidence",
+            tmux_worker_evidence(command, &contract_path, &job_id, &result, 1, &reason),
+        );
+        return Ok(TmuxWorkerOutcome::Held { reason });
+    }
+    let contract = read_tmux_worker_contract(&contract_path)?;
+    let rc = contract
+        .as_ref()
+        .and_then(|value| value.get("rc"))
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+        .unwrap_or(1);
+    let summary = if contract.is_some() {
+        format!(
+            "autopilot tmux worker: {}",
+            if rc == 0 { "PASS" } else { "FAIL" }
+        )
+    } else {
+        "autopilot tmux worker: missing completion contract".to_string()
+    };
+    util::append_to_object_array(
+        task,
+        "evidence",
+        tmux_worker_evidence(command, &contract_path, &job_id, &result, rc, &summary),
+    );
+    Ok(TmuxWorkerOutcome::Ran { rc, job_id })
+}
+
+fn tmux_worker_prompt(
+    repo: &Path,
+    command: &str,
+    contract_path: &Path,
+    task_id: &str,
+) -> anyhow::Result<String> {
+    let parent = contract_path
+        .parent()
+        .context("worker contract path has no parent")?;
+    let task_json = serde_json::to_string(task_id)?;
+    let inner = format!(
+        "cd {repo}\n\
+         bash -lc {command}\n\
+         lto_worker_rc=$?\n\
+         mkdir -p {parent}\n\
+         printf '{{\"task_id\":%s,\"rc\":%s,\"carrier\":\"tmux\"}}\\n' {task_json} \"$lto_worker_rc\" > {contract}\n\
+         exit 0",
+        repo = shell_quote(&repo.display().to_string()),
+        command = shell_quote(command),
+        parent = shell_quote(&parent.display().to_string()),
+        task_json = shell_quote(&task_json),
+        contract = shell_quote(&contract_path.display().to_string()),
+    );
+    Ok(format!("bash -lc {}", shell_quote(&inner)))
+}
+
+fn read_tmux_worker_contract(path: &Path) -> anyhow::Result<Option<Value>> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(serde_json::from_str(&text)?)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn tmux_worker_evidence(
+    command: &str,
+    contract_path: &Path,
+    job_id: &str,
+    result: &AgentResult,
+    rc: i32,
+    summary: &str,
+) -> Value {
+    json!({
+        "kind": "worker",
+        "carrier": "tmux",
+        "command": command,
+        "job_id": job_id,
+        "runner_status": result.status.as_str(),
+        "runner_error": result.error,
+        "contract": contract_path.display().to_string(),
+        "rc": rc,
+        "summary": summary,
+        "verified_by": "autopilot",
+        "ended_at": util::iso_now(),
+        "reply_tail": tail_lines(&result.reply_text, 20),
+    })
+}
+
+fn sanitize_worker_id(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "task".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r#"'\''"#))
 }
 
 fn update_autopilot_digest(ctx: &mut util::RunContext) -> anyhow::Result<()> {
@@ -3829,6 +4148,148 @@ printf ']'
     }
 
     #[test]
+    fn autopilot_tmux_worker_runs_pending_tasks_and_uses_contracts() {
+        let h = Harness::new();
+        write_ok_healthcheck(&h.repo);
+        let fake_tmux = write_fake_tmux_worker(&h.repo);
+        let mut state = base_state();
+        state.tasks = json!([
+            {
+                "id": "T1",
+                "status": "pending",
+                "commands_run": ["printf one"],
+                "evidence": [],
+                "blockers": [],
+                "retry_count": 0,
+                "retry_by_command": {}
+            },
+            {
+                "id": "T2",
+                "status": "pending",
+                "commands_run": ["printf two"],
+                "evidence": [],
+                "blockers": [],
+                "retry_count": 0,
+                "retry_by_command": {}
+            }
+        ]);
+        h.write_state(state);
+
+        cmd_autopilot(
+            &h.repo,
+            AutopilotOptions {
+                run_id: Some("r1".into()),
+                auto_exec: true,
+                autonomous: false,
+                timeout: 5,
+                worker_runner: "tmux".into(),
+                tmux_target: Some("sess:1.0".into()),
+                tmux_bin: Some(fake_tmux.display().to_string()),
+                tmux_ready_timeout_sec: Some(5),
+            },
+        )
+        .unwrap();
+
+        let state = h.state();
+        let tasks = util::json_array(&state.tasks);
+        assert_eq!(tasks[0]["status"], "done");
+        assert_eq!(tasks[1]["status"], "done");
+        for task in tasks {
+            let evidence = task["evidence"].as_array().unwrap().last().unwrap();
+            assert_eq!(evidence["kind"], "worker");
+            assert_eq!(evidence["carrier"], "tmux");
+            assert_eq!(evidence["rc"], 0);
+            assert!(
+                task["last_update"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+            );
+            let contract = PathBuf::from(evidence["contract"].as_str().unwrap());
+            assert!(contract.exists());
+        }
+        let log = fs::read_to_string(h.repo.join("tmux-log.jsonl")).unwrap();
+        assert!(log.contains("printf one"));
+        assert!(log.contains("printf two"));
+        let events =
+            fs::read_to_string(h.repo.join(".lto").join("r1").join("events.jsonl")).unwrap();
+        assert!(events.contains("autopilot.tmux_worker"));
+        assert!(events.contains("runner.started"));
+        assert!(events.contains("runner.finished"));
+    }
+
+    #[test]
+    fn autopilot_tmux_worker_blocks_on_nonzero_contract_rc() {
+        let h = Harness::new();
+        write_ok_healthcheck(&h.repo);
+        let fake_tmux = write_fake_tmux_worker(&h.repo);
+        let mut state = base_state();
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "commands_run": ["exit 7"],
+            "evidence": [],
+            "blockers": [],
+            "retry_count": 0,
+            "retry_by_command": {}
+        }]);
+        h.write_state(state);
+
+        cmd_autopilot(
+            &h.repo,
+            AutopilotOptions {
+                run_id: Some("r1".into()),
+                auto_exec: true,
+                autonomous: false,
+                timeout: 5,
+                worker_runner: "tmux".into(),
+                tmux_target: Some("sess:1.0".into()),
+                tmux_bin: Some(fake_tmux.display().to_string()),
+                tmux_ready_timeout_sec: Some(5),
+            },
+        )
+        .unwrap();
+
+        let state = h.state();
+        let task = &util::json_array(&state.tasks)[0];
+        assert_eq!(task["status"], "blocked");
+        assert_eq!(task["retry_count"], 1);
+        let evidence = task["evidence"].as_array().unwrap().last().unwrap();
+        assert_eq!(evidence["kind"], "worker");
+        assert_eq!(evidence["carrier"], "tmux");
+        assert_eq!(evidence["rc"], 7);
+        assert!(
+            task["last_update"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+    }
+
+    #[test]
+    fn tmux_worker_prompt_preserves_quoted_command_contract() {
+        let h = Harness::new();
+        let contract = h
+            .repo
+            .join(".lto")
+            .join("r1")
+            .join("live")
+            .join("quoted.worker.json");
+        let prompt =
+            tmux_worker_prompt(&h.repo, "printf '%s\\n' \"it'works\"", &contract, "T'1").unwrap();
+
+        let status = Command::new("bash")
+            .arg("-lc")
+            .arg(&prompt)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let value = read_tmux_worker_contract(&contract).unwrap().unwrap();
+        assert_eq!(value["task_id"], "T'1");
+        assert_eq!(value["rc"], 0);
+        assert_eq!(value["carrier"], "tmux");
+    }
+
+    #[test]
     fn autopilot_skips_auto_exec_when_retry_limit_reached() {
         let h = Harness::new();
         let mut state = base_state();
@@ -3850,6 +4311,10 @@ printf ']'
                 auto_exec: true,
                 autonomous: false,
                 timeout: 5,
+                worker_runner: "sandbox".into(),
+                tmux_target: None,
+                tmux_bin: None,
+                tmux_ready_timeout_sec: None,
             },
         )
         .unwrap();
@@ -3884,6 +4349,10 @@ printf ']'
                 auto_exec: true,
                 autonomous: false,
                 timeout: 5,
+                worker_runner: "sandbox".into(),
+                tmux_target: None,
+                tmux_bin: None,
+                tmux_ready_timeout_sec: None,
             },
         )
         .unwrap();
@@ -4143,6 +4612,44 @@ if args and args[0] == "capture-pane":
 sys.exit(0)
 "#,
             log = log.display(),
+        );
+        fs::write(&bin, script).unwrap();
+        make_executable(&bin);
+        bin
+    }
+
+    fn write_fake_tmux_worker(repo: &Path) -> PathBuf {
+        let bin = repo.join("fake-tmux-worker");
+        let log = repo.join("tmux-log.jsonl");
+        let buffer = repo.join("tmux-buffer.txt");
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import json, pathlib, re, sys
+log = pathlib.Path(r'''{log}''')
+buffer = pathlib.Path(r'''{buffer}''')
+args = sys.argv[1:]
+stdin_data = sys.stdin.read() if args and args[0] == "load-buffer" else None
+with log.open("a") as f:
+    f.write(json.dumps(args + (["stdin", stdin_data] if stdin_data is not None else [])) + "\n")
+if args and args[0] == "capture-pane":
+    print("ready")
+    sys.exit(0)
+if args and args[0] == "load-buffer":
+    buffer.write_text(stdin_data or "")
+    sys.exit(0)
+if args and args[0] == "paste-buffer":
+    text = buffer.read_text() if buffer.exists() else ""
+    match = re.search(r"(/[^\s']+\.worker\.json)", text)
+    if match:
+        rc = 7 if "exit 7" in text else 0
+        pathlib.Path(match.group(1)).write_text(json.dumps({{"rc": rc, "carrier": "tmux"}}))
+    sys.exit(0)
+if args and args[0] == "wait-for":
+    sys.exit(0)
+sys.exit(0)
+"#,
+            log = log.display(),
+            buffer = buffer.display(),
         );
         fs::write(&bin, script).unwrap();
         make_executable(&bin);

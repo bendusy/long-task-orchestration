@@ -166,5 +166,5 @@ shell 层（上面）编排 shell 命令；agent 层编排带独立 context 的�
 - **`src/commands/ops.rs` next path** — 事实简报器（零 LLM）：分析状态 → 无歧义给 argv 命令 / escalate 给宿主 LLM 富决策简报。它不选完整路径；host agent 读 brief 后决定下一段 pattern。
 - **`src/commands/ops.rs` progress helpers** — 推进检测 + stall 闸门：推进 = done↑/ledger↓/risk verified/blocked↓(带新成功证据)；同失败指纹 = 停滞。单向棘轮防伪推进博弈。
 - **`src/worktree.rs` + `src/effect.rs`** — autopilot 自动执行沙箱：在独立 worktree 跑命令 + env 隔离 HOME/凭据 + 危险操作分类（rm -rf/git push/curl|sh/绝对路径逃逸等）HELD 不执行。
-- **`src/commands/ops.rs` autopilot path** — 受约束推进 harness，三档：`--supervised`（出 brief 回吐宿主）/ `--auto-exec`（沙箱跑 safe 子步骤，retry/stall 刹车）/ `--autonomous`（机械证据闸门 + 机械执行，已实现）。**autonomous 不 spawn 决策 agent、不替宿主反思**——读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够退回 supervised），过闸后机械推进 safe 子步骤；escalate/dangerous/push（含 `git -C . push` 变体）/网络停人类。
+- **`src/commands/ops.rs` autopilot path** — 受约束推进 harness，三档：`--supervised`（出 brief 回吐宿主）/ `--auto-exec`（沙箱或 tmux worker 跑子步骤，retry/stall 刹车）/ `--autonomous`（机械证据闸门 + 机械执行，已实现）。tmux worker carrier 通过 scheduler/tmux runner 每个 pending task 派一个 bounded worker，并用 `.lto/<run>/live/*.worker.json` contract 的 `rc` 推进 `state.tasks`，不是信 worker 自报完成。**autonomous 不 spawn 决策 agent、不替宿主反思**——读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够退回 supervised），过闸后机械推进 safe 子步骤；escalate/dangerous/push（含 `git -C . push` 变体）/网络停人类。
 - **`src/commands/recap.rs`** — 面向人类的回顾（与 resume 正交：resume 喂 AI，recap 给人）。

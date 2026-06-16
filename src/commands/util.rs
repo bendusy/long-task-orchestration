@@ -20,7 +20,9 @@ pub const VALID_PHASES: &[&str] = &[
     "closed",
 ];
 pub const VALID_TASK_STATUSES: &[&str] = &["pending", "in_progress", "blocked", "done", "skipped"];
-pub const VALID_EVIDENCE_KINDS: &[&str] = &["test", "lint", "build", "manual", "review", "deploy"];
+pub const VALID_EVIDENCE_KINDS: &[&str] = &[
+    "test", "lint", "build", "manual", "review", "deploy", "worker",
+];
 pub const KNOWN_RUNNERS: &[&str] = &["codex", "pi", "agy", "gemini", "claude"];
 
 #[derive(Debug, Clone, PartialEq)]
