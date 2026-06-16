@@ -89,8 +89,8 @@ The `.lto/<run-id>/` file protocol is the product boundary. Do not rewrite LTO i
 
 Current posture:
 
-- Rust v2 is the default local wrapper path.
-- Python remains as explicit legacy fallback for parity checks and rollback.
+- Rust v2 is the only supported local wrapper path.
+- Python fallback was removed in v0.5.0 after parity evidence was recorded; rollback uses git history and legacy `.lto` fixtures, not a second live CLI.
 - Go is not a near-term core path.
 - TypeScript is for wrappers/MCP/editor integration, not core control logic.
 

@@ -74,8 +74,8 @@ def main() -> int:
     ]
     stale_protocol = contains_any(protocol, old_language_claims)
     check(not stale_protocol, f"protocol language roadmap has no stale claims: {stale_protocol}", errors)
-    check("Rust v2 is the current default core path" in protocol, "protocol doc states Rust v2 default core path", errors)
-    check("Python is an explicit legacy" in protocol and "fallback" in protocol, "protocol doc states explicit Python fallback", errors)
+    check("Rust v2 is the current core path" in protocol, "protocol doc states Rust v2 core path", errors)
+    check("Python fallback was removed" in protocol, "protocol doc states Python fallback removal", errors)
 
     readme = read("README.md")
     install = read("INSTALL.md")
@@ -134,8 +134,8 @@ def main() -> int:
         check("`lto_run.py" not in text, f"{rel} table/prose uses lto wrapper rather than lto_run.py command names", errors)
 
     run_state = read("references/run-state-workflow.md")
-    check(run_state.startswith("# LTO run-state workflow\n\nLegacy Python command reference."), "run-state workflow is explicitly legacy", errors)
-    check("python3 scripts/lto_run.py" in run_state, "legacy run-state workflow still documents Python fallback behavior", errors)
+    check("python3 scripts/lto_run.py" not in run_state, "run-state workflow no longer documents Python fallback commands", errors)
+    check("lto start" in run_state or "cargo run --quiet -- start" in run_state, "run-state workflow documents Rust CLI commands", errors)
 
     forbidden_public_claims = [
         "Windows native support is supported",
@@ -155,6 +155,8 @@ def main() -> int:
     for rel in public_docs:
         hits = contains_any(read(rel), forbidden_public_claims)
         check(not hits, f"{rel} has no false platform/release claim: {hits}", errors)
+        stale_python = contains_any(read(rel), ["--use-python", "LTO_USE_PYTHON", "scripts/lto_run.py"])
+        check(not stale_python, f"{rel} has no active Python fallback instructions: {stale_python}", errors)
 
     if errors:
         print(f"\n{len(errors)} documentation consistency failure(s)", file=sys.stderr)

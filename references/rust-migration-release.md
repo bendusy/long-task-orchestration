@@ -5,7 +5,8 @@
 
 ## Migration Path
 
-LTO is moving from the Python CLI to Rust v2 in three steps.
+LTO completed the Python fallback retirement in v0.5.0. The supported CLI path
+is Rust-only.
 
 1. **Source-build Rust path**
    ```bash
@@ -21,13 +22,10 @@ LTO is moving from the Python CLI to Rust v2 in three steps.
    lto recap --run-id <run-id>
    ```
 
-3. **Explicit legacy fallback**
-   ```bash
-   lto --use-python self-test
-   LTO_USE_PYTHON=1 lto check --run-id <run-id> --json
-   ```
-
-Python remains a compatibility fallback during the transition. Do not delete Python modules or tests just because a Rust command exists; first prove the Rust path owns the same behavior and keep a rollback path until the release assets and downstream host integrations are verified.
+The former Python modules were removed only after Rust parity evidence was
+recorded for the public command surface, `plugin source-note`, `plugin eval-run`,
+events/telemetry, and old-run fixture reading. Rollback is via git history and
+release notes, not a second installed CLI.
 
 ## Platform Policy
 
@@ -79,7 +77,8 @@ Release is a host-owned gate, not a runner side effect.
    cargo check --locked --all-targets
    cargo clippy --locked --all-targets -- -D warnings
    cargo test --locked --all-targets
-   python3 scripts/smoke_test.py
+   python3 scripts/check_docs_consistency.py
+   python3 scripts/check_python_rust_ownership.py
    git diff --check
    ```
 3. Preview release metadata:

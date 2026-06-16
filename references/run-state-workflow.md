@@ -1,9 +1,8 @@
 # LTO run-state workflow
 
-Legacy Python command reference. Use this when maintaining the compatibility
-fallback in `scripts/lto_run.py` or comparing old behavior. For the Rust v2
-takeover CLI, use `COMMANDS.md`, `src/cli.rs`, and
-`references/rust-migration-release.md`.
+Rust-only command reference for `.lto/<run-id>/` state workflows. The former
+Python fallback command reference was retired in v0.5.0; command truth now lives
+in `COMMANDS.md`, `src/cli.rs`, and `references/rust-migration-release.md`.
 
 ## Start
 
@@ -11,7 +10,7 @@ Inside the repository, run from the root:
 
 ```bash
 # minimal: state.json + run-state.md (default)
-python3 scripts/lto_run.py start \
+lto start \
   --goal "short task goal" \
   --host codex \
   --request "original user request" \
@@ -19,13 +18,13 @@ python3 scripts/lto_run.py start \
   --done-when "how you'll know it's finished (recap data source)"
 
 # with audit ledger (only INITIALISES the ledger; run `audit` to fill+converge it)
-python3 scripts/lto_run.py start \
+lto start \
   --goal "spec audit task" \
   --host codex \
   --with-audit
 
 # deploy profile: audit 超集，额外落 preflight 环境快照进 state.json
-python3 scripts/lto_run.py start \
+lto start \
   --goal "deploy task" \
   --host codex \
   --profile deploy
@@ -61,12 +60,10 @@ Optional **budget caps** (all default unlimited → zero break for runs that omi
 them): `--max-turns N` / `--max-tokens N` / `--deadline ISO8601`. See the Budget
 section below for the graded-brake semantics.
 
-When the target repo is not current directory, call this script by absolute path:
+When the target repo is not current directory, pass `--repo` before the command:
 
 ```bash
-python3 <repo>/scripts/lto_run.py \
-  --repo /path/to/target/repo \
-  start --goal "short task goal" --host codex
+lto --repo /path/to/target/repo start --goal "short task goal" --host codex
 ```
 
 After `bash scripts/install.sh`, the global wrapper is shorter:
@@ -97,7 +94,7 @@ After `start`, add the tasks the run will work on. A task is the unit that
 `runner` / `next` / `audit` operate on — `runner` does NOT auto-create them.
 
 ```bash
-python3 .../scripts/lto_run.py --repo . task-add \
+lto --repo . task-add \
   --task-id T1 \
   --title "给 login 加判空校验" \
   --command "pytest tests/test_auth.py -x"   # optional: planned command (runner/autopilot use it)
@@ -111,7 +108,7 @@ current phase. Then run it via `runner --task-id T1 --command "..."`.
 Recover from a previous session:
 
 ```bash
-python3 scripts/lto_run.py resume
+lto resume
 ```
 
 Prints a context capsule (phase, tasks, last failure, next action).
@@ -133,16 +130,16 @@ Use memory projection only when you want cross-runtime/cross-project discovery:
 
 ```bash
 # Pure local, redacted JSON. No network, no ANIMEM required.
-python3 scripts/lto_run.py memory export \
+lto memory export \
   --run-id <run-id> --dry-run
 
 # Try memory-flow/ANIMEM discovery, then always print local-first capsule.
 # If no sink is configured, prints a warning and degrades to local .lto.
-python3 scripts/lto_run.py memory resume \
+lto memory resume \
   --project agent-skills --run-id <run-id>
 
 # Explicit publish only. Requires MEMORY_FLOW_URL + MEMORY_FLOW_TOKEN or flags.
-python3 scripts/lto_run.py memory publish \
+lto memory publish \
   --run-id <run-id>
 ```
 
@@ -164,8 +161,8 @@ local files win.
 Probe environment health (stdout only, no file):
 
 ```bash
-python3 scripts/lto_run.py preflight
-python3 scripts/lto_run.py preflight --record  # also write to state.json
+lto preflight
+lto preflight --record  # also write to state.json
 ```
 
 ## Runner
@@ -173,7 +170,7 @@ python3 scripts/lto_run.py preflight --record  # also write to state.json
 Execute a single task and auto-record evidence:
 
 ```bash
-python3 scripts/lto_run.py runner \
+lto runner \
   --task-id T1 \
   --kind test \
   --command "pytest tests/test_auth.py -x" \
@@ -194,13 +191,13 @@ Read-only review of runner output, outputs YAML verdict:
 
 ```bash
 # Review entire phase
-python3 scripts/lto_run.py judge --phase implementation
+lto judge --phase implementation
 
 # Review single high-risk task
-python3 scripts/lto_run.py judge --task-id T5
+lto judge --task-id T5
 
 # Rerun recorded tests
-python3 scripts/lto_run.py judge --phase implementation --rerun-tests
+lto judge --phase implementation --rerun-tests
 ```
 
 Saves verdict to `.lto/<run-id>/judge/judge-<phase>-<ts>.yaml`.
@@ -213,12 +210,12 @@ Updates `gates.last_reviewed_head`.
 Boundary gate checks for irreversible actions:
 
 ```bash
-python3 scripts/lto_run.py hook pre-commit
-python3 scripts/lto_run.py hook pre-deploy
-python3 scripts/lto_run.py hook pre-closeout
+lto hook pre-commit
+lto hook pre-deploy
+lto hook pre-closeout
 
 # Force override
-python3 scripts/lto_run.py hook pre-commit --force --reason "docs-only"
+lto hook pre-commit --force --reason "docs-only"
 ```
 
 Environment variable `LTO_HOOK_MODE` controls pre-commit behavior:
@@ -229,11 +226,11 @@ Environment variable `LTO_HOOK_MODE` controls pre-commit behavior:
 ## Check
 
 ```bash
-python3 scripts/lto_run.py check
-python3 scripts/lto_run.py check --strict
-python3 scripts/lto_run.py check --to implementation
-python3 scripts/lto_run.py check --to closed --strict
-python3 scripts/lto_run.py check --to implementation --json
+lto check
+lto check --strict
+lto check --to implementation
+lto check --to closed --strict
+lto check --to implementation --json
 ```
 
 Validates state.json integrity, git HEAD anchor, dirty worktree, handoff
@@ -269,7 +266,7 @@ fields as closeout blockers.
 ## Closeout
 
 ```bash
-python3 scripts/lto_run.py closeout \
+lto closeout \
   --summary "what changed and how it was verified" \
   --next-action "none"
 ```
@@ -417,7 +414,7 @@ artifact manifest. It does not call memory-flow directly.
 ## Self-Test
 
 ```bash
-python3 scripts/lto_run.py self-test
+lto self-test
 ```
 
 Covers: start, resume, check, preflight, hook pre-commit, closeout, and

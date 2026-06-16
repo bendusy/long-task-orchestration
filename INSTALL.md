@@ -13,7 +13,6 @@
 | 层级 | 必需性 | 依赖 | 用途 | 没有时 |
 |---|---|---|---|---|
 | Rust v2 CLI | 必需 | Rust stable + Cargo | 运行/验证 `lto-rs` 当前接管线 | 不能验证当前 Rust 路线 |
-| Python 兼容层 | 可选/legacy | Python 3.10+ | 运行 `scripts/lto_run.py` fallback / legacy 自检 | 不能使用旧入口和部分兼容测试 |
 | 核心 CLI | 必需 | bash | installer、wrapper、runner shell | 不能安装 wrapper |
 | 核心 CLI | 必需 | git | HEAD 锚定、drift 检测、worktree 沙箱 | 多数长任务证据不完整 |
 | 操作系统 | 必需 | macOS / Linux | 当前 CI、release binary、内置 shell runner 支持面 | Windows 原生支持暂缓；可用 WSL/类 Unix shell 自行验证 |
@@ -56,8 +55,7 @@ SKILL.md + `references/` 子目录要一起放进去（主文件通过 `[[wikili
 ```bash
 bash scripts/install.sh          # 生成/刷新 ${LTO_BIN_DIR:-$HOME/.local/bin}/lto
 bash scripts/install.sh --check  # 只检查，不写文件
-lto self-test                    # wrapper 默认走 Rust v2
-lto --use-python self-test       # 显式 legacy fallback
+lto self-test                    # wrapper 执行 Rust CLI
 ```
 
 这个脚本只安装 sentinel-managed `lto` 命令，不会自动把本仓软链到各

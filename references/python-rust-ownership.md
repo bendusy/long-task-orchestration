@@ -1,66 +1,65 @@
-# Python And Rust Ownership
+# Rust Ownership After Python Retirement
 
-> Status: ownership map for the Rust takeover. Machine-readable source:
+> Status: ownership map after the v0.5.0 Python fallback retirement. Machine-readable source:
 > [`python-rust-ownership.json`](./python-rust-ownership.json). Verification:
 > `python3 scripts/check_python_rust_ownership.py`.
 
 ## Rule
 
-Rust owns the public LTO core. Python remains only as explicit compatibility
-fallback or as named legacy plugin support.
+Rust owns the public LTO core. The Python fallback package and legacy entrypoint
+were removed during the v0.5.0 retirement work. Historical `.lto` run-state
+compatibility is preserved by Rust fixture tests, not by keeping a Python entrypoint.
 
-Do not remove Python code by file age or by gut feel. Remove it only after the
-surface is classified, the Rust path proves equivalent behavior, downstream
-fallback is no longer needed, and the removal gate is recorded.
+Do not reintroduce a second command implementation. If a new public command is
+added, add it to this manifest and expose it through the Rust CLI.
 
 ## Top-Level Commands
 
-All 24 top-level public commands are Rust-owned. Python mirrors them as
-`--use-python` / `LTO_USE_PYTHON=1` fallback while downstream integrations and
-old-run compatibility are still being verified.
+All 24 top-level public commands are Rust-owned. `lto-rs --help` additionally
+shows clap's built-in `help` pseudo-command; it is not listed here.
 
 | Command | Owner | Python Role |
 |---|---|---|
-| `start` | Rust core | compatibility fallback |
-| `check` | Rust core | compatibility fallback |
-| `closeout` | Rust core | compatibility fallback |
-| `resume` | Rust core | compatibility fallback |
-| `preflight` | Rust core | compatibility fallback |
-| `runner` | Rust core | compatibility fallback |
-| `judge` | Rust core | compatibility fallback |
-| `hook` | Rust core | compatibility fallback |
-| `self-test` | Rust core | compatibility fallback |
-| `parallel` | Rust core | compatibility fallback |
-| `pipeline` | Rust core | compatibility fallback |
-| `audit` | Rust core | compatibility fallback |
-| `next` | Rust core | compatibility fallback |
-| `autopilot` | Rust core | compatibility fallback |
-| `recap` | Rust core | compatibility fallback |
-| `budget` | Rust core | compatibility fallback |
-| `release` | Rust core | compatibility fallback |
-| `task-add` | Rust core | compatibility fallback |
-| `task-update` | Rust core | compatibility fallback |
-| `phase` | Rust core | compatibility fallback |
-| `collect-agent-run` | Rust core | compatibility fallback |
-| `runs` | Rust core | compatibility fallback |
-| `memory` | Rust core | compatibility fallback |
-| `plugin` | Rust core | compatibility fallback |
+| `start` | Rust core | removed |
+| `check` | Rust core | removed |
+| `closeout` | Rust core | removed |
+| `resume` | Rust core | removed |
+| `preflight` | Rust core | removed |
+| `runner` | Rust core | removed |
+| `judge` | Rust core | removed |
+| `hook` | Rust core | removed |
+| `self-test` | Rust core | removed |
+| `parallel` | Rust core | removed |
+| `pipeline` | Rust core | removed |
+| `audit` | Rust core | removed |
+| `next` | Rust core | removed |
+| `autopilot` | Rust core | removed |
+| `recap` | Rust core | removed |
+| `budget` | Rust core | removed |
+| `release` | Rust core | removed |
+| `task-add` | Rust core | removed |
+| `task-update` | Rust core | removed |
+| `phase` | Rust core | removed |
+| `collect-agent-run` | Rust core | removed |
+| `runs` | Rust core | removed |
+| `memory` | Rust core | removed |
+| `plugin` | Rust core | removed |
 
 ## Plugin Subcommands
 
 | Command | Owner | Python Role | Removal/Port Rule |
 |---|---|---|---|
-| `plugin list` | Rust core | compatibility fallback | Python mirror can shrink after wrapper and plugin docs no longer depend on it. |
-| `plugin validate` | Rust core | compatibility fallback | Python mirror can shrink after all bundled plugins validate through Rust in CI. |
-| `plugin render-profile` | Rust core | compatibility fallback | Python mirror can shrink after profile rendering parity fixtures exist. |
-| `plugin eval` | Rust core | compatibility fallback | Python mirror can shrink after static eval fixtures are Rust-owned. |
-| `plugin mount` | Rust core | compatibility fallback | Python mirror can shrink after mount-lock compatibility fixtures exist. |
-| `plugin source-note` | Rust core | compatibility fallback | Rust now owns source-note creation; Python mirror can shrink during the formal removal gate after parity evidence is recorded. |
-| `plugin eval-run` | Rust core | compatibility fallback | Rust now owns baseline-vs-candidate eval-run; Python mirror can shrink only during the formal removal gate after B.5 parity evidence and human confirmation. |
+| `plugin list` | Rust core | removed | Rust owns the command. |
+| `plugin validate` | Rust core | removed | Rust owns the command. |
+| `plugin render-profile` | Rust core | removed | Rust owns the command. |
+| `plugin eval` | Rust core | removed | Rust owns the command. |
+| `plugin mount` | Rust core | removed | Rust owns the command. |
+| `plugin source-note` | Rust core | removed | Rust owns source-note creation; parity evidence is recorded in `validation-log.md`. |
+| `plugin eval-run` | Rust core | removed | Rust owns baseline-vs-candidate eval-run; parity evidence is recorded in `validation-log.md`. |
 
-## Safe Python Removal And Rust Takeover
+## Removal Record
 
-Safe deletion is a staged ownership transfer, not a file cleanup pass:
+The Python fallback was removed only after the staged transfer completed:
 
 1. Classify each Python surface in the manifest as `rust-core`,
    `compatibility-fallback`, `python-legacy`, or `removal-candidate`.
@@ -70,7 +69,7 @@ Safe deletion is a staged ownership transfer, not a file cleanup pass:
    record an explicit retirement decision for behavior that will not be kept.
 4. Move the manifest owner to `rust-core` only after the Rust command is exposed
    in help and the ownership gate passes.
-5. Keep the Python fallback callable until the staged removal gate records
+5. Remove the Python fallback only after the staged removal gate records
    downstream wrapper, docs, and compatibility evidence.
 6. Delete Python only after the wrapper no longer routes to it, active docs no
    longer teach it, tests/gates no longer import it, and rollback is preserved
@@ -83,11 +82,8 @@ Safe deletion is a staged ownership transfer, not a file cleanup pass:
 `scripts/check_python_rust_ownership.py` fails if:
 
 - Rust help exposes a top-level command missing from the ownership manifest.
-- Python fallback exposes a top-level command missing from the ownership
-  manifest.
 - Rust plugin help exposes a subcommand not marked `rust-core`.
-- Python plugin help exposes a subcommand missing from the plugin ownership
-  manifest.
+- Any manifest entry still claims an active Python role.
 - This Markdown document stops naming a manifest entry.
 
 This is deliberately stricter than a prose review. If a new command appears,

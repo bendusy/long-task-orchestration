@@ -374,6 +374,8 @@ pub enum PluginCommand {
     List,
     Validate {
         dir: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     RenderProfile {
         dir: PathBuf,
@@ -487,7 +489,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             }
         }
         Commands::Plugin {
-            command: PluginCommand::Validate { dir },
+            command: PluginCommand::Validate { dir, json: _ },
         } => {
             let validation = plugin::validate_plugin(&dir)?;
             println!("{}", serde_json::to_string_pretty(&validation)?);
@@ -1664,7 +1666,7 @@ mod tests {
             "--goal",
             "ship rust",
             "--why",
-            "reduce python fallback risk",
+            "retire python fallback risk",
             "--done-when",
             "release binaries exist",
             "--host",
@@ -1676,7 +1678,7 @@ mod tests {
             "--instrument",
             "cargo test --locked --all-targets",
             "--entropy-check",
-            "verify wrapper and legacy fallback separately",
+            "verify wrapper and legacy fixture separately",
             "--force",
         ])
         .unwrap();
@@ -1692,14 +1694,14 @@ mod tests {
             StartRunOptions {
                 run_id: Some("r1".to_string()),
                 goal: "ship rust".to_string(),
-                why: "reduce python fallback risk".to_string(),
+                why: "retire python fallback risk".to_string(),
                 done_when: "release binaries exist".to_string(),
                 host: "codex".to_string(),
                 delivery_contract: DeliveryContract::new(
                     vec!["users can run lto without Python".to_string()],
                     vec!["macOS/Linux first; Windows paused".to_string()],
                     vec!["cargo test --locked --all-targets".to_string()],
-                    vec!["verify wrapper and legacy fallback separately".to_string()],
+                    vec!["verify wrapper and legacy fixture separately".to_string()],
                 ),
                 force: false,
             },
@@ -1714,7 +1716,7 @@ mod tests {
         );
         let state = state::load_state(run_dir.join("state.json")).unwrap();
         assert_eq!(state.goal, "ship rust");
-        assert_eq!(state.why, "reduce python fallback risk");
+        assert_eq!(state.why, "retire python fallback risk");
         assert_eq!(state.done_when, "release binaries exist");
         assert_eq!(state.host_runtime, "codex");
         assert_eq!(
@@ -1754,6 +1756,14 @@ mod tests {
             "rendered.md",
             "--meta-output",
             "rendered.meta.json",
+            "--json",
+        ])
+        .unwrap();
+        Args::try_parse_from([
+            "lto-rs",
+            "plugin",
+            "validate",
+            "plugins/deep-agent-profiles",
             "--json",
         ])
         .unwrap();

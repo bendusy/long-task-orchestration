@@ -36,7 +36,7 @@
 - **为何最高**：`control-loop-harness.md` 把它定为 Phase 1「传感器层」。没它，`next`/`recap`/未来 eval 都缺一手证据，宿主只能靠状态快照猜，漂移检测与未来 tuning 失去地基。
 - **LLM 友好点**：零 LLM、零决策、append-only——纯传感器，不引入主观判断。宿主读结构化事件比读散落 stdout 省 token。
 - **落地约束**：append-only 不可改写；事件 schema 稳定可被 `next`/eval 消费；不替宿主决策（只记录）。
-- **现状**：✅ 已实现（2026-06-09）。`scripts/lto/events.py`（8 类型 append-only + fcntl 锁 + 递归 redact）+ `scripts/lto/telemetry.py`（派生信号，无 recommendations）+ 5 处 emit 接入（safe_emit fail-safe）。codex+pi 两路异构审 union 修 7 条（3 BLOCKER：并发锁/lazy import/嵌套漏键），五验收 + 并发测试全绿。free-text cap 240（spec §5.0）。
+- **现状**：✅ Rust 已接管。`src/events.rs`（8 类型 append-only + `.events.lock` + 递归 redact）+ `src/telemetry.rs`（派生信号，无 recommendations）覆盖 Phase 1 sensor layer；旧 Python 实现已随 fallback 在 v0.5.0 退役。free-text cap 240（spec §5.0）。
 - **解锁**：②③ 现可启动（有了可复现事件证据 + 真实 escalate 数据来源）。
 
 ## ② DEFERRED_V0 llm_judge（P1，被 ① 喂证据）
@@ -44,23 +44,23 @@
 - **是什么**：eval-run 用 LLM 判 blocker 质量 / 假阳率（`llm_judge_blocker_quality`、`llm_judge_false_positive_rate`）。
 - **为何**：动机3（插件测有效性）的质量闭环靠它。
 - **风险**：本身引入 LLM 主观判断——**必须配 `frozen_evidence_hash_redact`**（同属 DEFERRED_V0），否则评分不可复现，反污染 eval 结论。
-- **现状**：✅ 已实现（2026-06-09）。`scripts/lto/llm_judge.py`（异构 runner 判读 + `freeze_evidence` sha256 冻结 redacted 证据）+ `plugin_eval_run` 写 `comparison["judge"]` 单独成层标 `kind:"subjective_judgment"`。三铁律：judge 异构（复用 `_same_family`，同族 skip）/ 可复现（输入 redact+规范化+hash）/ 不夺权（promote 一行没碰，仍 human-gated）。`DEFERRED_V0` 缩到只剩 `automatic_promotion`。
+- **现状**：✅ Rust 已接管。`src/llm_judge.rs`（异构 runner 判读 + `freeze_evidence` sha256 冻结 redacted 证据）+ Rust `plugin eval-run` 写 `comparison["judge"]` 单独成层标 `kind:"subjective_judgment"`。三铁律：judge 异构（同族 skip）/ 可复现（输入 redact+规范化+hash）/ 不夺权（promote 仍 human-gated）。`DEFERRED_V0` 缩到只剩 `automatic_promotion`。
 - **裁决档**：用户拍板「判读+冻结，judge 不进 promote」（最稳，judge 只作额外参考）。
 
 ## ③ autopilot --autonomous（P2，被 ① 解锁）
 
 - **是什么**：机械证据闸门（`_autonomous_gate`）+ 机械执行 safe 子步骤，**绝不 spawn 决策 agent**（与 `--decide` 互斥，运行时强制清掉）；反思/决策永远归宿主 LLM（当前 `--supervised` / `--auto-exec` / `--decide` 已实现）。
 - **为何延后**：spec 明说「先攒 supervised 真实 escalate 数据再决定值不值」——而数据正来自 ①。在 ① 落地、攒够真实 escalate 样本前做它=赌。
-- **锚点**：`scripts/lto/commands/autopilot.py` 的 `_autonomous_gate` 函数 / `run()` 里 autonomous mode 分支、`SKILL.md` autopilot 档位说明。
+- **锚点**：`src/commands/ops.rs` 的 autonomous gate / autopilot 分支、`SKILL.md` autopilot 档位说明。
 
 ## ④ memory_sink（P2）
 
-- **是什么**：`scripts/lto/memory_sink.py` 记忆回写落地。
+- **是什么**：Rust `memory publish/export/resume` 记忆回写落地。
 - **现状**：✅ 已实现（am 0.7.0，AmCliSink 落地真跑）。`AmCliSink.publish()` 调 `am ingest -f - --json` 吃整个信封，`AmCliSink.resume()` 调 `am search`，两个方法均有完整实现；基类 `MemorySink` 的两个 `NotImplementedError` 是抽象方法占位符（非缺口），子类 `AmCliSink` / `LegacyMemoryFlowSink` 均已覆盖。am 是可选项——没装 am 时 `_require_binary` 优雅降级，`.lto/` 仍是真源。
 
 ## ⑤ TOURNAMENT / LOOP 枚举（P3，不做）
 
-- **是什么**：`scripts/lto/agent_job.py:28-29` 两个 `AgentJobKind` 枚举占位。
+- **是什么**：`src/agent_job.rs` 中 agent job 类型/模式的扩展占位。
 - **判定**：YAGNI，无真实触发场景，做了不增任何 control-loop 增益。保持占位，有真实场景再说。
 
 ## ⑥ 跨 run 数据挖掘 → 指导 LTO 进化（P0-next，① 的下游闭环）

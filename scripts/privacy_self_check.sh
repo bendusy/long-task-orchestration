@@ -104,8 +104,7 @@ is_classified_regex_hit() {
   local rel="$1" hit="$2" line_no test_start
   line_no="${hit%%:*}"
   case "$rel" in
-    scripts/test_*.py) return 0 ;;
-    src/llm_judge.rs)
+    src/events.rs|src/llm_judge.rs|src/redact.rs|src/telemetry.rs)
       [[ "$line_no" =~ ^[0-9]+$ ]] || return 1
       test_start="$(grep -n '^\#\[cfg(test)\]' "$REPO/$rel" | head -1 | cut -d: -f1 || true)"
       [[ -n "$test_start" && "$line_no" -ge "$test_start" ]]

@@ -181,9 +181,9 @@ v1 用普通环境变量 `LTO_RUNNER_SANDBOX` 是错的——会被子进程/前
 | 2 | `scripts/delegate/runners/claude.sh` | read-only 时 → `--allowedTools Read,Grep,Glob,WebFetch --permission-mode plan`；写 perm sidecar（同上） |
 | 3 | `scripts/delegate/runners/pi.sh` | read-only 时追加 `--tools read,grep,find,ls`（实测为替换语义才用；否则 deferred）；写 perm sidecar |
 | 4 | `scripts/delegate/runners/codex.sh` | `CODEX_SANDBOX` 仅从 scheduler 隔离 env 读（RH1）；写 perm sidecar |
-| 5 | `scripts/lto/scheduler.py` `_permission_snapshot` + spawn | **construct 侧记录 `enforced_argv`/`actual_tools`**（scheduler 自己构造的，不靠 runner 自报，RH2）；spawn 用隔离 env（不继承父进程）；读 `<reply>.perm.json` 仅作补充 + 校验 `job_id`；缺/不匹配→`unknown` |
-| 6 | `scripts/lto/plugin_eval_run.py` `_sandbox_exceeds` | 按 §3.2 **统一偏序 `actual ⊆ approved`**（不对写任务免检，RC2）；tool-allowlist 子集判 + **空集→danger-full-access→违规**（RC1）；job 级显式传 sandbox/tools 字段 |
-| 7 | `scripts/lto/plugins.py` validate | **§7 改判**：agy + approved=**read-only** 组合拒绝（agy 无 read-only 档）；agy + workspace-write 现为合法（`--sandbox` 兑现）。validate 阶段拒不可兑现组合 |
+| 5 | `src/scheduler.rs` permission snapshot + spawn | **construct 侧记录 `enforced_argv`/`actual_tools`**（scheduler 自己构造的，不靠 runner 自报，RH2）；spawn 用隔离 env（不继承父进程）；读 `<reply>.perm.json` 仅作补充 + 校验 `job_id`；缺/不匹配→`unknown` |
+| 6 | `src/plugin_eval_run.rs` sandbox check | 按 §3.2 **统一偏序 `actual ⊆ approved`**（不对写任务免检，RC2）；tool-allowlist 子集判 + **空集→danger-full-access→违规**（RC1）；job 级显式传 sandbox/tools 字段 |
+| 7 | `src/plugin.rs` validate | **§7 改判**：agy + approved=**read-only** 组合拒绝（agy 无 read-only 档）；agy + workspace-write 现为合法（`--sandbox` 兑现）。validate 阶段拒不可兑现组合 |
 | 8 | `AgentJob` 数据模型 | 新增 `permission_policy.sandbox` + 工具集字段（pi M-v2：防 ad-hoc 字典绕类型） |
 | 9 | 测试 | 更新 `_permission_snapshot`/`_sandbox_exceeds` 单测 + REG6；新增：空集→违规(RC1)、未知工具→违规、缺/旧 sidecar→违规(RC3)、approved=workspace-write 越权成 full-access→违规(RC2)、approved=write 合法不误判、含 Write 工具集→违规(经 job 字段) |
 | 10 | `references/plugin-boundary.md` | 第 8 章每家补兑现机制 + 证据链；L176 `permission_violation` 从「sandbox-rank based」改「mechanism-aware, evidence-backed」 |
@@ -201,7 +201,7 @@ v1 用普通环境变量 `LTO_RUNNER_SANDBOX` 是错的——会被子进程/前
 - **写型派工零回归**：approved=workspace-write 且父 env 预设残留只读变量 → scheduler 隔离 env spawn 后按写权限跑，不被误判。
 - **agy+workspace-write**：validate 阶段拒绝（§3.3）。
 - **四家 perm.json 字段/类型一致性**（codex M-v2）：schema 校验四家 sidecar 同构。
-- `lto self-test` + `lto --use-python self-test` + 现有 pytest（含更新后断言）全绿。
+- `lto self-test` + Rust test suite（含更新后断言）全绿。
 
 ## 7. item 0 实测结论（2026-06-10，真实 CLI 黑盒探针）
 

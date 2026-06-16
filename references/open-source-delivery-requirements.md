@@ -13,8 +13,8 @@
 LTO is not ready to be pushed or announced as a clean open-source product until
 the repository presents one coherent story:
 
-- Rust is the default core path.
-- Python is an explicit legacy fallback, not a hidden default.
+- Rust is the only supported core path.
+- Python fallback was removed in v0.5.0 after parity evidence and legacy run fixture coverage.
 - macOS and Linux are the supported release platforms.
 - Windows native support is paused, not half-supported through shell fixtures.
 - `.lto/` is the public file protocol and local truth source.
@@ -24,13 +24,13 @@ the repository presents one coherent story:
   instructions based on real assets.
 
 Anything less ships confusion. Tags without assets are not a binary release.
-Docs that disagree about Python, Rust, Windows, or plugin authority are bugs,
+Docs that disagree about Rust, Python retirement, Windows, or plugin authority are bugs,
 not harmless history.
 
 ## Non-Negotiable Goal
 
 A new user must be able to clone or download LTO on macOS/Linux, understand that
-Rust is the default implementation, run a complete task lifecycle, and verify
+Rust is the supported implementation, run a complete task lifecycle, and verify
 the result without reading private handoff context.
 
 The target open-source experience is:
@@ -42,14 +42,12 @@ The target open-source experience is:
    start/task/runner/check/closeout lifecycle.
 3. Install wrapper:
    `bash scripts/install.sh`, then `lto self-test`.
-4. Use Python fallback only when requested:
-   `lto --use-python self-test` or `LTO_USE_PYTHON=1 lto ...`.
-5. Install from release assets once they exist:
+4. Install from release assets once they exist:
    download the macOS/Linux tarball, verify `.sha256`, unpack, run
    `./lto-rs self-test`.
-6. Use the plugin path without giving plugins execution authority:
+5. Use the plugin path without giving plugins execution authority:
    `lto plugin list`, `validate`, `render-profile`, `eval`, and `mount`.
-7. Resume old `.lto` runs without data loss or schema crashes.
+6. Resume old `.lto` runs without data loss or schema crashes.
 
 ## Maintainer Review Frame
 
@@ -60,8 +58,8 @@ release assets, docs, and CI without private context".
 
 The release candidate must have:
 
-- one default execution path: Rust;
-- one compatibility story: Python fallback is explicit and tested;
+- one execution path: Rust;
+- one compatibility story: historical `.lto` files remain readable by Rust fixtures;
 - one platform story: macOS/Linux supported, Windows native paused;
 - one public state contract: `.lto/` files are documented and backward
   compatible;
@@ -83,8 +81,8 @@ maintainer remembers private context, the repository is not ready.
   hide decisions in a background service or external mutable state.
 - No plugin marketplace, executable plugin code, plugin DAG engine, dynamic
   tool installer, automatic route selector, or automatic promotion.
-- No hidden Python default. Python is allowed only as compatibility fallback
-  until a separate removal gate proves it can shrink further.
+- No second live Python command path. The former fallback was removed in v0.5.0;
+  do not reintroduce a duplicate implementation.
 - No documentation claiming downloadable binaries exist until GitHub Releases
   actually exposes assets and the checksum/self-test path has been verified.
 - No push or public release from a dirty worktree or with unclassified private
@@ -135,19 +133,18 @@ Rust core owns generic harness primitives:
 making the target, constraints, measurement instrument, and anti-overfit move
 explicit. It is not a supervisor, daemon, or route selector.
 
-### Python Boundary
+### Python Retirement Boundary
 
-Python remains only for compatibility and legacy surfaces during the takeover:
+Python fallback is retired. Historical Python behavior is preserved through
+parity evidence, release notes, and legacy `.lto` fixtures:
 
-- fallback command path through `--use-python` or `LTO_USE_PYTHON=1`;
 - parity checks against historical `.lto` behavior;
-- Python mirrors for Rust-owned plugin surfaces until the formal removal gate
-  deletes the fallback tree;
-- tests that protect the fallback until a formal removal gate exists.
+- Rust-owned plugin parity records for former legacy surfaces;
+- tests that prove Rust reads old run state without a live Python CLI.
 
-Do not delete Python just because a Rust command exists. First classify each
-Python surface as `ported`, `fallback-only`, `legacy-plugin`, or
-`removal-candidate`, then prove the Rust path owns the same external behavior.
+Do not add a new Python command path just because a helper script is convenient.
+New public behavior belongs in Rust unless it is a standalone text/reporting
+gate with no dependency on the retired fallback package.
 
 ### Plugin Boundary
 
@@ -189,8 +186,7 @@ audit and align at least:
 
 Required cleanup:
 
-1. Replace active `python3 scripts/lto_run.py ...` examples with Rust or
-   wrapper examples unless the section is explicitly labeled legacy fallback.
+1. Replace active legacy Python command examples with Rust or wrapper examples.
 2. Update or retire documents that still say Python is primary, Go is next, or
    Rust is not worth core use. That was a historical decision, not current
    truth.
@@ -201,11 +197,10 @@ Required cleanup:
 5. Keep binary download wording conditional on live release assets.
 6. State the Windows policy consistently: macOS/Linux first, Windows native
    paused.
-7. State the Python migration path in every install/release-facing document:
-   source build, wrapper default Rust, explicit fallback.
+7. State the Rust-only path in every install/release-facing document:
+   source build, wrapper executes Rust, Python fallback removed in v0.5.0.
 8. Keep plugin docs explicit that Rust owns static data-only commands,
-   source-note creation, and real eval-run; Python remains only as explicit
-   compatibility fallback until the removal gate.
+   source-note creation, and real eval-run.
 
 ## Repository Cleanup Requirements
 
@@ -219,7 +214,7 @@ Before a public push or release candidate, classify every confusing surface:
 |---|---|
 | Root files | Keep only active user/developer entry points or clearly named project metadata. |
 | `references/` | Mark stale roadmaps historical, rewrite active docs, or delete obsolete drafts. |
-| `scripts/lto/` Python | Classify each surface as fallback, legacy plugin, test support, or removal candidate. |
+| Retired Python fallback | Keep removed; preserve only release notes, parity evidence, and legacy fixtures. |
 | `src/` Rust | Keep public command ownership in Rust; avoid adding second owners for the same behavior. |
 | `plugins/` | Keep data-only manifests/prompts/evals; no executable plugin side effects. |
 | `samples/` and `fixtures/` | Keep only redacted, public-safe, regression-useful examples. |
@@ -236,13 +231,13 @@ Rust takeover is complete only when these are true:
 
 | Area | Requirement |
 |---|---|
-| Wrapper | `scripts/install.sh` installs `lto` that defaults to Rust and fails clearly if `lto-rs` is missing. |
-| Fallback | `lto --use-python` and `LTO_USE_PYTHON=1` remain explicit and tested. |
+| Wrapper | `scripts/install.sh` installs `lto` that executes Rust and fails clearly if `lto-rs` is missing. |
+| Fallback | Retired flags/env vars fail clearly with a v0.5.0 removal message. |
 | Command parity | All public commands either have Rust implementation or a documented legacy exception. |
 | State compatibility | Rust can read old `.lto` runs and tolerate missing new fields. |
 | Gates | `check --to implementation|closed` enforces delivery contract and closeout evidence where applicable. |
 | Scheduler | Runner results are typed; timeout/rate-limit/failure states are not stringly guessed. |
-| Pi/tool wrappers | Integration paths prefer Rust and use Python only when explicitly requested. |
+| Pi/tool wrappers | Integration paths use Rust. |
 | Plugin path | `list/validate/render-profile/eval/mount/source-note/eval-run` are Rust-owned and tested. |
 | Release | CI builds release binaries on `v*` tags and uploads checksummed assets. |
 
@@ -250,15 +245,15 @@ The next cleanup pass must reduce duplicate logic. The correct order is:
 
 1. Prove parity with tests and old-run fixtures.
 2. Move one behavior owner to Rust.
-3. Shrink or label the Python path. The current ownership manifest is
+3. Keep the Python path removed. The current ownership manifest is
    [`python-rust-ownership.json`](./python-rust-ownership.json), with the
    human-readable table in [`python-rust-ownership.md`](./python-rust-ownership.md).
 4. Delete unreachable or duplicated code only after rollback is preserved.
 
-### Safe Python Removal Gate
+### Python Removal Record
 
-Deleting Python is safe only after Rust has taken ownership of every externally
-visible behavior or the behavior has a recorded retirement decision. The gate is:
+Deleting Python was safe only after Rust took ownership of every externally
+visible behavior or the behavior had a recorded retirement decision. The gate was:
 
 1. Classify the Python surface in `python-rust-ownership.json`.
 2. Port the behavior to Rust with focused tests for success, failure, security
@@ -266,7 +261,7 @@ visible behavior or the behavior has a recorded retirement decision. The gate is
 3. Produce parity evidence against the Python path using the same fixture, or
    record why the behavior is intentionally retired.
 4. Update wrapper routing, active docs, ownership manifest, tests, and CI so no
-   required path still imports or shells into `scripts/lto/`.
+   required path imports or shells into the retired fallback package.
 5. Preserve rollback through old-run fixtures, release notes, or a tagged
    previous version.
 6. Only then delete the Python files. Do not delete `scripts/delegate/runners/*.sh`;
@@ -274,9 +269,8 @@ visible behavior or the behavior has a recorded retirement decision. The gate is
 
 For the 2026-06-16 removal track, `plugin source-note` and real
 `plugin eval-run` are the Rust-owned legacy ports, with B.5 parity evidence
-recorded in `references/validation-log.md`. Full Python removal still waits for
-wrapper/doc/test cleanup and the explicit human gate before any `scripts/lto/`
-deletion.
+recorded in `references/validation-log.md`. Full Python removal is recorded in
+the v0.5.0 changelog and the ownership manifest.
 
 ## Development Requirements Design Gate
 
@@ -287,7 +281,7 @@ ownership and verification:
 | Question | Required answer |
 |---|---|
 | What user-visible gap exists? | Name the missing behavior or conflicting claim. |
-| Which layer owns it? | Rust core, Python fallback, plugin data, docs, CI, release workflow, or test fixture. |
+| Which layer owns it? | Rust core, retired Python history, plugin data, docs, CI, release workflow, or test fixture. |
 | What is the public surface? | CLI flags, files, JSON fields, docs, release assets, or workflow jobs. |
 | What state/protocol changes? | Field definitions, optionality, redaction class, and old-run behavior. |
 | What failure modes matter? | Missing binary, stale docs, broken fallback, bad runner, dirty worktree, private leak, CI drift. |
@@ -316,7 +310,7 @@ Required release targets:
 The release workflow must:
 
 1. Run Rust fmt/check/clippy/test on macOS and Linux.
-2. Run Python fallback smoke or an explicit compatibility test job.
+2. Run the legacy `.lto` fixture compatibility test job.
 3. Build release binaries only from `v*` tags.
 4. Upload tarballs and checksum files to GitHub Releases.
 5. Verify at least one downloaded asset by checksum and `./lto-rs self-test`.
@@ -358,19 +352,20 @@ cargo fmt --all --check
 cargo check --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
-python3 scripts/smoke_test.py
+python3 scripts/check_docs_consistency.py
+python3 scripts/check_python_rust_ownership.py
 cargo build --release --locked --bin lto-rs
 git diff --check
 ```
 
-Wrapper and fallback smoke:
+Wrapper smoke:
 
 ```bash
 tmp_bin="$(mktemp -d)"
 LTO_BIN_DIR="$tmp_bin" bash scripts/install.sh
 "$tmp_bin/lto" self-test
 "$tmp_bin/lto" plugin list
-"$tmp_bin/lto" --use-python self-test
+# retired Python fallback flag/env var should fail with a clear removal error
 ```
 
 Plugin smoke:
@@ -396,7 +391,7 @@ cargo test --locked --test python_rust_compat
 The fixed legacy fixture lives at `tests/fixtures/legacy-run/state.json`. It
 must keep omitting newer optional fields such as `budget` and
 `delivery_contract` so Rust compatibility is tested against an older on-disk
-shape, not only against state freshly emitted by the current Python fallback.
+shape, not only against state freshly emitted by current Rust code.
 
 Privacy and repository hygiene:
 
@@ -468,8 +463,8 @@ The branch is publishable only if every answer is yes:
 
 - Can a stranger build from source on macOS or Linux?
 - Can a stranger install the wrapper and see Rust as default?
-- Can a stranger intentionally run the Python fallback and understand why it is
-  fallback?
+- Can a stranger intentionally request the retired Python fallback and get a
+  clear removal error?
 - Can a stranger download a release binary, verify checksum, and run self-test?
 - Can a stranger run a minimal start/task/runner/check/closeout lifecycle?
 - Can a stranger understand that Windows native support is paused?
@@ -489,7 +484,7 @@ If one answer is no, do not push as a release candidate.
 
 ### P0: Stop Shipping Contradictions
 
-- Align active docs to Rust-default/macOS-Linux/Python-fallback truth.
+- Align active docs to Rust-only/macOS-Linux/Python-retirement truth.
 - Mark stale roadmap documents as historical or rewrite them.
 - Fix active examples that still teach Python as the default path.
 - Add a docs consistency scan to CI or smoke tests.
@@ -502,21 +497,20 @@ If one answer is no, do not push as a release candidate.
 - Add at least one post-release download/checksum/self-test verification step.
 - Document source-build and binary-install flows separately.
 
-### P1: Rust Owns Core, Python Shrinks
+### P1: Rust Owns Core, Python Is Retired
 
-- Keep the command-by-command ownership table and
+- Keep the Rust-owned command table and
   `scripts/check_python_rust_ownership.py` gate current.
 - Add old-run compatibility fixtures.
-- Port or explicitly defer each Python-only behavior.
+- Preserve only explicit historical compatibility fixtures.
 - Remove duplicated branches only after parity evidence exists.
 
 ### P1: Plugin Eval Boundary
 
 - Keep Rust static plugin path authoritative.
 - Keep Rust `plugin source-note` as the plugin-authoring path.
-- Keep Rust `plugin eval-run` as the real baseline-vs-candidate A/B path; keep
-  the Python mirror only as fallback until the full Python removal gate can
-  delete the fallback tree.
+- Keep Rust `plugin eval-run` as the real baseline-vs-candidate A/B path; do
+  not reintroduce a second live plugin CLI path.
 - Preserve human-gated promotion and deterministic-vs-judged metric separation.
 
 ### P2: Windows Design, Not Fixture Chasing
@@ -536,7 +530,7 @@ These are hard stops:
 - Windows CI is required but not backed by native runner support.
 - A plugin can execute code, raise permissions, or auto-promote.
 - `cargo test` passes but wrapper install/self-test fails.
-- Python fallback is broken and not intentionally removed with migration notes.
+- Retired Python fallback requests do not fail with a clear migration message.
 - `.lto` old-run compatibility fails.
 - Private local paths, secrets, or business-specific data appear in public docs
   or artifacts.

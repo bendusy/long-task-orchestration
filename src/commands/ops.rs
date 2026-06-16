@@ -3195,7 +3195,7 @@ mod tests {
             vec!["ship installable Rust wrapper".into()],
             vec!["macOS/Linux first".into()],
             vec!["cargo test --locked --all-targets".into()],
-            vec!["verify Rust default and Python fallback separately".into()],
+            vec!["verify Rust default and legacy fixture separately".into()],
         );
         h.write_state(state);
 

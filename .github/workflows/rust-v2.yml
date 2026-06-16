@@ -31,6 +31,10 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Cargo test
         run: cargo test --locked --all-targets
+      - name: Docs consistency
+        run: python3 scripts/check_docs_consistency.py
+      - name: Rust ownership
+        run: python3 scripts/check_python_rust_ownership.py
 
   release-binaries:
     name: release binary (${{ matrix.target }})

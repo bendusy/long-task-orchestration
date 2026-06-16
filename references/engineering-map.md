@@ -68,13 +68,13 @@
 | `lto next` | 事实简报器（零 LLM，不接管路径选择） | `[--exec] [--json]` | 决策简报 / argv 命令 | `lto next` |
 | `lto autopilot` | 受约束推进 harness | `--supervised [--auto-exec] [--decide [--decide-kind] [--decide-budget]]` / `--autonomous`（机械证据闸门+机械执行，不 spawn 决策 agent，与 --decide 互斥）| 决策简报 / 沙箱执行 + evidence / 三方收敛 brief / 闸门简报 | `lto autopilot --supervised --decide` |
 | `lto recap` | 面向人类的回顾视图 | `[--run-id]` | 人话回顾（六问） | `lto recap` |
-| `smoke_test.py` | skill 自检（结构+脚本+模板+eval+ref） | — | `SMOKE OK`；rc 0/1 | `python3 scripts/smoke_test.py` |
+| `check_docs_consistency.py` | 文档/命令面一致性 gate | — | `DOCS CONSISTENCY OK`；rc 0/1 | `python3 scripts/check_docs_consistency.py` |
 | `scripts/install.sh` | 安装 skill 软链，并生成/检查全局 `lto` wrapper | `[--check] [target]` + `LTO_BIN_DIR` | skill links + sentinel-managed wrapper；冲突 rc 2 | `bash scripts/install.sh --check` |
 
 **harness primitive 底层模块**（不直接走 CLI，是 host agent 可组合的能力）：
-`agent_job.py`（AgentJob/AgentResult 数据合同）/ `scheduler.py`（并发+退出码三元判定+退避+healthcheck）/ `agent_exec.py`（spawn 原语）/ `worktree_exec.py`（autopilot 沙箱，17 攻击向量拦截）/ `progress.py`（推进检测+stall 闸门，防伪推进博弈）/ `decision.py`+`decision_brief.py`（双轨收敛引擎：direction 投票 / review union 合并，被 `autopilot --decide` 调用 spawn 三方）。
+`src/agent_job.rs`（AgentJob/AgentResult 数据合同）/ `src/scheduler.rs`（并发+退出码三元判定+退避+healthcheck）/ `src/worktree.rs`（autopilot 沙箱）/ `src/dispatch.rs`（推进/派工 affordance）/ `src/decision.rs`（双轨收敛引擎：direction 投票 / review union 合并，被 `autopilot --decide` 调用 spawn 三方）。
 
-host agent 在 CLI 命令之外高频用到的模块：`auditors.py`（readonly_intent_policy 唯一入口）/ `state.py`（所有命令的状态层）/ `llm_judge.py`（judge 底层）/ `artifacts.py`（artifact 真源）/ `events.py`+`telemetry.py`（Phase 1 事件层）/ `interventions.py` / `budget.py`（run 级预算契约纯计量层，autopilot 调它硬刹车、next/recap 调它软警告）。（其余见 `scripts/lto/*.py`，共 27 个核心模块）
+host agent 在 CLI 命令之外高频用到的模块：`src/audit_dispatch.rs`（readonly_intent_policy / 异构 auditor 选择）/ `src/state.rs`（所有命令的状态层）/ `src/llm_judge.rs`（judge 底层）/ `src/commands/util.rs`（artifact 真源 helper）/ `src/events.rs`+`src/telemetry.rs`（Phase 1 事件层）/ `src/budget.rs`（run 级预算契约纯计量层，autopilot 调它硬刹车、next/recap 调它软警告）。
 
 ## 四、为什么这些步骤不脚本化（边界声明）
 

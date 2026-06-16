@@ -21,13 +21,13 @@
       "id": "refute-plugin-boundary-claims",
       "runner": "codex",
       "profile": "codex-evidence-refuter-v1",
-      "brief": "Read references/plugin-boundary.md and scripts/lto_run.py from the repo. For each of the following three claims, read the relevant file sections and attempt to refute or verify using path:line evidence only. Claims: (1) 'A plugin can lower permission ceilings but cannot raise them' — check if the validate gate enforces this; (2) 'safety_regressions_allowed=0 is required in eval packs' — check if lto_run.py plugin eval enforces this; (3) 'source_notes must be non-empty' — check the validate logic. For each claim output verdict (verified|refuted|not_found), explicit confidence, and the path:line evidence. Output JSON only."
+      "brief": "Read references/plugin-boundary.md, src/plugin.rs, and src/plugin_extra.rs from the repo. For each of the following three claims, read the relevant file sections and attempt to refute or verify using path:line evidence only. Claims: (1) 'A plugin can lower permission ceilings but cannot raise them' — check if the validate gate enforces this; (2) 'safety_regressions_allowed=0 is required in eval packs' — check if Rust plugin eval enforces this; (3) 'source_notes must be non-empty' — check the validate logic. For each claim output verdict (verified|refuted|not_found), explicit confidence, and the path:line evidence. Output JSON only."
     },
     {
       "id": "completeness-critic-boundary-verdicts",
       "runner": "pi",
       "profile": "pi-completeness-critic-v1",
-      "brief": "You are given three hypotheses about plugin-boundary.md enforcement rules. Assume the refuter returned: (1) claim 'plugin cannot raise permissions' verdict=verified confidence=high evidence=references/plugin-boundary.md:167; (2) claim 'safety_regressions_allowed=0 enforced' verdict=not_found confidence=unknown evidence=none; (3) claim 'source_notes non-empty enforced' verdict=verified confidence=moderate evidence=scripts/lto_run.py:82. Identify all gaps: any claim with not_found verdict, any verdict with no reproducible evidence, and any claim not addressed. Output JSON only with gaps array and all_claims_addressed boolean."
+      "brief": "You are given three hypotheses about plugin-boundary.md enforcement rules. Assume the refuter returned: (1) claim 'plugin cannot raise permissions' verdict=verified confidence=high evidence=references/plugin-boundary.md:167; (2) claim 'safety_regressions_allowed=0 enforced' verdict=not_found confidence=unknown evidence=none; (3) claim 'source_notes non-empty enforced' verdict=verified confidence=moderate evidence=src/plugin.rs:153. Identify all gaps: any claim with not_found verdict, any verdict with no reproducible evidence, and any claim not addressed. Output JSON only with gaps array and all_claims_addressed boolean."
     },
     {
       "id": "full-verify-eval-pack-constraint",

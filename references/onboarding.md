@@ -67,7 +67,7 @@ publish 到 am 做跨项目长期记忆；**没装 am 时，`.lto/` 就是全部
 
 ### 前提
 - Rust stable + Cargo、bash、git。
-- Python 3.10+ 仍用于兼容 fallback 和 legacy 自检。
+- Python fallback 已在 v0.5.0 退役；核心 CLI 不再依赖 Python。
 - 异构派工 runner：repo 自带 `scripts/delegate/`（runners/codex.sh、pi.sh、agy.sh、claude.sh + healthcheck.sh），`lto audit --auto-dispatch` 和 spawn agent 直接用它，无需外部 skill。前提是本机至少装好其中两家 CLI。
 - 可选：ANIMEM / memory-flow。没装也能完整使用 LTO 核心命令；它只增强跨项目 artifact memory。
 
@@ -79,7 +79,6 @@ cargo run --manifest-path <skill-root>/Cargo.toml -- <子命令>
 `<skill-root>` 取决于你怎么装的 skill：
 - 软链装载（推荐）：`~/.agents/skills/long-task-orchestration/`（codex/agy 标准路径）或 `~/.claude/skills/long-task-orchestration/`（claude）。
 - 仓库内直接用：`cargo run -- <子命令>`。
-- 兼容 fallback：`python3 <repo>/scripts/lto_run.py <子命令>`。
 
 装载方式（在 agent-skills 仓库根）：
 ```bash
@@ -93,8 +92,6 @@ LTO 是个 CLI，任何能跑 bash 的 runtime 都能调，不需要你内置什
 cargo run --manifest-path <skill-root>/Cargo.toml -- --repo <目标仓库> <子命令> [参数]
 # 或安装 wrapper 后默认走 Rust：
 lto --repo <目标仓库> <子命令> [参数]
-# legacy fallback:
-lto --use-python --repo <目标仓库> <子命令> [参数]
 ```
 `--repo` 指向你要做长任务的那个仓库（默认当前目录）。
 

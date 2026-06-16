@@ -17,10 +17,16 @@ fallback，完整删除必须等待人工 gate 和阶段 C wrapper/docs/tests �
 | Eval-run parity | 同一临时 plugin + 同一 shell fake runner 分别跑 Python `scripts/lto_run.py plugin eval-run` 与 Rust `cargo run -- plugin eval-run`，比较 `ok/plugin_id/eval_id/deferred/case verdict/status/parse/leak/delta/token` subset | `eval-run parity OK` |
 | Ownership gate | `python3 scripts/check_python_rust_ownership.py` | `PYTHON/RUST OWNERSHIP OK`，Rust help 与 manifest 均包含 `source-note`/`eval-run` |
 | Docs gate | `python3 scripts/check_docs_consistency.py` | `DOCS CONSISTENCY OK` |
-| Rust full test | `cargo test --locked --all-targets` | 146 lib tests + 2 integration tests passed |
+| Phase C Rust full test | `cargo test --locked --all-targets` | 154 lib tests + 1 legacy fixture integration test passed |
 | Rust clippy | `cargo clippy --locked --all-targets -- -D warnings` | passed after options-struct cleanup |
 | Rust observability gate | `cargo test --locked events -- --nocapture`; `cargo test --locked telemetry -- --nocapture`; true `obs-smoke` run through `start → task-add → runner → phase --set observe → closeout` | `events.jsonl` and `telemetry.json` produced by Rust; final event count matched (`10 == 10`); `runner_calls=1`; `tasks_done=1`; no raw `stdout`/`stderr`/`reply_text`; no `control_recommendations` |
 | Rust observability locking | `cargo test --locked events -- --nocapture` | covers redaction, raw-output rejection, duplicate `event_id` tolerant read, and 32 concurrent appends with unique monotonic event ids |
+| Phase C docs gate | `python3 scripts/check_docs_consistency.py` | `DOCS CONSISTENCY OK`; active docs no longer teach Python fallback |
+| Phase C ownership gate | `python3 scripts/check_python_rust_ownership.py` | `RUST OWNERSHIP OK`; all public/plugin commands are `rust-core`, Python role `removed` |
+| Phase C privacy gate | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 bash scripts/privacy_self_check.sh --repo . --strict --no-gitleaks` | `findings=0`; 8 Rust redaction test fixtures classified, 0 unclassified regex hits |
+| Phase C plugin smoke | `lto plugin list`; `for dir in plugins/*; do lto plugin validate "$dir" --json; lto plugin eval "$dir" --json; done`; fake-runner `lto plugin eval-run ... --no-persist --json` | all 6 bundled plugins validate/eval; `eval-run` completed through Rust with `ok=true` and no Python fallback |
+| Phase C wrapper smoke | `LTO_BIN_DIR="$(mktemp -d)" bash scripts/install.sh`; wrapper `self-test`, `plugin validate`, `plugin source-note`; wrapper `--use-python` and `LTO_USE_PYTHON=1` | Rust wrapper works; source-note default appends manifest; retired Python flag/env exit 64 with clear removal messages |
+| Phase C release build | `cargo build --release --locked --bin lto-rs`; `git diff --check` | release binary rebuild passed; whitespace check clean |
 
 **安全删除说明**：`references/python-rust-ownership.md` 与
 `references/open-source-delivery-requirements.md` 已写明 Python 删除不是按文件年龄删，
@@ -28,10 +34,11 @@ fallback，完整删除必须等待人工 gate 和阶段 C wrapper/docs/tests �
 rollback preserved → delete」执行；`scripts/delegate/runners/*.sh` 明确不得随
 Python fallback 删除。
 
-**Phase C 状态**：尚未删除 Python fallback。`references/specs/2026-06-16-python-removal-via-rust-port.md`
-已补 C.5 执行交接单，明确删除候选、必须保留文件、active docs 改口径、v0.5.0
-版本同步、验证命令和停止条件；`events.py`/`telemetry.py` 的删除前置已由 Rust
-`src/events.rs`/`src/telemetry.rs` 接管并通过上方 observability gate。
+**Phase C 状态**：Python fallback 已按 v0.5.0 退役。`scripts/lto/`、
+`scripts/lto_run.py`、fallback smoke/tests 已删除；`scripts/delegate/runners/*.sh`
+与 `healthcheck.sh` 保留为 Rust scheduler 的现役 runner adapter。wrapper/docs/tests/gates
+均已改为 Rust-only；rollback 依赖 git history、legacy `.lto` fixture、release note
+与上方 parity/observability 证据。
 
 ## 2026-05-31：cross-runtime 真执行实测（codex 当宿主）
 

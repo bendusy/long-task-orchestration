@@ -233,7 +233,7 @@ Do not implement yet:
 - automatic promotion to core;
 - one-click "best path" routing.
 
-Rust v2 owns the plugin path: list, validate, render-profile, eval, mount, source-note creation, and real eval-run. Host agent still decides. Python remains only as an explicit compatibility fallback until the formal removal gate deletes the fallback tree.
+Rust v2 owns the plugin path: list, validate, render-profile, eval, mount, source-note creation, and real eval-run. Host agent still decides. The Python compatibility fallback was removed in v0.5.0; historical behavior is preserved through fixtures and release notes, not a second live CLI path.
 
 ## 11. Implemented v0 commands
 

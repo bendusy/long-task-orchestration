@@ -4,17 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import sys
 import unicodedata
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR))
-
-from lto import artifacts as af  # noqa: E402
-from lto import state as st  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -47,6 +43,61 @@ def safe_slug(title: str, explicit: str | None) -> str:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,95}", slug):
         raise ValueError("invalid slug: use lowercase ASCII letters, digits, and hyphens")
     return slug
+
+
+def validate_run_id(run_id: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id):
+        raise ValueError("invalid run id")
+    return run_id
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def load_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_json(path: Path, value: dict) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def register_artifact(repo: Path, run_id: str, path: Path, state: dict, summary: str) -> None:
+    manifest_path = repo / ".lto" / run_id / "artifacts.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        manifest = load_json(manifest_path) if manifest_path.exists() else {"artifacts": []}
+    except json.JSONDecodeError:
+        manifest = {"artifacts": []}
+    rel_path = path.relative_to(repo).as_posix()
+    artifacts = manifest.setdefault("artifacts", [])
+    artifacts.append(
+        {
+            "id": f"artifact-{len(artifacts) + 1}",
+            "kind": "decision_record",
+            "path": rel_path,
+            "producer": "write_decision.py",
+            "summary": summary,
+            "tags": ["decision"],
+            "sha256": file_sha256(path),
+            "size_bytes": path.stat().st_size,
+            "recorded_at": iso_now(),
+            "state_head": state.get("workspace", {}).get("head", ""),
+        }
+    )
+    save_json(manifest_path, manifest)
 
 
 def render_adr(args: argparse.Namespace, run_id: str, slug: str, today: str) -> str:
@@ -87,35 +138,38 @@ def register_decision(repo: Path, run_id: str, rel_path: str, args: argparse.Nam
         )
         return 0
 
-    state = st.load_state(state_path)
-    if state is None:
+    try:
+        state = load_json(state_path)
+    except json.JSONDecodeError:
         print(
             f"WARN cannot load state.json for run {run_id}; wrote ADR without LTO registration",
             file=sys.stderr,
         )
         return 0
 
-    state.setdefault("user_decisions", []).append({
-        "title": args.title,
-        "status": args.status,
-        "path": rel_path,
-        "slug": slug,
-        "memory_flow_slug": args.memory_flow_slug or "",
-        "timestamp": st.iso_now(),
-    })
-    st.save_state(state_path, state)
-    st.sync_run_state_md(repo / ".lto" / run_id / "run-state.md", state)
-    af.register_path(
-        repo, run_id, repo / rel_path, kind="decision_record",
-        producer="write_decision.py", state=state, summary=args.title,
+    state.setdefault("user_decisions", []).append(
+        {
+            "title": args.title,
+            "status": args.status,
+            "path": rel_path,
+            "slug": slug,
+            "memory_flow_slug": args.memory_flow_slug or "",
+            "timestamp": iso_now(),
+        }
     )
+    save_json(state_path, state)
+    register_artifact(repo, run_id, repo / rel_path, state, args.title)
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     repo = args.repo.resolve()
-    run_id = st.validate_run_id(args.run_id)
+    try:
+        run_id = validate_run_id(args.run_id)
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
     try:
         slug = safe_slug(args.title, args.slug)
     except ValueError as exc:
@@ -126,7 +180,10 @@ def main(argv: list[str] | None = None) -> int:
     rel_path = f"docs/decisions/{today}-{slug}.md"
     path = repo / rel_path
     if path.exists():
-        print(f"ERROR decision already exists: {rel_path}; provide a distinct --slug", file=sys.stderr)
+        print(
+            f"ERROR decision already exists: {rel_path}; provide a distinct --slug",
+            file=sys.stderr,
+        )
         return 2
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,7 +191,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rc = register_decision(repo, run_id, rel_path, args, slug)
     except Exception as exc:
-        print(f"ERROR wrote ADR but failed LTO registration: {rel_path}: {exc}", file=sys.stderr)
+        print(
+            f"ERROR wrote ADR but failed LTO registration: {rel_path}: {exc}",
+            file=sys.stderr,
+        )
         return 1
 
     print(rel_path)

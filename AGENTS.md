@@ -8,7 +8,7 @@ Default response language for this repo is Chinese unless the user asks otherwis
 
 ## Current Direction
 
-- Rust v2 is now the default local wrapper path for the old Python CLI. Keep Python as an explicit legacy fallback for parity checks and rollback.
+- Rust v2 is now the only supported LTO CLI implementation. The old Python fallback was removed in v0.5.0 after plugin parity and legacy run fixture coverage were recorded.
 - Keep macOS and Linux healthy first. Windows native support is paused while the built-in runner protocol depends on `scripts/delegate/runners/*.sh` and `healthcheck.sh`; WSL or Unix-like shells are separate user-side validation.
 - Do not claim GitHub has downloadable Rust binaries without checking live releases. The workflow can build assets on future `v*` tag pushes, but existing tags/releases must be verified before stating availability.
 - Next engineering priority is Rust takeover plus code cleanup, not expanding platform scope.
@@ -24,11 +24,10 @@ cargo run --quiet -- resume --run-id <run-id>
 cargo run --quiet -- check --run-id <run-id>
 ```
 
-If using the installed wrapper, Rust is the default. Choose Python only for explicit legacy fallback checks:
+If using the installed wrapper, it executes the Rust CLI:
 
 ```bash
 lto <command>
-lto --use-python <command>
 ```
 
 Do not close the Rust v2 main run until the PR branch is merged and the release/migration evidence is recorded.
@@ -69,7 +68,7 @@ Do not treat a task as finished if docs still describe a different architecture,
 
 When touching Rust takeover, installer, release, or docs:
 
-- Explain the Python-to-Rust switch path: source build with `cargo`, installed wrapper defaulting to Rust, and explicit fallback with `--use-python` / `LTO_USE_PYTHON=1`.
+- Explain the Rust-only path: source build with `cargo`, installed wrapper executing `lto-rs`, and Python fallback removal in v0.5.0.
 - State whether users can download a binary only after checking GitHub Releases and release assets.
 - Keep release flow explicit: `lto release --dry-run`, verification, VERSION/CHANGELOG update, tag push, then CI `release-binaries` uploads macOS/Linux assets.
 - Do not add Windows release targets until runner/healthcheck support is designed and tested natively.
@@ -82,7 +81,8 @@ Prefer the repo's current Rust gates for Rust-path changes:
 cargo fmt --all --check
 cargo check --locked --all-targets
 cargo test --locked --all-targets
-python3 scripts/smoke_test.py
+python3 scripts/check_docs_consistency.py
+python3 scripts/check_python_rust_ownership.py
 git diff --check
 cargo build --release --locked --bin lto-rs
 ```

@@ -1,19 +1,35 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 — 2026-06-16
 
-### Rust plugin source-note port
+### Python fallback retirement
 
-- Added Rust-owned `lto-rs plugin source-note` for creating inert plugin source
-  notes with path-safety checks, atomic JSON writes, optional idempotent
-  `plugin.json` updates, and focused unit coverage.
-- Updated the Python/Rust ownership docs and plugin boundary docs so safe
-  Python removal is documented as a staged Rust ownership gate.
+- Removed the legacy Python fallback package (`scripts/lto/`), the `lto_run.py`
+  entrypoint, and Python fallback tests after Rust parity evidence was recorded.
+  The installed `lto` wrapper now executes `lto-rs` only.
+- Retired `--use-python` and `LTO_USE_PYTHON=1`. Those paths now fail with a
+  clear v0.5.0 removal message instead of silently routing to Rust or producing
+  an import traceback.
+- Kept historical `.lto` compatibility through the Rust legacy fixture test;
+  no live Python CLI is required to read old run state.
+- Converted `scripts/write_decision.py` into a standalone ADR/artifact helper
+  with no dependency on the removed fallback package.
+- Updated ownership/docs gates so command ownership is Rust-only and active
+  docs no longer teach Python fallback paths.
+
+### Rust plugin legacy ports and observability
+
 - Added Rust-owned `lto-rs plugin eval-run` for real baseline-vs-candidate A/B
   plugin evals through the existing scheduler, with env allowlist filtering,
   deterministic safety metrics, frozen judge evidence, token sidecar support,
-  and focused Rust tests. The Python mirror remains fallback-only until the
-  removal gate.
+  and focused Rust tests.
+- Added Rust-owned `lto-rs plugin source-note` for creating inert plugin source
+  notes with path-safety checks, atomic JSON writes, optional idempotent
+  `plugin.json` updates, and focused unit coverage.
+- Added Rust events/telemetry support before deleting the Python sensor layer:
+  append-only event logging, recursive redaction, raw-output rejection,
+  monotonic event ids under `.events.lock`, tolerant duplicate reads, and
+  derived telemetry without `control_recommendations`.
 
 ## v0.4.3 — 2026-06-16
 

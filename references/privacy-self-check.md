@@ -37,7 +37,7 @@ The script checks:
 
 Regex hits in explicit redaction tests are still printed, but classified as test
 fixtures instead of counted as unclassified findings. The classifier is narrow:
-`scripts/test_*.py` and Rust lines inside `#[cfg(test)]` modules. A matching
+Rust lines inside `#[cfg(test)]` modules. A matching
 secret or private path anywhere else remains a finding and fails `--strict`.
 
 ## Cleanup mode

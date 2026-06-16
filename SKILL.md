@@ -288,15 +288,14 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 
 **入口与文档**
 - `src/main.rs` / `src/cli.rs` — Rust v2 当前接管入口（24 个业务命令；`--help` 另显示 clap 内置 `help` 行；plugin 含 `source-note` / `eval-run`）
-- `scripts/lto_run.py` — Python 兼容 fallback（旧命令分发到 `lto/commands/`）
 - `scripts/write_decision.py` — ADR-first 决策落盘 helper（写 `docs/decisions/` + state + artifact manifest）
 - `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper
 - `references/onboarding.md` — **给 agent 读一份就懂怎么装载 LTO**（跨 runtime）
 - `references/workflow-playbook.md` — `review/debug/migration/claim-verify/research` 调度先验
 - `references/run-state-workflow.md` — 完整命令详细用法手册
 - `references/execution-loop.md` — runner/judge/parallel/pipeline + agent 执行层
-- `references/rust-migration-release.md` — Rust 接管 Python、二进制下载状态、release 打包流程
-- `references/python-rust-ownership.md` — Rust/Python 命令 ownership 与 legacy 分类
+- `references/rust-migration-release.md` — Rust-only CLI、二进制下载状态、release 打包流程
+- `references/python-rust-ownership.md` — Rust 命令 ownership 与 Python retirement 记录
 - `references/hooks.md` — pre-commit/pre-deploy/pre-closeout 边界 hook（opt-in）
 - `references/sharing-guide.md` — 怎么装、怎么给朋友用、项目级注入
 - `references/cross-runtime-host-notes.md` — 不同 AI 工具当宿主的具体用法
@@ -308,14 +307,13 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 - `templates/audit-ledger.md` — 审计台账（仅 `--with-audit` 时生成）
 
 **harness primitive 底层模块**（不直接走 CLI，是 next/autopilot/audit 的地基）
-- `scripts/lto/agent_job.py` — AgentJob/AgentResult 数据合同（agent 世界，非 shell）
-- `scripts/lto/scheduler.py` — 并发调度 + 退出码三元判定(OK/FAILED/TIMEOUT/RATE_LIMITED) + 指数退避
-- `scripts/lto/agent_exec.py` — spawn 原语（拉隔离 agent，落 state.agent_runs）
-- `scripts/lto/worktree_exec.py` — autopilot 自动执行的 worktree 沙箱（17 攻击向量拦截 + env 隔离）
-- `scripts/lto/progress.py` — 推进检测 + stall 闸门（防伪推进博弈，单向棘轮）
-- `scripts/lto/pi_tool.py` — Pi 工具集成（让模型直接调用 LTO）
-- `scripts/lto/decision.py` — 双轨收敛引擎（direction 投票 / review union 合并），被 `autopilot --decide` 调用 spawn 三方
-- `scripts/lto/decision_brief.py` — --decide 收敛 brief 构造（给宿主读，不替宿主拍板）
+- `src/agent_job.rs` — AgentJob/AgentResult 数据合同（agent 世界，非 shell）
+- `src/scheduler.rs` — 并发调度 + 退出码三元判定(OK/FAILED/TIMEOUT/RATE_LIMITED) + 指数退避
+- `src/audit_dispatch.rs` / `src/audit.rs` — 异构审计派工、结构化 finding 解析与 ledger 收口
+- `src/decision.rs` / `src/dispatch.rs` — 决策收敛、任务描述和派工 affordance
+- `src/worktree.rs` / `src/effect.rs` — autopilot 自动执行的 worktree 沙箱与 effect 分类
+- `src/events.rs` / `src/telemetry.rs` — Phase 1 事件流与派生遥测
+- `scripts/delegate/runners/*.sh` — Rust scheduler 现役 runner adapter（保留，不属于 Python fallback）
 
 ## Workload Profile
 

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Verify Rust/Python command ownership during the Rust takeover."""
+"""Verify Rust-owned command ownership after Python fallback retirement."""
 
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -47,13 +46,6 @@ def parse_rust_commands(help_text: str) -> list[str]:
     return commands
 
 
-def parse_argparse_choices(help_text: str) -> list[str]:
-    match = re.search(r"\{([^}]+)\}", help_text, flags=re.DOTALL)
-    if not match:
-        return []
-    return [part.strip() for part in match.group(1).replace("\n", "").split(",") if part.strip()]
-
-
 def manifest_commands(entries: list[dict[str, Any]]) -> list[str]:
     return [str(entry["command"]) for entry in entries]
 
@@ -76,35 +68,29 @@ def main() -> int:
     check(len(plugin_manifest) == len(set(plugin_manifest)), "plugin ownership commands are unique", errors)
 
     rust_top = parse_rust_commands(run(["cargo", "run", "--quiet", "--", "--help"]))
-    python_top = parse_argparse_choices(run([sys.executable, "scripts/lto_run.py", "--help"]))
     rust_plugin = parse_rust_commands(run(["cargo", "run", "--quiet", "--", "plugin", "--help"]))
-    python_plugin = parse_argparse_choices(run([sys.executable, "scripts/lto_run.py", "plugin", "--help"]))
 
     check(sorted(rust_top) == sorted(top_manifest), "Rust top-level help matches ownership manifest", errors)
-    check(sorted(python_top) == sorted(top_manifest), "Python fallback top-level help matches ownership manifest", errors)
     check(sorted(rust_plugin) == sorted(rust_plugin_manifest), "Rust plugin help exposes only rust-core plugin subcommands", errors)
-    check(sorted(python_plugin) == sorted(plugin_manifest), "Python plugin help matches ownership manifest", errors)
 
     for entry in top_entries:
         command = str(entry["command"])
         check(entry.get("owner") == "rust-core", f"{command} owner is rust-core", errors)
-        check(entry.get("python_role") == "compatibility-fallback", f"{command} Python role is compatibility fallback", errors)
+        check(entry.get("python_role") == "removed", f"{command} Python role is removed", errors)
         check(f"`{command}`" in doc_text, f"ownership doc names top-level command {command}", errors)
 
     for entry in plugin_entries:
         command = str(entry["command"])
         owner = entry.get("owner")
         role = entry.get("python_role")
-        check(owner in {"rust-core", "python-legacy"}, f"plugin {command} owner is known", errors)
-        check(role in {"compatibility-fallback", "legacy-plugin"}, f"plugin {command} Python role is known", errors)
+        check(owner == "rust-core", f"plugin {command} owner is rust-core", errors)
+        check(role == "removed", f"plugin {command} Python role is removed", errors)
         check(f"`plugin {command}`" in doc_text, f"ownership doc names plugin command {command}", errors)
-        if owner == "python-legacy":
-            check(bool(entry.get("reason")), f"legacy plugin command {command} has a reason", errors)
 
     if errors:
         print(f"\n{len(errors)} ownership failure(s)", file=sys.stderr)
         return 1
-    print("\nPYTHON/RUST OWNERSHIP OK")
+    print("\nRUST OWNERSHIP OK")
     return 0
 
 

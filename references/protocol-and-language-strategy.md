@@ -5,8 +5,7 @@ roadmap language in older revisions is superseded.**
 
 This document exists to keep language work subordinate to LTO's durable file
 protocol. It no longer argues for Python as primary or for a future Go shadow
-CLI. Rust v2 is the current default core path; Python is an explicit legacy
-fallback.
+CLI. Rust v2 is the current core path; Python fallback was removed in v0.5.0.
 
 ## Short version
 
@@ -28,8 +27,8 @@ real LTO use
 Current language posture:
 
 ```text
-Now:          Rust v2 default core path.
-Compatibility: Python legacy fallback via --use-python / LTO_USE_PYTHON=1.
+Now:          Rust v2 core path.
+Compatibility: historical .lto state remains readable through Rust fixtures.
 Protocol:     .lto/ files remain the product boundary.
 Future:       conformance fixtures decide any additional implementation.
 TS:           wrappers/MCP/editor integration only.
@@ -153,7 +152,7 @@ until these are true:
 
 ### Rust v2 default
 
-Rust v2 is the current default CLI/core path.
+Rust v2 is the current CLI/core path.
 
 Why:
 
@@ -165,7 +164,7 @@ Why:
 
 Risk:
 
-- duplicated behavior can drift while Python fallback remains;
+- stale compatibility language can imply a second live CLI path after retirement;
 - old `.lto` runs may expose compatibility gaps;
 - release claims can get ahead of GitHub assets.
 
@@ -173,16 +172,15 @@ Decision: Rust owns generic harness primitives. Every new core feature should
 prefer Rust unless it is explicitly a legacy fallback or a Python-only test
 fixture.
 
-### Python legacy fallback
+### Retired Python legacy fallback
 
-Python remains valuable as a compatibility bridge and comparison oracle.
+Python is no longer a live compatibility bridge or comparison oracle.
 
 Why:
 
-- old behavior and historical tests still exist there;
-- some legacy plugin/eval surfaces are not fully Rust-owned yet;
-- fallback protects users while release binaries and downstream integrations
-  settle.
+- old behavior remains valuable as release history and fixed legacy fixtures;
+- Rust now owns the public command surface and plugin/eval paths;
+- keeping a second live CLI path would hide drift after v0.5.0.
 
 Risk:
 
@@ -190,8 +188,10 @@ Risk:
 - active docs can accidentally teach Python as the default;
 - duplicate command behavior can hide bugs until release.
 
-Decision: Python must stay explicit: `lto --use-python ...` or
-`LTO_USE_PYTHON=1 lto ...`. Shrink it only after parity evidence exists.
+Decision: Python fallback was removed after parity evidence existed for the
+public command surface and plugin legacy commands. Do not reintroduce a second
+live CLI path; preserve historical compatibility through fixtures and release
+notes.
 
 ### TypeScript as integration layer
 
@@ -295,14 +295,14 @@ Do not use this roadmap as permission to build:
 
 ## Current recommendation
 
-Keep shipping small protocol-backed improvements in Rust core while shrinking
-Python fallback deliberately.
+Keep shipping small protocol-backed improvements in Rust core while preserving
+only explicit historical compatibility fixtures.
 
 Next best steps:
 
-1. Keep Rust default and wrapper/fallback behavior verified.
+1. Keep Rust default, wrapper behavior, and retired fallback errors verified.
 2. Add conformance fixtures for existing protocol files.
-3. Classify Python surfaces as ported, fallback-only, legacy-plugin, or
+3. Keep removed Python surfaces classified as historical, fixture, or
    removal-candidate.
 4. Only after fixtures stabilize, decide whether any additional implementation
    is justified.

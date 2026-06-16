@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LTO_BIN_DIR_CONFIG="${LTO_BIN_DIR:-$HOME/.local/bin}"
 LTO_WRAPPER_SENTINEL="# long-task-orchestration managed lto wrapper"
-LTO_RUN_TARGET="$REPO_ROOT/scripts/lto_run.py"
 LTO_RS_TARGET="$REPO_ROOT/target/release/lto-rs"
 
 CHECK_ONLY=0
@@ -43,8 +42,6 @@ report_lto_wrapper() {
     return
   fi
   if grep -Fq "$LTO_WRAPPER_SENTINEL" "$wrapper" 2>/dev/null; then
-    local target
-    target="$(grep '^LTO_RUN=' "$wrapper" 2>/dev/null | head -n 1 | cut -d= -f2- || true)"
     local rust_target
     local default_runtime
     rust_target="$(grep '^LTO_RS_BIN=' "$wrapper" 2>/dev/null | head -n 1 | cut -d= -f2- || true)"
@@ -52,9 +49,6 @@ report_lto_wrapper() {
     printf "  [OK]   managed wrapper: %s\n" "$wrapper"
     if [ -n "$default_runtime" ]; then
       printf "         default: %s\n" "$default_runtime"
-    fi
-    if [ -n "$target" ]; then
-      printf "         target: %s\n" "$target"
     fi
     if [ -n "$rust_target" ]; then
       printf "         rust: %s\n" "$rust_target"
@@ -99,7 +93,6 @@ install_lto_wrapper() {
     echo "#!/usr/bin/env bash"
     echo "$LTO_WRAPPER_SENTINEL"
     echo "set -euo pipefail"
-    printf "LTO_RUN=%q\n" "$LTO_RUN_TARGET"
     printf "LTO_RS_BIN=%q\n" "$LTO_RS_TARGET"
     echo "LTO_DEFAULT_RUNTIME=rust"
     cat <<'WRAPPER'
@@ -109,11 +102,12 @@ if [ "${1:-}" = "--use-rust" ]; then
   shift
 fi
 if [ "${1:-}" = "--use-python" ]; then
-  runtime=python
-  shift
+  echo "lto: Python fallback was removed in v0.5.0; use the Rust CLI directly" >&2
+  exit 64
 fi
 if [ "${LTO_USE_PYTHON:-0}" = "1" ]; then
-  runtime=python
+  echo "lto: LTO_USE_PYTHON is no longer supported; Python fallback was removed in v0.5.0" >&2
+  exit 64
 elif [ "${LTO_USE_RUST:-}" = "1" ]; then
   runtime=rust
 fi
@@ -121,16 +115,12 @@ if [ "$runtime" = "rust" ]; then
   if [ ! -x "$LTO_RS_BIN" ]; then
     echo "lto: Rust binary is missing or not executable: $LTO_RS_BIN" >&2
     echo "lto: build it with: cargo build --release --bin lto-rs" >&2
-    echo "lto: legacy fallback remains explicit: lto --use-python <command>" >&2
     exit 1
   fi
   exec "$LTO_RS_BIN" "$@"
 fi
-if [ ! -f "$LTO_RUN" ]; then
-  echo "lto: legacy Python fallback not found at $LTO_RUN; re-run scripts/install.sh from long-task-orchestration" >&2
-  exit 1
-fi
-exec python3 "$LTO_RUN" "$@"
+echo "lto: unsupported runtime '$runtime'; only rust is available" >&2
+exit 64
 WRAPPER
   } > "$wrapper"
   chmod +x "$wrapper"
@@ -151,7 +141,6 @@ need bash "installer and wrapper require bash"
 need git "LTO state, drift checks, and worktree sandbox require git"
 
 echo "==> Optional CLIs"
-optional python3 "legacy Python fallback and Python compatibility tests"
 optional tmux "needed by bundled delegate tmux fan-out"
 optional codex "OpenAI-family runtime/auditor"
 optional claude "Anthropic-family runtime/auditor"
