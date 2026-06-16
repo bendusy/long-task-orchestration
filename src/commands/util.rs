@@ -145,6 +145,36 @@ pub fn json_object_mut(value: &mut Value) -> &mut Map<String, Value> {
     value.as_object_mut().expect("value forced to object")
 }
 
+pub fn risk_is_open(risk: &Value) -> bool {
+    let disposition = risk
+        .get("disposition")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    if let Some(disposition) = disposition {
+        return disposition.eq_ignore_ascii_case("open");
+    }
+    risk.get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|status| status.eq_ignore_ascii_case("open"))
+}
+
+pub fn risk_is_verified(risk: &Value) -> bool {
+    risk.get("disposition")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|disposition| disposition.eq_ignore_ascii_case("verified"))
+        || risk.get("verified_by").is_some_and(|value| {
+            value.as_str().is_some_and(|text| !text.trim().is_empty())
+                || value.as_bool() == Some(true)
+        })
+}
+
+pub fn risk_is_open_unverified(risk: &Value) -> bool {
+    risk_is_open(risk) && !risk_is_verified(risk)
+}
+
 pub fn status_str(result: &AgentResult) -> &'static str {
     match result.status {
         JobStatus::Pending => "pending",
@@ -868,6 +898,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn risk_status_helpers_treat_legacy_status_open_as_unverified() {
+        let legacy = json!({"id": "R1", "status": "open"});
+        assert!(risk_is_open(&legacy));
+        assert!(risk_is_open_unverified(&legacy));
+
+        let verified = json!({"id": "R2", "status": "open", "verified_by": "codex"});
+        assert!(risk_is_verified(&verified));
+        assert!(!risk_is_open_unverified(&verified));
+
+        let closed = json!({"id": "R3", "status": "open", "disposition": "rejected"});
+        assert!(!risk_is_open(&closed));
     }
 
     #[test]

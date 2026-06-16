@@ -836,13 +836,7 @@ fn unresolved_blocks(state: &crate::state::LtoState) -> Vec<Value> {
 fn open_unverified_risks(state: &crate::state::LtoState) -> Vec<Value> {
     util::json_array(&state.risk_points)
         .iter()
-        .filter(|risk| {
-            risk.get("disposition").and_then(Value::as_str) == Some("open")
-                && !risk.get("verified_by").is_some_and(|value| {
-                    value.as_str().is_some_and(|text| !text.trim().is_empty())
-                        || value.as_bool() == Some(true)
-                })
-        })
+        .filter(|risk| util::risk_is_open_unverified(risk))
         .cloned()
         .collect()
 }
@@ -1713,7 +1707,7 @@ fn analyze_state(repo: &Path, state: &crate::state::LtoState) -> Value {
         .unwrap_or_default();
     let unverified = util::json_array(&state.risk_points)
         .iter()
-        .filter(|risk| risk.get("disposition").and_then(Value::as_str) == Some("open"))
+        .filter(|risk| util::risk_is_open_unverified(risk))
         .count();
     let has_tasks = !tasks.is_empty();
     let done_count = counts.get("done").and_then(Value::as_u64).unwrap_or(0);
@@ -2056,12 +2050,7 @@ fn progress_digest(ctx: &util::RunContext) -> Value {
         .unwrap_or(0);
     let verified_risks = util::json_array(&ctx.state.risk_points)
         .iter()
-        .filter(|risk| {
-            risk.get("disposition").and_then(Value::as_str) == Some("verified")
-                || risk
-                    .get("verified_by")
-                    .is_some_and(|value| !value.is_null())
-        })
+        .filter(|risk| util::risk_is_verified(risk))
         .count();
     let projection = json!({
         "phase": ctx.state.current_phase,
@@ -3108,7 +3097,7 @@ mod tests {
         state.workspace.head = util::git_status(&h.repo).head;
         state.tasks = json!([{"id": "T1", "status": "pending"}]);
         state.gates = json!({"unresolved_blocks": [{"id": "B1"}]});
-        state.risk_points = json!([{"id": "R1", "disposition": "open"}]);
+        state.risk_points = json!([{"id": "R1", "status": "open"}]);
         h.write_state(state);
 
         let outcome = collect_check(

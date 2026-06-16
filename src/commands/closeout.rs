@@ -181,14 +181,7 @@ fn enforce_gates(
 
     let unverified = util::json_array(&ctx.state.risk_points)
         .iter()
-        .filter(|risk| {
-            risk.get("disposition").and_then(Value::as_str) == Some("open")
-                && risk
-                    .get("verified_by")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .is_empty()
-        })
+        .filter(|risk| util::risk_is_open_unverified(risk))
         .count();
     if unverified > 0 && !options.force {
         anyhow::bail!(
@@ -550,7 +543,7 @@ mod tests {
     fn enforce_gates_rejects_open_unverified_risk_points() {
         let tmp = tempfile::tempdir().unwrap();
         let mut ctx = ctx(tmp.path());
-        ctx.state.risk_points = json!([{"id": "R1", "disposition": "open"}]);
+        ctx.state.risk_points = json!([{"id": "R1", "status": "open"}]);
         let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
         assert!(err.to_string().contains("risk points unverified"));
     }
