@@ -269,10 +269,30 @@ fn run_case(
         },
     );
     let started = Instant::now();
-    let results = match scheduler.submit_blocking(vec![baseline_job.clone(), candidate_job.clone()])
-    {
-        Ok(results) => results,
+    let jobs = vec![baseline_job.clone(), candidate_job.clone()];
+    crate::event_emit::emit_runner_started_jobs(repo, run_id, None, None, "plugin.eval_run", &jobs);
+    let results = match scheduler.submit_blocking(jobs.clone()) {
+        Ok(results) => {
+            crate::event_emit::emit_runner_results(
+                repo,
+                run_id,
+                None,
+                None,
+                "plugin.eval_run",
+                &results,
+            );
+            results
+        }
         Err(err) => {
+            crate::event_emit::emit_runner_submission_failed_jobs(
+                repo,
+                run_id,
+                None,
+                None,
+                "plugin.eval_run",
+                &jobs,
+                &err.to_string(),
+            );
             return Ok(json!({
                 "ok": false,
                 "case_id": case_id,
@@ -459,6 +479,12 @@ fn run_judge(
     } = plan
     else {
         let payload = serde_json::to_value(plan)?;
+        crate::event_emit::emit_judge_skipped(
+            repo,
+            run_id,
+            case_id,
+            payload.get("reason").and_then(Value::as_str),
+        );
         let _ = llm_judge::freeze_verdict(
             case_dir,
             &frozen.evidence_hash,
@@ -470,11 +496,39 @@ fn run_judge(
         return Ok(payload);
     };
     job.meta.insert("run_id".to_string(), json!(run_id));
+    let jobs = vec![*job];
+    crate::event_emit::emit_runner_started_jobs(
+        repo,
+        run_id,
+        None,
+        None,
+        "plugin.eval_run.judge",
+        &jobs,
+    );
     let scheduler = Scheduler::new(repo, runners_dir);
-    let results = scheduler.submit_blocking(vec![*job]);
+    let results = scheduler.submit_blocking(jobs.clone());
     let result = match results {
-        Ok(mut results) => results.pop(),
+        Ok(mut results) => {
+            crate::event_emit::emit_runner_results(
+                repo,
+                run_id,
+                None,
+                None,
+                "plugin.eval_run.judge",
+                &results,
+            );
+            results.pop()
+        }
         Err(err) => {
+            crate::event_emit::emit_runner_submission_failed_jobs(
+                repo,
+                run_id,
+                None,
+                None,
+                "plugin.eval_run.judge",
+                &jobs,
+                &err.to_string(),
+            );
             let judgment_hash = llm_judge::freeze_verdict(
                 case_dir,
                 &frozen.evidence_hash,
@@ -483,6 +537,16 @@ fn run_judge(
                 None,
                 Some(&err.to_string()),
             )?;
+            crate::event_emit::emit_decision_escalated(
+                repo,
+                run_id,
+                "judge scheduler failed",
+                json!({
+                    "case_id": case_id,
+                    "judge_runner": judge_runner,
+                    "error": err.to_string(),
+                }),
+            );
             return Ok(json!({
                 "status": "failed",
                 "judge_runner": judge_runner,
@@ -493,6 +557,15 @@ fn run_judge(
         }
     };
     let Some(result) = result else {
+        crate::event_emit::emit_decision_escalated(
+            repo,
+            run_id,
+            "judge result missing",
+            json!({
+                "case_id": case_id,
+                "judge_runner": judge_runner,
+            }),
+        );
         return Ok(json!({
             "status": "failed",
             "judge_runner": judge_runner,
@@ -515,6 +588,33 @@ fn run_judge(
         judgment.as_ref(),
         error,
     )?;
+    if let Some(judgment) = &judgment {
+        crate::event_emit::emit_decision_voted(
+            repo,
+            run_id,
+            &judge_runner,
+            "llm_judge",
+            json!({
+                "case_id": case_id,
+                "judge_runner": judge_runner,
+                "status": status,
+                "blocker_quality": format!("{:?}", judgment.blocker_quality).to_ascii_lowercase(),
+                "false_positive_suspected": judgment.false_positive_suspected,
+                "evidence_hash": frozen.evidence_hash,
+            }),
+        );
+    } else if status == "failed" {
+        crate::event_emit::emit_decision_escalated(
+            repo,
+            run_id,
+            "judge reply did not parse",
+            json!({
+                "case_id": case_id,
+                "judge_runner": judge_runner,
+                "result_status": result.status.as_str(),
+            }),
+        );
+    }
     Ok(json!({
         "status": status,
         "judge_runner": judge_runner,
@@ -819,6 +919,21 @@ mod tests {
                 .unwrap()
                 .contains("OUTPUT MUST BE JSON FINDINGS.")
         );
+        let events = crate::events::read(&repo, "r1").unwrap();
+        assert!(
+            events.iter().any(|event| {
+                event.get("type").and_then(Value::as_str) == Some("runner.started")
+            })
+        );
+        assert!(
+            events.iter().any(|event| {
+                event.get("type").and_then(Value::as_str) == Some("runner.finished")
+            })
+        );
+        assert!(events.iter().any(|event| matches!(
+            event.get("type").and_then(Value::as_str),
+            Some("judge.skipped" | "decision.voted" | "decision.escalated")
+        )));
     }
 
     #[test]

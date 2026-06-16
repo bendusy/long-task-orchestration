@@ -7,6 +7,7 @@ pub mod commands;
 pub mod decision;
 pub mod dispatch;
 pub mod effect;
+pub mod event_emit;
 pub mod events;
 pub mod llm_judge;
 pub mod merge_review;

@@ -557,6 +557,8 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             let state = state::load_state(&path)?;
             let now = state::iso_now();
             let check = budget::check_budget(Some(&state.budget), &state.started_at, tokens, &now);
+            crate::event_emit::emit_budget_event(&args.repo, &run_id, &check, "budget_check");
+            let _ = crate::telemetry::save(&args.repo, &run_id);
             println!("{}", serde_json::to_string_pretty(&check)?);
         }
         Commands::Plugin {
@@ -664,6 +666,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 },
             )?;
             let should_print = json || output.is_none();
+            let _ = crate::telemetry::save(&args.repo, &run_id);
             if let Some(output) = output.as_ref() {
                 if let Some(parent) = output.parent() {
                     fs::create_dir_all(parent)?;
@@ -1172,6 +1175,7 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
     let auditors = audit_dispatch::pick_auditors_with(&host, options.allow_same_family);
     let audit_dir = run_dir.join("audit");
     fs::create_dir_all(&audit_dir)?;
+    crate::event_emit::emit_audit_dispatched(repo, &run_id, &host, &auditors, "prepare", None);
 
     if options.discover_risks {
         dispatch_risk_discovery(
@@ -1213,8 +1217,30 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
         anyhow::bail!("audit auto-dispatch has no heterogeneous auditors for host {host}");
     }
     let runners_dir = repo.join("scripts").join("delegate").join("runners");
-    let results =
-        audit_dispatch::submit_auto_dispatch(repo, &runners_dir, &brief_path, &auditors, &host)?;
+    crate::event_emit::emit_audit_dispatched(
+        repo,
+        &run_id,
+        &host,
+        &auditors,
+        "auto_dispatch",
+        None,
+    );
+    let results = audit_dispatch::submit_auto_dispatch(
+        repo,
+        &runners_dir,
+        &brief_path,
+        &auditors,
+        &host,
+        &run_id,
+    )?;
+    crate::event_emit::emit_runner_results(
+        repo,
+        &run_id,
+        Some(state.current_phase.as_str()),
+        None,
+        "audit.auto_dispatch",
+        &results,
+    );
     let replies_dir = audit_dir.join("replies");
     fs::create_dir_all(&replies_dir)?;
     let mut used = Vec::new();
@@ -1236,6 +1262,14 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
         )?;
         used.push(result.runner.clone());
         counts.add_reply(&result.reply_text);
+        let findings = parse_findings_or_empty(&result.reply_text);
+        crate::event_emit::emit_audit_findings(
+            repo,
+            &run_id,
+            &result.runner,
+            &findings,
+            "audit.auto_dispatch",
+        );
         println!(
             "  {}: {} exit={:?}",
             result.runner,
@@ -1257,6 +1291,7 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
         "audit ledger: {}",
         util::repo_relative_path(repo, &ledger_path)?
     );
+    let _ = crate::telemetry::save(repo, &run_id);
     Ok(())
 }
 
@@ -1270,8 +1305,24 @@ fn dispatch_risk_discovery(
     auditors: &[String],
 ) -> anyhow::Result<()> {
     let Some(discoverer) = audit_dispatch::pick_healthy_discoverer(repo, auditors, host) else {
+        crate::event_emit::emit_audit_dispatched(
+            repo,
+            run_id,
+            host,
+            auditors,
+            "risk_discovery_unhealthy",
+            None,
+        );
         anyhow::bail!("risk discovery has no healthy heterogeneous discoverer for host {host}");
     };
+    crate::event_emit::emit_audit_dispatched(
+        repo,
+        run_id,
+        host,
+        auditors,
+        "risk_discovery",
+        Some(&discoverer),
+    );
     let brief_path = audit_dir.join(format!("risk-brief-{}.md", timestamp_slug()));
     fs::write(&brief_path, build_risk_brief(state, host))?;
     register_run_artifact(
@@ -1287,11 +1338,44 @@ fn dispatch_risk_discovery(
         },
     )?;
     let runners_dir = repo.join("scripts").join("delegate").join("runners");
-    let job = audit_dispatch::build_risk_discovery_job(&brief_path, &discoverer, host);
-    let results = crate::scheduler::Scheduler::new(repo, runners_dir).submit_blocking(vec![job])?;
+    let mut job = audit_dispatch::build_risk_discovery_job(&brief_path, &discoverer, host);
+    job.meta.insert("run_id".to_string(), json!(run_id));
+    let jobs = vec![job];
+    crate::event_emit::emit_runner_started_jobs(
+        repo,
+        run_id,
+        Some(state.current_phase.as_str()),
+        None,
+        "audit.risk_discovery",
+        &jobs,
+    );
+    let results =
+        match crate::scheduler::Scheduler::new(repo, runners_dir).submit_blocking(jobs.clone()) {
+            Ok(results) => results,
+            Err(err) => {
+                crate::event_emit::emit_runner_submission_failed_jobs(
+                    repo,
+                    run_id,
+                    Some(state.current_phase.as_str()),
+                    None,
+                    "audit.risk_discovery",
+                    &jobs,
+                    &err.to_string(),
+                );
+                return Err(err.into());
+            }
+        };
     let Some(result) = results.first() else {
         anyhow::bail!("risk discovery returned no result");
     };
+    crate::event_emit::emit_runner_results(
+        repo,
+        run_id,
+        Some(state.current_phase.as_str()),
+        None,
+        "audit.risk_discovery",
+        &results,
+    );
     if result.status != crate::agent_job::JobStatus::Ok {
         anyhow::bail!(
             "risk discovery runner {} returned {} exit={:?}: {}",
@@ -1316,8 +1400,16 @@ fn dispatch_risk_discovery(
         },
     )?;
     let risks = parse_findings_or_empty(&result.reply_text);
+    crate::event_emit::emit_audit_findings(
+        repo,
+        run_id,
+        &result.runner,
+        &risks,
+        "audit.risk_discovery",
+    );
     if risks.is_empty() {
         println!("risk discovery: {discoverer} reported no structured risks");
+        let _ = crate::telemetry::save(repo, run_id);
         return Ok(());
     }
     let state_path = run_dir.join("state.json");
@@ -1325,6 +1417,7 @@ fn dispatch_risk_discovery(
     append_discovered_risk_points(&mut state, risks);
     state::save_state(&state_path, &state)?;
     util::sync_run_state_md(&run_dir.join("run-state.md"), &state)?;
+    let _ = crate::telemetry::save(repo, run_id);
     println!("risk discovery: {discoverer} added risk points");
     Ok(())
 }
@@ -1453,6 +1546,14 @@ fn append_audit_ledger_round(
         insert_audit_round_row(&content, &row)
     };
     fs::write(ledger_path, updated)?;
+    crate::event_emit::emit_audit_converged(
+        repo,
+        run_id,
+        &label,
+        counts.high,
+        counts.critical,
+        counts.minor,
+    );
     register_run_artifact(
         repo,
         run_id,

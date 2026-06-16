@@ -75,9 +75,35 @@ pub fn submit_auto_dispatch(
     brief_path: &Path,
     auditors: &[String],
     host: &str,
+    run_id: &str,
 ) -> Result<Vec<AgentResult>, SchedulerError> {
-    Scheduler::new(repo, runners_dir)
-        .submit_blocking(build_auto_dispatch_jobs(brief_path, auditors, host))
+    let mut jobs = build_auto_dispatch_jobs(brief_path, auditors, host);
+    for job in &mut jobs {
+        job.meta.insert("run_id".to_string(), json!(run_id));
+    }
+    crate::event_emit::emit_runner_started_jobs(
+        repo,
+        run_id,
+        None,
+        None,
+        "audit.auto_dispatch",
+        &jobs,
+    );
+    match Scheduler::new(repo, runners_dir).submit_blocking(jobs.clone()) {
+        Ok(results) => Ok(results),
+        Err(err) => {
+            crate::event_emit::emit_runner_submission_failed_jobs(
+                repo,
+                run_id,
+                None,
+                None,
+                "audit.auto_dispatch",
+                &jobs,
+                &err.to_string(),
+            );
+            Err(err)
+        }
+    }
 }
 
 pub fn build_risk_discovery_job(brief_path: &Path, discoverer: &str, host: &str) -> AgentJob {

@@ -249,9 +249,10 @@ impl Scheduler {
         let mut retry_sleep_elapsed = 0.0;
         let max_attempts = job.retry_policy.max_retries.saturating_add(1);
         let mut last = None;
+        let mut retry_attempts = Vec::new();
         for attempt_idx in 0..max_attempts {
             let attempt = attempt_idx.saturating_add(1);
-            let result = self.run_once(&job, attempt).await;
+            let mut result = self.run_once(&job, attempt).await;
             let delay = retry_delay_after_attempt(
                 result.status,
                 &job.retry_policy,
@@ -261,14 +262,32 @@ impl Scheduler {
                 job.budget.timeout_sec,
             );
             if let Some(delay) = delay {
+                retry_attempts.push(json!({
+                    "attempt": attempt,
+                    "status": result.status.as_str(),
+                    "exit_code": result.exit_code,
+                    "delay_sec": delay,
+                }));
                 retry_sleep_elapsed += delay;
                 last = Some(result);
                 sleep(Duration::from_secs_f64(delay)).await;
             } else {
+                if !retry_attempts.is_empty() {
+                    result
+                        .cost
+                        .insert("retry_attempts".to_string(), json!(retry_attempts));
+                }
                 return result;
             }
         }
-        last.unwrap_or_else(|| failure_result(&job, 0, None, "no attempt executed"))
+        let mut result =
+            last.unwrap_or_else(|| failure_result(&job, 0, None, "no attempt executed"));
+        if !retry_attempts.is_empty() {
+            result
+                .cost
+                .insert("retry_attempts".to_string(), json!(retry_attempts));
+        }
+        result
     }
 
     async fn run_once(&self, job: &AgentJob, attempt: u32) -> AgentResult {

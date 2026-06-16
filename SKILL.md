@@ -312,7 +312,7 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 - `src/audit_dispatch.rs` / `src/audit.rs` — 异构审计派工、结构化 finding 解析与 ledger 收口
 - `src/decision.rs` / `src/dispatch.rs` — 决策收敛、任务描述和派工 affordance
 - `src/worktree.rs` / `src/effect.rs` — autopilot 自动执行的 worktree 沙箱与 effect 分类
-- `src/events.rs` / `src/telemetry.rs` — Phase 1 事件流与派生遥测
+- `src/events.rs` / `src/event_emit.rs` / `src/telemetry.rs` — 事件流、O2 调用方接线与派生遥测
 - `scripts/delegate/runners/*.sh` — Rust scheduler 现役 runner adapter（保留，不属于 Python fallback）
 
 ## Workload Profile

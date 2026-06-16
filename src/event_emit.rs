@@ -1,0 +1,536 @@
+use crate::agent_job::{AgentJob, AgentResult, JobStatus};
+use crate::budget::{BudgetCheck, BudgetStatus};
+use crate::events::{self, EventRecord};
+use crate::worktree::SandboxResult;
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+use std::path::Path;
+
+pub fn emit_runner_results(
+    repo: &Path,
+    run_id: &str,
+    phase: Option<&str>,
+    task_id: Option<&str>,
+    context: &str,
+    results: &[AgentResult],
+) {
+    for result in results {
+        emit_runner_retries(repo, run_id, phase, task_id, context, result);
+        if result.status == JobStatus::Skipped && result.error.starts_with("runner unhealthy:") {
+            events::safe_emit(
+                repo,
+                run_id,
+                EventRecord {
+                    event_type: "runner.healthcheck".to_string(),
+                    actor_kind: "lto".to_string(),
+                    actor_id: Some(result.runner.clone()),
+                    phase: phase.map(str::to_string),
+                    task_id: task_id.map(str::to_string),
+                    object_id: Some(result.job_id.clone()),
+                    object_type: Some("runner_job".to_string()),
+                    summary: format!("{} unhealthy in {context}", result.runner),
+                    fields: json!({
+                        "runner": result.runner,
+                        "model": result.model,
+                        "status": result.status.as_str(),
+                        "context": context,
+                    }),
+                    ..EventRecord::default()
+                },
+            );
+        }
+        events::safe_emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some(result.runner.clone()),
+                phase: phase.map(str::to_string),
+                task_id: task_id.map(str::to_string),
+                object_id: Some(result.job_id.clone()),
+                object_type: Some("runner_job".to_string()),
+                summary: format!(
+                    "{} {} status={} attempts={}",
+                    result.runner,
+                    result.job_id,
+                    result.status.as_str(),
+                    result.attempts
+                ),
+                fields: json!({
+                    "runner": result.runner,
+                    "model": result.model,
+                    "status": result.status.as_str(),
+                    "exit_code": result.exit_code,
+                    "timeout": result.status == JobStatus::Timeout || result.exit_code == Some(124),
+                    "attempts": result.attempts,
+                    "retry_count": result.attempts.saturating_sub(1),
+                    "elapsed_sec": result.cost.get("elapsed_sec").cloned().unwrap_or(Value::Null),
+                    "findings_count": result.findings.len(),
+                    "artifact_count": result.artifacts.len(),
+                    "task_type": result.task_type,
+                    "context": context,
+                }),
+                ..EventRecord::default()
+            },
+        );
+    }
+}
+
+pub fn emit_runner_started_jobs(
+    repo: &Path,
+    run_id: &str,
+    phase: Option<&str>,
+    task_id: Option<&str>,
+    context: &str,
+    jobs: &[AgentJob],
+) {
+    for job in jobs {
+        events::safe_emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "runner.started".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some(job.runner.clone()),
+                phase: phase.map(str::to_string),
+                task_id: task_id.map(str::to_string),
+                object_id: Some(job.job_id.clone()),
+                object_type: Some("runner_job".to_string()),
+                summary: format!("{} {} started for {context}", job.runner, job.job_id),
+                fields: json!({
+                    "runner": job.runner,
+                    "model": job.model,
+                    "context": context,
+                    "task_type": job.task_type,
+                    "timeout_sec": job.budget.timeout_sec,
+                    "max_tokens": job.budget.max_tokens,
+                }),
+                ..EventRecord::default()
+            },
+        );
+    }
+}
+
+pub fn emit_runner_submission_failed_jobs(
+    repo: &Path,
+    run_id: &str,
+    phase: Option<&str>,
+    task_id: Option<&str>,
+    context: &str,
+    jobs: &[AgentJob],
+    error: &str,
+) {
+    for job in jobs {
+        events::safe_emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some(job.runner.clone()),
+                phase: phase.map(str::to_string),
+                task_id: task_id.map(str::to_string),
+                object_id: Some(job.job_id.clone()),
+                object_type: Some("runner_job".to_string()),
+                summary: format!(
+                    "{} {} submission failed for {context}",
+                    job.runner, job.job_id
+                ),
+                fields: json!({
+                    "runner": job.runner,
+                    "model": job.model,
+                    "status": "failed",
+                    "exit_code": Value::Null,
+                    "timeout": false,
+                    "attempts": 0,
+                    "retry_count": 0,
+                    "task_type": job.task_type,
+                    "context": context,
+                    "submission_failed": true,
+                    "error_hash": hash_text(error),
+                }),
+                ..EventRecord::default()
+            },
+        );
+    }
+}
+
+fn emit_runner_retries(
+    repo: &Path,
+    run_id: &str,
+    phase: Option<&str>,
+    task_id: Option<&str>,
+    context: &str,
+    result: &AgentResult,
+) {
+    let Some(attempts) = result.cost.get("retry_attempts").and_then(Value::as_array) else {
+        return;
+    };
+    for attempt in attempts {
+        events::safe_emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "runner.retry".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some(result.runner.clone()),
+                phase: phase.map(str::to_string),
+                task_id: task_id.map(str::to_string),
+                object_id: Some(result.job_id.clone()),
+                object_type: Some("runner_job".to_string()),
+                summary: format!(
+                    "{} retry attempt {} in {context}",
+                    result.runner,
+                    attempt.get("attempt").and_then(Value::as_u64).unwrap_or(0)
+                ),
+                fields: json!({
+                    "runner": result.runner,
+                    "model": result.model,
+                    "attempt": attempt.get("attempt").cloned().unwrap_or(Value::Null),
+                    "status": attempt.get("status").cloned().unwrap_or(Value::Null),
+                    "exit_code": attempt.get("exit_code").cloned().unwrap_or(Value::Null),
+                    "delay_sec": attempt.get("delay_sec").cloned().unwrap_or(Value::Null),
+                    "context": context,
+                }),
+                ..EventRecord::default()
+            },
+        );
+    }
+}
+
+pub fn emit_audit_dispatched(
+    repo: &Path,
+    run_id: &str,
+    host: &str,
+    auditors: &[String],
+    mode: &str,
+    selected: Option<&str>,
+) {
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "audit.dispatched".to_string(),
+            actor_kind: "lto".to_string(),
+            object_type: Some("audit_batch".to_string()),
+            summary: format!(
+                "audit {mode} host={host} auditors={}",
+                if auditors.is_empty() {
+                    0
+                } else {
+                    auditors.len()
+                }
+            ),
+            fields: json!({
+                "mode": mode,
+                "host": host,
+                "auditors": auditors,
+                "selected": selected,
+                "auditor_count": auditors.len(),
+            }),
+            ..EventRecord::default()
+        },
+    );
+}
+
+pub fn emit_audit_findings(
+    repo: &Path,
+    run_id: &str,
+    source: &str,
+    findings: &[Value],
+    context: &str,
+) {
+    for finding in findings {
+        let severity = finding
+            .get("severity")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let claim = finding.get("claim").and_then(Value::as_str).unwrap_or("");
+        events::safe_emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "audit.finding".to_string(),
+                actor_kind: "auditor".to_string(),
+                actor_id: Some(source.to_string()),
+                object_type: Some("finding".to_string()),
+                summary: format!("{source} audit finding severity={severity}"),
+                fields: json!({
+                    "source": source,
+                    "severity": severity,
+                    "claim_hash": hash_text(claim),
+                    "has_file": finding.get("file").is_some(),
+                    "context": context,
+                }),
+                ..EventRecord::default()
+            },
+        );
+    }
+}
+
+pub fn emit_audit_converged(
+    repo: &Path,
+    run_id: &str,
+    round_label: &str,
+    high: u64,
+    critical: u64,
+    minor: u64,
+) {
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "audit.converged".to_string(),
+            actor_kind: "lto".to_string(),
+            object_id: Some(round_label.to_string()),
+            object_type: Some("audit_round".to_string()),
+            summary: format!(
+                "audit round {round_label}: high={high} critical={critical} minor={minor}"
+            ),
+            fields: json!({
+                "round": round_label,
+                "high": high,
+                "critical": critical,
+                "minor": minor,
+                "blockers": high + critical,
+            }),
+            ..EventRecord::default()
+        },
+    );
+}
+
+pub fn emit_gate_evaluated(repo: &Path, run_id: &str, gate: &str, report: &Value) {
+    let counts = status_counts(report.get("checks").and_then(Value::as_array));
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "gate.evaluated".to_string(),
+            actor_kind: "lto".to_string(),
+            object_id: Some(gate.to_string()),
+            object_type: Some("gate".to_string()),
+            summary: format!(
+                "{gate}: ok={} warn={} missing={}",
+                counts.ok, counts.warn, counts.missing
+            ),
+            fields: json!({
+                "gate": gate,
+                "ok": counts.ok,
+                "warn": counts.warn,
+                "missing": counts.missing,
+                "evidence_status": report.get("evidence_status").cloned().unwrap_or(Value::Null),
+                "target_phase": report.get("target_phase").cloned().unwrap_or(Value::Null),
+            }),
+            ..EventRecord::default()
+        },
+    );
+    if counts.missing > 0 {
+        emit_gate_blocked(
+            repo,
+            run_id,
+            gate,
+            "required gate checks missing",
+            json!({"missing": counts.missing}),
+        );
+    }
+}
+
+pub fn emit_gate_blocked(repo: &Path, run_id: &str, gate: &str, reason: &str, fields: Value) {
+    let mut payload = match fields {
+        Value::Object(map) => map,
+        other => Map::from_iter([("detail".to_string(), other)]),
+    };
+    payload.insert("gate".to_string(), json!(gate));
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "gate.blocked".to_string(),
+            actor_kind: "lto".to_string(),
+            object_id: Some(gate.to_string()),
+            object_type: Some("gate".to_string()),
+            summary: format!("{gate} blocked: {reason}"),
+            fields: Value::Object(payload),
+            ..EventRecord::default()
+        },
+    );
+}
+
+pub fn emit_budget_event(repo: &Path, run_id: &str, check: &BudgetCheck, context: &str) {
+    let event_type = match check.overall {
+        BudgetStatus::Exceeded => "budget.exceeded",
+        BudgetStatus::Warn => "budget.warned",
+        BudgetStatus::Ok => return,
+    };
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: event_type.to_string(),
+            actor_kind: "lto".to_string(),
+            object_type: Some("budget".to_string()),
+            summary: format!(
+                "{context} budget status={}",
+                budget_status_str(check.overall)
+            ),
+            fields: json!({
+                "context": context,
+                "overall": budget_status_str(check.overall),
+                "warnings_count": check.warnings.len(),
+                "dimensions": check.dimensions,
+            }),
+            ..EventRecord::default()
+        },
+    );
+}
+
+pub fn emit_sandbox_rejected(repo: &Path, run_id: &str, task_id: &str, result: &SandboxResult) {
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "sandbox.rejected".to_string(),
+            actor_kind: "lto".to_string(),
+            task_id: Some(task_id.to_string()),
+            object_id: Some(task_id.to_string()),
+            object_type: Some("task".to_string()),
+            summary: format!("sandbox rejected {task_id}: {}", result.note),
+            fields: json!({
+                "task_id": task_id,
+                "effect": result.effect,
+                "note": result.note,
+            }),
+            ..EventRecord::default()
+        },
+    );
+}
+
+pub fn emit_judge_skipped(repo: &Path, run_id: &str, case_id: &str, reason: Option<&str>) {
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "judge.skipped".to_string(),
+            actor_kind: "lto".to_string(),
+            object_id: Some(case_id.to_string()),
+            object_type: Some("judge_case".to_string()),
+            summary: format!("judge skipped for {case_id}"),
+            fields: json!({
+                "case_id": case_id,
+                "reason": reason,
+            }),
+            ..EventRecord::default()
+        },
+    );
+}
+
+pub fn emit_decision_voted(
+    repo: &Path,
+    run_id: &str,
+    source: &str,
+    decision_kind: &str,
+    fields: Value,
+) {
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "decision.voted".to_string(),
+            actor_kind: "auditor".to_string(),
+            actor_id: Some(source.to_string()),
+            object_type: Some("decision".to_string()),
+            summary: format!("{source} voted on {decision_kind}"),
+            fields,
+            ..EventRecord::default()
+        },
+    );
+}
+
+pub fn emit_decision_escalated(repo: &Path, run_id: &str, reason: &str, fields: Value) {
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "decision.escalated".to_string(),
+            actor_kind: "lto".to_string(),
+            object_type: Some("decision".to_string()),
+            summary: format!("decision escalated: {reason}"),
+            fields,
+            ..EventRecord::default()
+        },
+    );
+}
+
+#[derive(Default)]
+struct StatusCounts {
+    ok: usize,
+    warn: usize,
+    missing: usize,
+}
+
+fn status_counts(checks: Option<&Vec<Value>>) -> StatusCounts {
+    let mut counts = StatusCounts::default();
+    for check in checks.into_iter().flatten() {
+        match check.get("status").and_then(Value::as_str) {
+            Some("ok") => counts.ok += 1,
+            Some("missing") => counts.missing += 1,
+            _ => counts.warn += 1,
+        }
+    }
+    counts
+}
+
+fn budget_status_str(status: BudgetStatus) -> &'static str {
+    match status {
+        BudgetStatus::Ok => "ok",
+        BudgetStatus::Warn => "warn",
+        BudgetStatus::Exceeded => "exceeded",
+    }
+}
+
+fn hash_text(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_job::TaskSize;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn runner_result_event_omits_reply_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = AgentResult {
+            job_id: "j1".to_string(),
+            runner: "codex".to_string(),
+            model: Some("m".to_string()),
+            status: JobStatus::Ok,
+            exit_code: Some(0),
+            findings: vec![],
+            reply_text: "SECRET_REPLY_SHOULD_NOT_APPEAR".to_string(),
+            cost: BTreeMap::from([("elapsed_sec".to_string(), json!(1.2))]),
+            permissions: BTreeMap::new(),
+            artifacts: vec![],
+            attempts: 1,
+            error: String::new(),
+            task_type: Some("audit".to_string()),
+            size: TaskSize::Small,
+            merge_review: None,
+        };
+        emit_runner_results(
+            tmp.path(),
+            "r1",
+            Some("implementation"),
+            None,
+            "test",
+            &[result],
+        );
+        let blob = std::fs::read_to_string(crate::events::events_path(tmp.path(), "r1")).unwrap();
+        assert!(blob.contains("runner.finished"));
+        assert!(!blob.contains("SECRET_REPLY_SHOULD_NOT_APPEAR"));
+    }
+}

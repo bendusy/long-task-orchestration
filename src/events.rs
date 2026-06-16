@@ -11,7 +11,7 @@ pub const SCHEMA_VERSION: u64 = 1;
 pub const WARN_AT: usize = 10_000;
 pub const HARD_STOP_AT: usize = 50_000;
 
-const PHASE1_EVENT_TYPES: &[&str] = &[
+pub const KNOWN_EVENT_TYPES: &[&str] = &[
     "run.started",
     "run.closed",
     "phase.changed",
@@ -19,7 +19,20 @@ const PHASE1_EVENT_TYPES: &[&str] = &[
     "task.status_changed",
     "runner.started",
     "runner.finished",
+    "runner.retry",
+    "runner.healthcheck",
     "artifact.registered",
+    "audit.dispatched",
+    "audit.finding",
+    "audit.converged",
+    "gate.evaluated",
+    "gate.blocked",
+    "budget.warned",
+    "budget.exceeded",
+    "sandbox.rejected",
+    "judge.skipped",
+    "decision.voted",
+    "decision.escalated",
 ];
 
 const ACTOR_KINDS: &[&str] = &["host", "lto", "runner", "auditor", "human"];
@@ -52,7 +65,7 @@ pub fn safe_emit(repo: &Path, run_id: &str, record: EventRecord) -> Option<Value
 
 pub fn emit(repo: &Path, run_id: &str, record: EventRecord) -> anyhow::Result<Value> {
     state::validate_run_id(run_id)?;
-    if !PHASE1_EVENT_TYPES.contains(&record.event_type.as_str()) {
+    if !KNOWN_EVENT_TYPES.contains(&record.event_type.as_str()) {
         anyhow::bail!("invalid or deferred event type: {}", record.event_type);
     }
     if !ACTOR_KINDS.contains(&record.actor_kind.as_str()) {
@@ -213,6 +226,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read(repo, "r1").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn accepts_o2_types_but_still_rejects_typos_on_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        emit(
+            tmp.path(),
+            "r1",
+            EventRecord {
+                event_type: "gate.blocked".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "closeout blocked".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        let err = emit(
+            tmp.path(),
+            "r1",
+            EventRecord {
+                event_type: "gate.blokced".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "typo".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid or deferred event type"));
     }
 
     #[test]

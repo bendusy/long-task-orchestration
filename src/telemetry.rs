@@ -18,6 +18,8 @@ pub fn build(repo: &Path, run_id: &str) -> anyhow::Result<Value> {
         "run_id": run_id,
         "generated_at": now,
         "run_metrics": run_metrics,
+        "runner_metrics": runner_metrics(&events),
+        "audit_metrics": audit_metrics(&events),
         "task_metrics": task_metrics(repo, &state, &events),
         "worker_observations": [],
         "issue_metrics": {},
@@ -112,6 +114,112 @@ fn task_metrics(repo: &Path, state: &LtoState, events: &[Value]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+#[derive(Default)]
+struct RunnerRollup {
+    calls: usize,
+    ok: usize,
+    failed: usize,
+    timeout: usize,
+    skipped: usize,
+}
+
+fn runner_metrics(events: &[Value]) -> Vec<Value> {
+    let mut by_runner = std::collections::BTreeMap::<String, RunnerRollup>::new();
+    for event in events
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("runner.finished"))
+    {
+        let fields = event.get("fields").unwrap_or(&Value::Null);
+        let runner = fields
+            .get("runner")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                event
+                    .get("actor")
+                    .and_then(|actor| actor.get("id"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("unknown");
+        let status = fields
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| match fields.get("rc").and_then(Value::as_i64) {
+                Some(0) => "ok".to_string(),
+                Some(124) => "timeout".to_string(),
+                Some(_) => "failed".to_string(),
+                None => "unknown".to_string(),
+            });
+        let rollup = by_runner.entry(runner.to_string()).or_default();
+        rollup.calls += 1;
+        match status.as_str() {
+            "ok" => rollup.ok += 1,
+            "timeout" => {
+                rollup.timeout += 1;
+                rollup.failed += 1;
+            }
+            "skipped" => rollup.skipped += 1,
+            _ => rollup.failed += 1,
+        }
+    }
+    by_runner
+        .into_iter()
+        .map(|(runner, slot)| {
+            let failure_rate = if slot.calls == 0 {
+                0.0
+            } else {
+                slot.failed as f64 / slot.calls as f64
+            };
+            json!({
+                "runner": runner,
+                "calls": slot.calls,
+                "ok": slot.ok,
+                "failed": slot.failed,
+                "timeout": slot.timeout,
+                "skipped": slot.skipped,
+                "failure_rate": failure_rate,
+            })
+        })
+        .collect()
+}
+
+fn audit_metrics(events: &[Value]) -> Value {
+    let dispatched = events
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("audit.dispatched"))
+        .count();
+    let rounds = events
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("audit.converged"))
+        .collect::<Vec<_>>();
+    let mut severity_counts = std::collections::BTreeMap::<String, usize>::new();
+    for event in events
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("audit.finding"))
+    {
+        let severity = event
+            .get("fields")
+            .and_then(|fields| fields.get("severity"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        *severity_counts.entry(severity.to_string()).or_default() += 1;
+    }
+    let latest_blockers = rounds
+        .last()
+        .and_then(|event| event.get("fields"))
+        .and_then(|fields| fields.get("blockers"))
+        .and_then(Value::as_u64);
+    json!({
+        "audit_dispatches": dispatched,
+        "audit_rounds": rounds.len(),
+        "latest_blockers": latest_blockers,
+        "findings": {
+            "total": severity_counts.values().sum::<usize>(),
+            "by_severity": severity_counts,
+        },
+    })
 }
 
 fn count_tasks(tasks: &[Value], status: &str) -> usize {
@@ -214,7 +322,43 @@ mod tests {
             EventRecord {
                 event_type: "runner.finished".to_string(),
                 actor_kind: "runner".to_string(),
-                fields: json!({"timeout": true}),
+                actor_id: Some("codex".to_string()),
+                fields: json!({"runner": "codex", "status": "timeout", "timeout": true}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("pi".to_string()),
+                fields: json!({"runner": "pi", "status": "failed", "timeout": false}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "audit.finding".to_string(),
+                actor_kind: "auditor".to_string(),
+                actor_id: Some("pi".to_string()),
+                fields: json!({"severity": "high"}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "audit.converged".to_string(),
+                actor_kind: "lto".to_string(),
+                fields: json!({"blockers": 1}),
                 ..EventRecord::default()
             },
         )
@@ -225,8 +369,14 @@ mod tests {
         assert!(!blob.contains("/Users/ben/private"));
         assert!(!blob.contains("sk-123456789012"));
         let value = build(repo, run_id).unwrap();
-        assert_eq!(value["run_metrics"]["runner_calls"], 1);
+        assert_eq!(value["run_metrics"]["runner_calls"], 2);
         assert_eq!(value["run_metrics"]["timeout_count"], 1);
-        assert_eq!(value["event_log"]["event_count"], 1);
+        assert_eq!(value["runner_metrics"][0]["runner"], "codex");
+        assert_eq!(value["runner_metrics"][0]["timeout"], 1);
+        assert_eq!(value["runner_metrics"][1]["runner"], "pi");
+        assert_eq!(value["runner_metrics"][0]["failure_rate"], 1.0);
+        assert_eq!(value["audit_metrics"]["audit_rounds"], 1);
+        assert_eq!(value["audit_metrics"]["findings"]["by_severity"]["high"], 1);
+        assert_eq!(value["event_log"]["event_count"], 4);
     }
 }

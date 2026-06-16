@@ -22,11 +22,36 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
     }
 
     enforce_gates(repo, &ctx, &options)?;
+    crate::events::safe_emit(
+        repo,
+        &ctx.run_id,
+        crate::events::EventRecord {
+            event_type: "gate.evaluated".to_string(),
+            actor_kind: "lto".to_string(),
+            object_id: Some("closeout".to_string()),
+            object_type: Some("gate".to_string()),
+            summary: "closeout gates passed".to_string(),
+            fields: json!({"gate": "closeout", "status": "passed"}),
+            ..crate::events::EventRecord::default()
+        },
+    );
 
     let git = util::git_status(repo);
     let previous_phase = ctx.state.current_phase.clone();
     if previous_phase != "closed" {
         util::append_phase_transition(&mut ctx.state, &previous_phase, "closed", &git.head);
+        crate::events::safe_emit(
+            repo,
+            &ctx.run_id,
+            crate::events::EventRecord {
+                event_type: "phase.changed".to_string(),
+                actor_kind: "host".to_string(),
+                phase: Some("closed".to_string()),
+                summary: format!("{previous_phase} -> closed"),
+                fields: json!({"from": previous_phase, "to": "closed"}),
+                ..crate::events::EventRecord::default()
+            },
+        );
     } else {
         ctx.state.current_phase = "closed".to_string();
     }
@@ -133,6 +158,12 @@ fn enforce_gates(
         let rounds = util::parse_ledger(&text)?;
         let verdict = util::evaluate_ledger(&rounds, false);
         if verdict != util::LedgerVerdict::Converged {
+            emit_closeout_gate_blocked(
+                repo,
+                &ctx.run_id,
+                "audit ledger not converged",
+                json!({"ledger_verdict": verdict.as_str()}),
+            );
             anyhow::bail!(
                 "closeout refused: ledger verdict is {}, not CONVERGED (use --force to override)",
                 verdict.as_str()
@@ -148,16 +179,34 @@ fn enforce_gates(
         .map(Vec::len)
         .unwrap_or_default();
     if unresolved > 0 && !options.force {
+        emit_closeout_gate_blocked(
+            repo,
+            &ctx.run_id,
+            "unresolved blocks",
+            json!({"unresolved_blocks": unresolved}),
+        );
         anyhow::bail!("closeout refused: {unresolved} unresolved blocks (use --force)");
     }
 
     if ctx.state.current_phase == "closed" && !options.force {
+        emit_closeout_gate_blocked(
+            repo,
+            &ctx.run_id,
+            "run already closed",
+            json!({"current_phase": ctx.state.current_phase}),
+        );
         anyhow::bail!("run already closed (use --force to rewrite)");
     }
 
     let dirty = util::tracked_dirty_paths(repo);
     if !dirty.is_empty() && !options.allow_dirty {
         let sample = dirty.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+        emit_closeout_gate_blocked(
+            repo,
+            &ctx.run_id,
+            "tracked worktree dirty",
+            json!({"tracked_dirty_count": dirty.len(), "sample": sample}),
+        );
         anyhow::bail!(
             "closeout refused: {} tracked uncommitted change(s) outside .lto (e.g. {}). Commit or stash code changes first; use --no-changelog after commit for admin closeout without new tracked dirt.",
             dirty.len(),
@@ -184,6 +233,12 @@ fn enforce_gates(
         .filter(|risk| util::risk_is_open_unverified(risk))
         .count();
     if unverified > 0 && !options.force {
+        emit_closeout_gate_blocked(
+            repo,
+            &ctx.run_id,
+            "risk points unverified",
+            json!({"unverified_risk_points": unverified}),
+        );
         anyhow::bail!(
             "closeout refused: {unverified} risk points unverified (use --force to override)"
         );
@@ -191,12 +246,24 @@ fn enforce_gates(
 
     if has_high_risk_task(&ctx.state.tasks) && !options.force {
         if !ledger_path.exists() {
+            emit_closeout_gate_blocked(
+                repo,
+                &ctx.run_id,
+                "missing audit ledger",
+                json!({"audit_ledger": "missing"}),
+            );
             anyhow::bail!(
                 "closeout refused: high-risk run has no audit-ledger.md (run lto audit first, or use --force to override)"
             );
         }
         let text = fs::read_to_string(&ledger_path)?;
         if !util::has_real_ledger_rounds(&text) {
+            emit_closeout_gate_blocked(
+                repo,
+                &ctx.run_id,
+                "empty audit ledger",
+                json!({"audit_ledger": "empty"}),
+            );
             anyhow::bail!(
                 "closeout refused: high-risk run has empty audit ledger (run lto audit first, or use --force to override)"
             );
@@ -398,6 +465,28 @@ fn write_changelog(
         fs::write(&path, format!("# Changelog\n\n{section}"))?;
     }
     Ok(())
+}
+
+fn emit_closeout_gate_blocked(repo: &Path, run_id: &str, reason: &str, fields: Value) {
+    crate::events::safe_emit(
+        repo,
+        run_id,
+        crate::events::EventRecord {
+            event_type: "gate.evaluated".to_string(),
+            actor_kind: "lto".to_string(),
+            object_id: Some("closeout".to_string()),
+            object_type: Some("gate".to_string()),
+            summary: format!("closeout gates failed: {reason}"),
+            fields: json!({
+                "gate": "closeout",
+                "status": "failed",
+                "reason": reason,
+                "detail": fields.clone(),
+            }),
+            ..crate::events::EventRecord::default()
+        },
+    );
+    crate::event_emit::emit_gate_blocked(repo, run_id, "closeout", reason, fields);
 }
 
 fn has_high_risk_task(tasks: &Value) -> bool {

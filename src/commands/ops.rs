@@ -294,6 +294,12 @@ pub fn cmd_check(repo: &Path, options: CheckOptions) -> anyhow::Result<()> {
             println!("OK {}", repo.join(".lto").join(run_id).display());
         }
     }
+    if let Some(report) = &outcome.phase_report
+        && !outcome.run_id.is_empty()
+    {
+        crate::event_emit::emit_gate_evaluated(repo, &outcome.run_id, "phase_check", report);
+        let _ = crate::telemetry::save(repo, &outcome.run_id);
+    }
     if !outcome.errors.is_empty() {
         std::process::exit(1);
     }
@@ -854,7 +860,45 @@ fn non_empty_file(path: &Path) -> bool {
 pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
-        let results = submit_jobs(repo, jobs)?;
+        let run_id = common_job_run_id(&jobs);
+        if let Some(run_id) = &run_id {
+            crate::event_emit::emit_runner_started_jobs(
+                repo,
+                run_id,
+                None,
+                None,
+                "runner.job_file",
+                &jobs,
+            );
+        }
+        let results = match submit_jobs(repo, jobs.clone()) {
+            Ok(results) => results,
+            Err(err) => {
+                if let Some(run_id) = &run_id {
+                    crate::event_emit::emit_runner_submission_failed_jobs(
+                        repo,
+                        run_id,
+                        None,
+                        None,
+                        "runner.job_file",
+                        &jobs,
+                        &err.to_string(),
+                    );
+                }
+                return Err(err);
+            }
+        };
+        if let Some(run_id) = run_id {
+            crate::event_emit::emit_runner_results(
+                repo,
+                &run_id,
+                None,
+                None,
+                "runner.job_file",
+                &results,
+            );
+            let _ = crate::telemetry::save(repo, &run_id);
+        }
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
@@ -894,7 +938,39 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
             needs_worktree: false,
             meta: BTreeMap::from([("run_id".to_string(), json!(run_id))]),
         };
-        let results = submit_jobs(repo, vec![job])?;
+        let jobs = vec![job];
+        crate::event_emit::emit_runner_started_jobs(
+            repo,
+            &run_id,
+            None,
+            None,
+            "runner.prompt",
+            &jobs,
+        );
+        let results = match submit_jobs(repo, jobs.clone()) {
+            Ok(results) => results,
+            Err(err) => {
+                crate::event_emit::emit_runner_submission_failed_jobs(
+                    repo,
+                    &run_id,
+                    None,
+                    None,
+                    "runner.prompt",
+                    &jobs,
+                    &err.to_string(),
+                );
+                return Err(err);
+            }
+        };
+        crate::event_emit::emit_runner_results(
+            repo,
+            &run_id,
+            None,
+            None,
+            "runner.prompt",
+            &results,
+        );
+        let _ = crate::telemetry::save(repo, &run_id);
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
@@ -963,7 +1039,9 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
         rollup.total_tokens,
         &util::iso_now(),
     );
+    crate::event_emit::emit_budget_event(repo, &ctx.run_id, &budget, "autopilot");
     if budget.overall == BudgetStatus::Exceeded {
+        let _ = crate::telemetry::save(repo, &ctx.run_id);
         println!("# LTO Autopilot -- budget gate BLOCKED");
         println!("AUTOPILOT_STATUS: NEEDS_CONFIRM");
         return Ok(());
@@ -1425,7 +1503,45 @@ pub fn cmd_hook(repo: &Path, options: HookOptions) -> anyhow::Result<()> {
 pub fn cmd_parallel(repo: &Path, options: ParallelOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
-        let results = submit_jobs(repo, jobs)?;
+        let run_id = common_job_run_id(&jobs);
+        if let Some(run_id) = &run_id {
+            crate::event_emit::emit_runner_started_jobs(
+                repo,
+                run_id,
+                None,
+                None,
+                "run.parallel",
+                &jobs,
+            );
+        }
+        let results = match submit_jobs(repo, jobs.clone()) {
+            Ok(results) => results,
+            Err(err) => {
+                if let Some(run_id) = &run_id {
+                    crate::event_emit::emit_runner_submission_failed_jobs(
+                        repo,
+                        run_id,
+                        None,
+                        None,
+                        "run.parallel",
+                        &jobs,
+                        &err.to_string(),
+                    );
+                }
+                return Err(err);
+            }
+        };
+        if let Some(run_id) = run_id {
+            crate::event_emit::emit_runner_results(
+                repo,
+                &run_id,
+                None,
+                None,
+                "run.parallel",
+                &results,
+            );
+            let _ = crate::telemetry::save(repo, &run_id);
+        }
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
@@ -1435,7 +1551,45 @@ pub fn cmd_parallel(repo: &Path, options: ParallelOptions) -> anyhow::Result<()>
 pub fn cmd_pipeline(repo: &Path, options: PipelineOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
-        let results = submit_jobs(repo, jobs)?;
+        let run_id = common_job_run_id(&jobs);
+        if let Some(run_id) = &run_id {
+            crate::event_emit::emit_runner_started_jobs(
+                repo,
+                run_id,
+                None,
+                None,
+                "run.pipeline",
+                &jobs,
+            );
+        }
+        let results = match submit_jobs(repo, jobs.clone()) {
+            Ok(results) => results,
+            Err(err) => {
+                if let Some(run_id) = &run_id {
+                    crate::event_emit::emit_runner_submission_failed_jobs(
+                        repo,
+                        run_id,
+                        None,
+                        None,
+                        "run.pipeline",
+                        &jobs,
+                        &err.to_string(),
+                    );
+                }
+                return Err(err);
+            }
+        };
+        if let Some(run_id) = run_id {
+            crate::event_emit::emit_runner_results(
+                repo,
+                &run_id,
+                None,
+                None,
+                "run.pipeline",
+                &results,
+            );
+            let _ = crate::telemetry::save(repo, &run_id);
+        }
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
@@ -1457,6 +1611,22 @@ fn load_jobs(path: &Path) -> anyhow::Result<Vec<AgentJob>> {
     } else {
         Ok(vec![serde_json::from_value(value)?])
     }
+}
+
+fn common_job_run_id(jobs: &[AgentJob]) -> Option<String> {
+    let mut run_id = None;
+    for job in jobs {
+        let Some(candidate) = job.meta.get("run_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(existing) = &run_id
+            && existing != candidate
+        {
+            return None;
+        }
+        run_id = Some(candidate.to_string());
+    }
+    run_id
 }
 
 fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
@@ -1533,6 +1703,7 @@ fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
                 "kind": options.kind,
                 "command_hash": format!("{:x}", sha2::Sha256::digest(command.as_bytes())),
                 "rc": rc,
+                "status": if rc == 0 { "ok" } else if rc == 124 { "timeout" } else { "failed" },
                 "elapsed_sec": elapsed,
                 "timeout": rc == 124,
             }),
@@ -1612,6 +1783,27 @@ fn cmd_state_judge(repo: &Path, options: JudgeOptions) -> anyhow::Result<()> {
     )?;
     ctx.state.gates["last_reviewed_head"] = json!(head);
     util::save_run(&ctx)?;
+    crate::events::safe_emit(
+        repo,
+        &ctx.run_id,
+        crate::events::EventRecord {
+            event_type: "gate.evaluated".to_string(),
+            actor_kind: "lto".to_string(),
+            object_id: Some("judge".to_string()),
+            object_type: Some("gate".to_string()),
+            summary: format!(
+                "judge verdict for {}",
+                options.phase.unwrap_or_else(|| "all".to_string())
+            ),
+            fields: json!({
+                "gate": "judge",
+                "verdict_path": util::repo_relative_path(repo, &path).unwrap_or_else(|_| path.display().to_string()),
+                "head": head,
+            }),
+            ..crate::events::EventRecord::default()
+        },
+    );
+    let _ = crate::telemetry::save(repo, &ctx.run_id);
     println!("{verdict}");
     Ok(())
 }
@@ -1644,10 +1836,81 @@ fn cmd_llm_judge(repo: &Path, options: JudgeOptions) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&plan)?);
         return Ok(());
     }
+    let run_ctx = if options.run_id.is_some() || repo.join(".lto").join("current").exists() {
+        Some(util::load_run(repo, options.run_id.as_deref())?)
+    } else {
+        None
+    };
     match plan {
         llm_judge::JudgeDispatchPlan::Ready { runner, job, .. } => {
-            let results = submit_jobs(repo, vec![*job])?;
-            let result = results.first().context("judge produced no result")?;
+            let mut job = *job;
+            if let Some(ctx) = &run_ctx {
+                job.meta.insert("run_id".to_string(), json!(ctx.run_id));
+            }
+            let jobs = vec![job];
+            if let Some(ctx) = &run_ctx {
+                crate::event_emit::emit_runner_started_jobs(
+                    repo,
+                    &ctx.run_id,
+                    Some(ctx.state.current_phase.as_str()),
+                    None,
+                    "judge.llm",
+                    &jobs,
+                );
+            }
+            let results = match submit_jobs(repo, jobs.clone()) {
+                Ok(results) => results,
+                Err(err) => {
+                    if let Some(ctx) = &run_ctx {
+                        crate::event_emit::emit_runner_submission_failed_jobs(
+                            repo,
+                            &ctx.run_id,
+                            Some(ctx.state.current_phase.as_str()),
+                            None,
+                            "judge.llm",
+                            &jobs,
+                            &err.to_string(),
+                        );
+                        crate::event_emit::emit_decision_escalated(
+                            repo,
+                            &ctx.run_id,
+                            "judge scheduler failed",
+                            json!({
+                                "case_id": case_dir.file_name().and_then(|value| value.to_str()).unwrap_or("case"),
+                                "judge_runner": runner,
+                                "error": err.to_string(),
+                            }),
+                        );
+                        let _ = crate::telemetry::save(repo, &ctx.run_id);
+                    }
+                    return Err(err);
+                }
+            };
+            if let Some(ctx) = &run_ctx {
+                crate::event_emit::emit_runner_results(
+                    repo,
+                    &ctx.run_id,
+                    Some(ctx.state.current_phase.as_str()),
+                    None,
+                    "judge.llm",
+                    &results,
+                );
+            }
+            let Some(result) = results.first() else {
+                if let Some(ctx) = &run_ctx {
+                    crate::event_emit::emit_decision_escalated(
+                        repo,
+                        &ctx.run_id,
+                        "judge result missing",
+                        json!({
+                            "case_id": case_dir.file_name().and_then(|value| value.to_str()).unwrap_or("case"),
+                            "judge_runner": runner,
+                        }),
+                    );
+                    let _ = crate::telemetry::save(repo, &ctx.run_id);
+                }
+                anyhow::bail!("judge produced no result");
+            };
             let parsed = llm_judge::parse_judge_reply(&result.reply_text);
             let hash = llm_judge::freeze_verdict(
                 &case_dir,
@@ -1661,11 +1924,58 @@ fn cmd_llm_judge(repo: &Path, options: JudgeOptions) -> anyhow::Result<()> {
                     Some(&result.error)
                 },
             )?;
+            if let Some(ctx) = &run_ctx {
+                let case_id = case_dir
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("case");
+                if let Some(judgment) = &parsed {
+                    crate::event_emit::emit_decision_voted(
+                        repo,
+                        &ctx.run_id,
+                        &runner,
+                        "llm_judge",
+                        json!({
+                            "case_id": case_id,
+                            "judge_runner": runner,
+                            "status": util::status_str(result),
+                            "blocker_quality": format!("{:?}", judgment.blocker_quality).to_ascii_lowercase(),
+                            "false_positive_suspected": judgment.false_positive_suspected,
+                            "evidence_hash": frozen.evidence_hash,
+                        }),
+                    );
+                } else {
+                    crate::event_emit::emit_decision_escalated(
+                        repo,
+                        &ctx.run_id,
+                        "judge reply did not parse",
+                        json!({
+                            "case_id": case_id,
+                            "judge_runner": runner,
+                            "result_status": result.status.as_str(),
+                        }),
+                    );
+                }
+                let _ = crate::telemetry::save(repo, &ctx.run_id);
+            }
             println!("judge verdict: {hash}");
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
         skipped => {
-            println!("{}", serde_json::to_string_pretty(&skipped)?);
+            let payload = serde_json::to_value(&skipped)?;
+            if let Some(ctx) = &run_ctx {
+                crate::event_emit::emit_judge_skipped(
+                    repo,
+                    &ctx.run_id,
+                    case_dir
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("case"),
+                    payload.get("reason").and_then(Value::as_str),
+                );
+                let _ = crate::telemetry::save(repo, &ctx.run_id);
+            }
+            println!("{}", serde_json::to_string_pretty(&payload)?);
         }
     }
     Ok(())
@@ -1918,6 +2228,20 @@ fn auto_exec_tasks(
         if retry_count >= 3 {
             retry_blocked += 1;
             let id = task.get("id").and_then(Value::as_str).unwrap_or("?");
+            crate::event_emit::emit_sandbox_rejected(
+                repo,
+                &ctx.run_id,
+                id,
+                &worktree::SandboxResult {
+                    executed: false,
+                    effect: crate::effect::classify_effect(&command),
+                    rc: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    worktree: None,
+                    note: format!("refused: retry_count={retry_count} >= 3"),
+                },
+            );
             println!("    [{id}] SKIP -- retry_count={retry_count} >= 3 (needs human)");
             continue;
         }
@@ -1931,6 +2255,7 @@ fn auto_exec_tasks(
         if !result.executed {
             held += 1;
             println!("    [{id}] HELD -- {}", result.note);
+            crate::event_emit::emit_sandbox_rejected(repo, &ctx.run_id, id, &result);
             continue;
         }
         executed += 1;

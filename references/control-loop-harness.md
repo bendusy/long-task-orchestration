@@ -1,6 +1,6 @@
 # LTO control-loop harness spec
 
-> **STATUS: Phase 1 passive logging implemented; later phases still spec.** The Phase 1 sensor layer — append-only `events.jsonl` (8 event types) + derived `telemetry.json` — is implemented in Rust (`src/events.rs`, `src/telemetry.rs`). Phase 0/0.5 remains this reviewed specification. Sections defining Issue/Finding/Claim/Decision/Barrier and the deferred event types describe future typed workspace targets, not current CLI behavior.
+> **STATUS: Phase 1 passive logging plus O2 event wiring implemented.** The Rust sensor layer — append-only `events.jsonl` (known event registry enforced on write) + derived `telemetry.json` — is implemented in Rust (`src/events.rs`, `src/event_emit.rs`, `src/telemetry.rs`). O2 adds caller-side events for runner results, audit dispatch/findings, gates, budget, sandbox refusals, and judge/decision outcomes. Phase 0/0.5 remains this reviewed specification. Sections defining Issue/Claim/Barrier and typed workspace targets still describe future behavior, not current CLI behavior.
 
 > LTO is not an agent UI, not a PM replacement, and not a marketplace of workflows. LTO is a control harness for long AI-agent work: observe state, detect drift, limit unsafe actions, improve flow, reduce waste, and preserve evidence for future tuning.
 
@@ -367,7 +367,7 @@ Base event:
 }
 ```
 
-Phase 1 event types:
+Known event types:
 
 | Type | Emitted when |
 |---|---|
@@ -378,16 +378,27 @@ Phase 1 event types:
 | `task.status_changed` | runner/host changes task status |
 | `runner.started` | command/job begins |
 | `runner.finished` | command/job ends; may include rc, elapsed, timeout, repo-relative touched files |
+| `runner.retry` | scheduler result reports retry attempts; emitted by callers with run context |
+| `runner.healthcheck` | runner is skipped because healthcheck marked it unhealthy |
 | `artifact.registered` | artifact manifest changes |
+| `audit.dispatched` | audit prepare, auto-dispatch, or risk discovery selects auditors |
+| `audit.finding` | structured audit finding summary is parsed; claim text stays out of event fields |
+| `audit.converged` | audit ledger round is recorded with blocker counts |
+| `gate.evaluated` | check/judge/closeout gate evaluates structured checks |
+| `gate.blocked` | check/closeout gate blocks progress |
+| `budget.warned` | budget check crosses warning threshold |
+| `budget.exceeded` | budget gate reaches hard limit |
+| `sandbox.rejected` | worktree sandbox refuses a command before execution |
+| `judge.skipped` | LLM judge dispatch is skipped with a structured reason |
+| `decision.voted` | judge/decision path records a structured vote or verdict summary |
+| `decision.escalated` | decision/judge path needs host intervention |
 
 Deferred event types:
 
 | Type | Deferred until |
 |---|---|
-| `finding.recorded` | structured finding parser exists |
 | `issue.created` / `issue.status_changed` | issue lifecycle phase |
-| `decision.recorded` / `human_override.recorded` | decision logging event schema phase |
-| `gate.failed` / `gate.passed` | gate event schema is defined for check/judge/permission/privacy |
+| `human_override.recorded` | human override event schema phase |
 | `permission.denied` / `permission.snapshot` | permission telemetry phase |
 | `worker.observed` | worker observation phase |
 | `barrier.created` / `barrier.synthesized` | fan-out barrier phase |
@@ -585,9 +596,10 @@ Before implementation:
 Goal: future tuning with low risk and no behavior change.
 
 - Add `events.jsonl` writer helpers.
-- Emit only Phase 1 events: `run.started`, `run.closed`, `phase.changed`, `task.created`, `task.status_changed`, `runner.started`, `runner.finished`, `artifact.registered`.
+- Emit initial Phase 1 events: `run.started`, `run.closed`, `phase.changed`, `task.created`, `task.status_changed`, `runner.started`, `runner.finished`, `artifact.registered`.
 - Add `telemetry build` helper that derives deterministic `telemetry.json`.
-- Do not emit judge/gate/finding/issue/worker/barrier events yet.
+- O2 expands sensor coverage to runner retry/healthcheck results, audit dispatch/findings/rounds, gate evaluation/blocking, budget warnings/exceeded, sandbox rejection, and judge/decision summaries. Production writes still enforce `KNOWN_EVENT_TYPES`; readers remain tolerant of future event types.
+- Do not emit issue/worker/barrier events yet.
 - Do not persist `control_recommendations`.
 - Add tests that events contain no raw stdout/stderr, no absolute private paths, and no obvious secrets.
 - No behavior changes.

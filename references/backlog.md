@@ -37,7 +37,7 @@
 - **为何最高**：`control-loop-harness.md` 把它定为 Phase 1「传感器层」。没它，`next`/`recap`/未来 eval 都缺一手证据，宿主只能靠状态快照猜，漂移检测与未来 tuning 失去地基。
 - **LLM 友好点**：零 LLM、零决策、append-only——纯传感器，不引入主观判断。宿主读结构化事件比读散落 stdout 省 token。
 - **落地约束**：append-only 不可改写；事件 schema 稳定可被 `next`/eval 消费；不替宿主决策（只记录）。
-- **现状**：✅ Rust 已接管。`src/events.rs`（8 类型 append-only + `.events.lock` + 递归 redact）+ `src/telemetry.rs`（派生信号，无 recommendations）覆盖 Phase 1 sensor layer；旧 Python 实现已随 fallback 在 v0.5.0 退役。free-text cap 240（spec §5.0）。
+- **现状**：✅ Rust 已接管。`src/events.rs`（`KNOWN_EVENT_TYPES` 写入硬校验 + append-only + `.events.lock` + 递归 redact）+ `src/event_emit.rs`（O2 调用方接线 helper）+ `src/telemetry.rs`（派生 runner failure rate / audit rounds 等信号，无 recommendations）覆盖 Phase 1 + O2 sensor layer；旧 Python 实现已随 fallback 在 v0.5.0 退役。free-text cap 240（spec §5.0）。
 - **解锁**：②③ 现可启动（有了可复现事件证据 + 真实 escalate 数据来源）。
 
 ## ② DEFERRED_V0 llm_judge（P1，被 ① 喂证据）
@@ -90,17 +90,26 @@
 - **触发条件（满足才动手）**：ACP 协议出 **1.0 / 摘掉 unstable 标 + remote agent 做完**，或 acpx 摘 alpha。在此之前**只观察不立项**。
 - **接的时候接什么**：接 **ACP 协议**（标准、可复用），不绑 acpx 这一个 alpha CLI。
 
-## ⑨ Scheduler runner lifecycle events / O1-1 tracing（P1）
+## ⑨ Scheduler runner lifecycle events / O2 tracing（P1）
 
-- **是什么**：从 `src/scheduler.rs` 单点发出 runner lifecycle 事件，包括
-  runner.started、runner.finished、retry、timeout、healthcheck failure/recovery。
-- **为何延期**：Python fallback 退役的硬前置是 Rust 能写 `events.jsonl` /
-  `telemetry.json` 并保护 start/closeout/runner 证据；这一点已由
-  `src/events.rs` / `src/telemetry.rs` 和 obs-smoke 验证。scheduler chokepoint
-  全量 tracing 会影响 audit/judge/parallel/pipeline/eval-run 多条路径，适合作为
-  独立可观测性迭代，而不是混进 Python 删除提交。
-- **验收线**：scheduler spawn/finish/timeout/retry/healthcheck 路径有结构化 event；
-  plugin eval-run 和 audit 自动继承事件；`telemetry.json` 能派生 runner lifecycle
-  计数；隐私脚本仍为 0 unclassified hits。
+- **是什么**：在 scheduler-backed 调用方发出 runner lifecycle 事件，包括
+  runner.finished、retry summary、timeout、healthcheck unhealthy skip。`runner.started`
+  仍需 scheduler callback/event channel 才能不污染 `Scheduler::submit` 签名。
+- **裁决**：✅ 选项 A。Scheduler 保持通用 executor，不接 `.lto` run_id；调用方在已有
+  run_id 上下文里用 `AgentResult` 发事件。已验 `AgentResult` 字段足够覆盖
+  finished/retry/timeout/unhealthy skip。
+- **验收线**：scheduler-backed audit/parallel/pipeline/eval-run 路径有结构化 event；
+  plugin eval-run 和 audit 自动继承事件；`telemetry.json` 能派生 runner failure rate
+  和 audit round/finding 计数；隐私脚本仍为 0 unclassified hits。
+
+## ⑩ Host 合议 goal → 派 coding agent 长跑 → 回收 → 亲验 闭环 playbook（远期，待派工底座）
+
+- **是什么**：把「host 合议形成 goal 文档 → 派一个 coding agent（如 codex）长时间自驱实现整个 goal → 完成后回收 → host 亲验」这个多轮闭环，沉淀成 host-agent **playbook**（不是 CLI、不是硬路由）。实测中它把长任务自动化推到很高程度。
+- **定位**：先 playbook 后 CLI。闭环目前才跑 3-4 轮且流程仍在演进（异构审计、dogfooding、撞车警示、授权口径都是边跑边加），合同未沉淀，现在落 CLI 违背 harness-first。
+- **阻塞依赖（为何现在不做）**：
+  - 当前可用形态「tmux 开交互窗口发 /goal 让 agent 多轮自驱」依赖 **host 侧 tmux-autopilot skill（不在本 repo）**。写进开源 playbook = 让 stranger 依赖私有工具，违反交付契约。
+  - 本 repo 的 `scripts/delegate/`（headless `codex exec`）是**一发一收**，跑不了「派一个大 goal 让 agent 自驱几小时」——任务粒度不匹配。
+- **触发条件（满足才动手）**：派工底座就位之一——① tmux-autopilot rust 化或被 LTO 吸收为 repo 内能力；或 ② LTO 自建「常驻交互式 runner」（能驱动多轮长任务，比现有 headless runner 重）。
+- **硬约束（写 playbook 时必须保留）**：**host 亲验是硬停止点，不可自动跳过**。实测每轮 coding agent 报「全绿完成」host 亲验都揪出真 bug。能自动化的是派工+回收+记录，不能自动化的是亲验判真假；hook 回来即当完成 = 自动放过 bug。
 
 > 维护：项落地后更新本表「状态」列并在 `CHANGELOG.md` 记一笔；新 deferred 入此表，勿散落记忆。

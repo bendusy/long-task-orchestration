@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Observability O2 event wiring
+
+- Expanded the Rust event writer from the Phase 1 type list to a
+  `KNOWN_EVENT_TYPES` registry covering runner retry/healthcheck, audit,
+  gate, budget, sandbox, judge, and decision events while keeping production
+  writes typo-guarded and reads tolerant of future event types.
+- Added caller-side event wiring for scheduler-backed audit/run/plugin jobs,
+  closeout/check gates, budget checks, autopilot sandbox refusals, and
+  plugin eval-run judge outcomes. The scheduler remains a generic executor;
+  callers emit runner events from `AgentResult` while they still have run_id
+  context.
+- Extended telemetry with runner failure-rate rollups and audit
+  dispatch/finding/round metrics.
+
 ## v0.5.0 — 2026-06-16
 
 ### Python fallback retirement
