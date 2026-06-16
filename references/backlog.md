@@ -126,8 +126,22 @@
   - **agy.sh**：本就拒绝 read-only job（无 read-only 档），不在 audit/judge 派工路径上，忽略 lean。
   - 单元测试 `audit_dispatch::jobs_use_scheduler_contract_and_readonly_intent_policy` 断言两 job 都带 `LTO_LEAN_CONTEXT=1`；开发派工（autopilot worker / ops.rs）**不设**（写码可能需 skill 上下文）。
   - 关键判断：lean context（省 token）与 read-only（权限）**正交**——审计 read-only 时两者都加。
-- **治本（与 tmux runner goal 接上）**：audit 的 runner 调度从 headless 冷启 → 常驻载体:① 走 tmux runner（交互常驻，context 复用）② 或 pi `--mode rpc` / session 复用。tmux runner goal（`2026-06-16-goal-tmux-orchestration-runner.md`）做好后,audit 该能走 tmux 调度而非 headless pi.sh。
+- **治本（2026-06-17 评估结论：不走 tmux，留给 pi RPC 独立 goal）**：评估 audit→tmux 常驻调度后**判定代价高、不强行接**：
+  - audit findings 回收靠 `audit.rs::parse_findings_text` **严格 JSON 解析**（`CRITICAL!!!` 这类脏数据被拒，见测试 audit.rs:187）。需要干净 JSON 文本。
+  - tmux runner 回收的是 `reply_text = summary.capture`（capture-pane **终端文本**，含 TUI/ANSI/提示符）。从中可靠提取严格 JSON 要加脆弱清洗层，远不如 headless `reply.txt` 干净——净负。
+  - **更优治本路径 = pi `--mode rpc`**（JSONL over stdio 持久协议，结构化干净回收 + session 复用，context 只载一次）。这是独立 goal（`pi RPC 常驻 runner`），不塞进 ⑪ 避免摊大。
+  - 治标已拿主要收益（pi 17× / claude 7.5×），治本不阻塞——audit 走常驻调度作为后续 RPC goal 推进。
 - **不破坏**：异构性不变（仍跨族 failover）；只是去掉每次冷启重载的浪费。
 - **撤回的错误方向**：原 ⑪ 写「给 audit 加 runner 优先级绕开 pi」是**治标且方向错**——pi 慢是调度方式（冷启重载）不是 pi 本身,绕开它没解决根因（agy/claude headless 同样冷启）。先修调度效率，不是排序。
+
+## ⑫ 存量 security/并发关切（异构 auditor 挖出，2026-06-17，待 host 决策是否立 goal）
+
+> 来源：⑪ Phase 1 收口跑 `lto audit`（pi+agy 审全 codebase），挖出与本次 diff 无关的**存量**问题。host 亲验抽查后保留「真值得跟」的，过滤掉行号幻觉误报（如 pi 报 audit.rs:102 丢 unknown severity，亲验该行实为提取 file 字段）。**未深核，立 goal 时需专门一轮异构审逐条验 PoC**。
+
+- **events.rs lock 超时 fallback**（pi CRITICAL）：`acquire_events_lock` 5s 超时后无锁 best-effort 写，并发下可能 JSONL 行交错→损坏行被 `read()` 静默跳过。待压测验证可触发性。
+- **redact 双正则不一致**（pi HIGH + agy ReDoS HIGH）：`redact.rs` vs `llm_judge.rs` 两套 SECRET_RE/path 正则，dot_matches_new_line/JWT/path 模式不同，一存疏漏即脱敏绕过。无跨模块一致性测试。建议合一或加一致性 gate。
+- **shell_command 可绕 classify_effect**（pi HIGH）：`merge_review.rs` 的 test_cmd 走 `sh -c`，classify_effect 是正则 denylist 非结构解析，理论可绕（`echo safe && sh -c 'rm -rf .'`）。待 PoC 验证。
+- **RunnerFamily::Unknown 隔离**（agy HIGH）：未知 runtime 归 Unknown 时跨族隔离是否失效，待核。
+- 已知非新问题（不立项）：readonly intent 对 agy 升 workspace-write（pi HIGH）——`runner-readonly-contract.md` 早记录，agy 无 read-only 档，设计如此。
 
 > 维护：项落地后更新本表「状态」列并在 `CHANGELOG.md` 记一笔；新 deferred 入此表，勿散落记忆。
