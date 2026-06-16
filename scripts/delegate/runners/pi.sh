@@ -31,6 +31,15 @@ if [[ "$SANDBOX" == "read-only" ]]; then
   PERM_MECH="tool-allowlist"
 fi
 
+# Lean context (backlog ⑪): LTO sets LTO_LEAN_CONTEXT=1 for one-shot review jobs
+# (audit/judge) that don't need the skill/extension/context-file ecosystem. pi
+# cold-loads ~40k tokens of AGENTS.md/CLAUDE.md/skills/extensions by default;
+# these flags cut that to ~400 tokens (~30x faster). Orthogonal to PERM_ARGV.
+LEAN_ARGV=()
+if [[ "${LTO_LEAN_CONTEXT:-0}" == "1" ]]; then
+  LEAN_ARGV=(--no-skills --no-context-files --no-extensions)
+fi
+
 # pipefail off so the tee in the pipe can't mask pi's rc; PIPESTATUS[0] keeps it.
 # stdout via tee: stored in RAW_FILE (for reply/token parse) AND streamed to this
 # process's stdout so LTO scheduler's Popen captures it into the live log.
@@ -38,6 +47,7 @@ set +o pipefail
 timeout "${TIMEOUT_SEC}s" pi -p --mode json \
   --provider deepseek --model deepseek-v4-pro \
   ${PERM_ARGV[@]+"${PERM_ARGV[@]}"} \
+  ${LEAN_ARGV[@]+"${LEAN_ARGV[@]}"} \
   "$(cat "$PROMPT_FILE")" 2>/dev/null | tee "$RAW_FILE"
 rc=${PIPESTATUS[0]}
 set -o pipefail

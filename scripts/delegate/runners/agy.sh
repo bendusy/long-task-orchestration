@@ -39,6 +39,10 @@ case "$SANDBOX" in
     ;;
 esac
 
+# Lean context (backlog ⑪): LTO_LEAN_CONTEXT serves one-shot read-only review
+# jobs (audit/judge). agy already REFUSES read-only jobs above (no read-only
+# sandbox), so it is never on the audit/judge dispatch path and has no
+# context-only flag anyway → it ignores LTO_LEAN_CONTEXT (graceful degrade).
 # stdout via tee: written to REPLY_FILE AND streamed for live log.
 # PIPESTATUS[0] keeps agy's real rc (not tee's).
 set +o pipefail

@@ -113,13 +113,19 @@
   - T3 把闭环 playbook 写进开源 docs，并在 `lto check --to closed --strict` 加 default-FAIL evidence gate：done task 没有 evidence 时拒绝 closeout。
 - **硬约束（playbook 必须保留）**：**host 亲验是硬停止点，不可自动跳过**。实测每轮 coding agent 报「全绿完成」host 亲验都揪出真 bug。能自动化的是派工+回收+记录，不能自动化的是亲验判真假；hook 回来即当完成 = 自动放过 bug。
 
-## ⑪ runner 调度效率：headless 冷启重载 context（P1，dogfood 实测真根因）
+## ⑪ runner 调度效率：headless 冷启重载 context（✅ 治标已实现 2026-06-17 / 治本评估中）
 
 - **是什么（三层真因，逐层挖到底）**：codex 跑 audit 收口卡 1h33m+，逐层实测排查 pi 慢的真根因：
   1. **模型层（不是根因）**：`--thinking off` 只省 6s（44→38s）——慢不在 deepseek thinking。
   2. **context 层**：`runners/pi.sh` 用 `pi -p` **每次冷启重载约 4 万 token context**（AGENTS.md/CLAUDE.md/skills/extensions）。实测：默认 `pi -p "1+1"` = **44s / 40091 input tokens**；加 `--no-skills --no-context-files --no-extensions` = **1.4s / 395 tokens**（快 30 倍）。
   3. **调度层（最深根因）**：LTO 用最低效调度——每次 `pi -p` headless 一发一收冷启。pi **支持 `--mode rpc`（常驻 RPC）+ session 复用（`--continue`/`--resume`/`--session-id`）**，可「启一次、多次喂 prompt、context 只载一次」，但 LTO 一个都没用。这正是「headless 对第三方 CLI 是弱项」的具体落点。
-- **治标（立刻可做，P1）**：所有 runner.sh 当审计用时加 `--no-skills --no-context-files --no-extensions`（审计是一次性纯评审，不需加载 skill 生态）——pi 从 44s 降到秒级，根本不用「绕开 pi」。read-only 审计仍保留 `--tools read,grep,find,ls`（实测 2.4s / 1388 tokens）。
+- **治标（✅ 已实现 2026-06-17）**：LTO 在构造 audit/judge 的 `AgentJob` 时给 `job.env` 设 `LTO_LEAN_CONTEXT=1`（`audit_dispatch.rs::audit_job` + `llm_judge.rs` judge job；`scheduler.rs::runner_env` clone `job.env` 自动带下去，不改 scheduler）。各 runner.sh 自己翻译成本 CLI 的等价 flag：
+  - **pi.sh**：`--no-skills --no-context-files --no-extensions` —— 实测 `1+1` **54.9s→3.2s（17×）**，reply 仍正确。
+  - **claude.sh**：`--setting-sources ''`（丢 user/project/local settings=skills/memory/CLAUDE.md/hooks）—— 实测 **19097→2539 tokens（7.5×）**；read-only 由 `--permission-mode plan`+`--allowedTools` 兜，丢 settings 不破契约。
+  - **codex.sh**：无安全 context-only flag（`--ignore-user-config` 连 auth 都丢→实测 401；`--ignore-rules` 只跳 AGENTS.md），优雅降级（忽略 lean，正常跑）。
+  - **agy.sh**：本就拒绝 read-only job（无 read-only 档），不在 audit/judge 派工路径上，忽略 lean。
+  - 单元测试 `audit_dispatch::jobs_use_scheduler_contract_and_readonly_intent_policy` 断言两 job 都带 `LTO_LEAN_CONTEXT=1`；开发派工（autopilot worker / ops.rs）**不设**（写码可能需 skill 上下文）。
+  - 关键判断：lean context（省 token）与 read-only（权限）**正交**——审计 read-only 时两者都加。
 - **治本（与 tmux runner goal 接上）**：audit 的 runner 调度从 headless 冷启 → 常驻载体:① 走 tmux runner（交互常驻，context 复用）② 或 pi `--mode rpc` / session 复用。tmux runner goal（`2026-06-16-goal-tmux-orchestration-runner.md`）做好后,audit 该能走 tmux 调度而非 headless pi.sh。
 - **不破坏**：异构性不变（仍跨族 failover）；只是去掉每次冷启重载的浪费。
 - **撤回的错误方向**：原 ⑪ 写「给 audit 加 runner 优先级绕开 pi」是**治标且方向错**——pi 慢是调度方式（冷启重载）不是 pi 本身,绕开它没解决根因（agy/claude headless 同样冷启）。先修调度效率，不是排序。

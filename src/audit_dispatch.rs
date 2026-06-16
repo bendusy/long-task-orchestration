@@ -117,7 +117,11 @@ fn audit_job(runner: &str, brief_path: &Path, host: &str, output_schema: Value) 
         runner: runner.to_string(),
         prompt_is_inline: false,
         model: None,
-        env: BTreeMap::new(),
+        // Audit is a one-shot read-only review — it does not need the runner's
+        // skill/extension/context-file ecosystem. LTO_LEAN_CONTEXT tells each
+        // runner.sh to disable that heavy context load (~40k→~400 tokens on pi,
+        // backlog ⑪). Orthogonal to permission_policy (read-only allowlist).
+        env: BTreeMap::from([("LTO_LEAN_CONTEXT".to_string(), "1".to_string())]),
         permission_policy: readonly_intent_to_policy(runner),
         isolation: "none".to_string(),
         output_schema: Some(output_schema),
@@ -263,6 +267,10 @@ mod tests {
         assert_eq!(jobs[0].permission_policy.sandbox, Sandbox::ReadOnly);
         assert_eq!(jobs[1].permission_policy.sandbox, Sandbox::WorkspaceWrite);
         assert_eq!(jobs[1].parent_pattern, Pattern::Adversarial);
+        // backlog ⑪: audit jobs carry LTO_LEAN_CONTEXT so runner.sh skips the
+        // heavy skill/context cold-load (~40k→~400 tokens on pi).
+        assert_eq!(jobs[0].env.get("LTO_LEAN_CONTEXT").map(String::as_str), Some("1"));
+        assert_eq!(jobs[1].env.get("LTO_LEAN_CONTEXT").map(String::as_str), Some("1"));
     }
 
     fn write_healthcheck(runners: &Path, payload: &str) {

@@ -39,12 +39,23 @@ else
   PERM_ARGV=(--dangerously-skip-permissions)
 fi
 
+# Lean context (backlog ⑪): LTO sets LTO_LEAN_CONTEXT=1 for one-shot review jobs
+# (audit/judge). claude cold-loads ~19k tokens of settings/skills/memory/hooks by
+# default; --setting-sources '' drops user/project/local settings (skills, memory,
+# CLAUDE.md, hooks) → ~2.5k tokens (~7.5x). read-only is enforced by --permission-mode
+# plan + --allowedTools (above), NOT by settings, so dropping settings is safe here.
+LEAN_ARGV=()
+if [[ "${LTO_LEAN_CONTEXT:-0}" == "1" ]]; then
+  LEAN_ARGV=(--setting-sources "")
+fi
+
 # stdout via tee: stored in RAW_FILE (for reply/token parse) AND streamed to
 # this process's stdout so LTO scheduler's Popen captures it into the live log.
 # PIPESTATUS[0] keeps claude's real rc (not tee's).
 set +o pipefail
 timeout "${TIMEOUT_SEC}s" claude -p --output-format json \
   ${PERM_ARGV[@]+"${PERM_ARGV[@]}"} \
+  ${LEAN_ARGV[@]+"${LEAN_ARGV[@]}"} \
   "$(cat "$PROMPT_FILE")" 2>/dev/null | tee "$RAW_FILE"
 rc=${PIPESTATUS[0]}
 set -o pipefail

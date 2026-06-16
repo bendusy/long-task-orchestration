@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Lean context for one-shot review dispatch (backlog ⑪)
+
+- Audit and judge jobs now set `LTO_LEAN_CONTEXT=1` on the dispatched job env.
+  Review work is one-shot and does not need the runner's skill/extension/context
+  ecosystem, so each `runner.sh` translates the flag into its CLI's equivalent:
+  pi gets `--no-skills --no-context-files --no-extensions` (~17x faster on a
+  trivial prompt), claude gets `--setting-sources ''` (~7.5x fewer input
+  tokens). codex and agy have no safe context-only flag and degrade gracefully.
+- The flag is orthogonal to the read-only permission allowlist; read-only audit
+  jobs apply both. Development dispatch (autopilot workers) does not set it.
+
 ## v0.5.0 — 2026-06-16
 
 ### Host verification tmux loop playbook

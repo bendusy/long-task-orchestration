@@ -49,6 +49,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Lean context (backlog ⑪): LTO sets LTO_LEAN_CONTEXT=1 for one-shot review jobs.
+# codex has NO safe context-only flag: --ignore-user-config also drops the user's
+# API-key/auth config (probed → 401 Unauthorized), and --ignore-rules only skips
+# AGENTS.md, not the bulk of the cold load. So codex gracefully degrades: it
+# ignores LTO_LEAN_CONTEXT and runs normally (still heterogeneous, still works,
+# just no token saving). Revisit if codex adds a context-only flag.
 args=(exec --skip-git-repo-check -C "$CODEX_WORKDIR" -s "$CODEX_SANDBOX")
 
 if [[ -n "${CODEX_MODEL:-}" ]]; then

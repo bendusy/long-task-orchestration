@@ -207,7 +207,10 @@ pub fn plan_judge_dispatch(
             runner: chosen,
             prompt_is_inline: true,
             model: None,
-            env: BTreeMap::new(),
+            // Judge is a one-shot read-only review — skip the runner's heavy
+            // skill/extension/context-file load (backlog ⑪). Orthogonal to
+            // permission_policy.
+            env: BTreeMap::from([("LTO_LEAN_CONTEXT".to_string(), "1".to_string())]),
             permission_policy,
             isolation: "none".to_string(),
             output_schema: Some(judge_output_schema()),
