@@ -60,6 +60,18 @@ $L closeout --summary "登录重构完成，空指针已修，异构审计已收
 
 > 想看全部 21 个可见业务命令和参数摘要，先看 **[COMMANDS.md](./COMMANDS.md)**；`lto-rs --help` 会额外显示 clap 内置 `help`，所以 help 行数是 22。想看先后关系、autopilot 自动化怎么用，去 **[onboarding.md](./references/onboarding.md)**，那是给 agent 读的完整手册。
 
+## v0.5.0 新增（2026-06-16）
+
+这一版的主题是 **Rust 全量接管 + repo 自带 tmux 派工底座**——LTO 不再依赖任何第三方工具就能把长任务派给 tmux 里的 coding agent，回收后由 host 亲验收口：
+
+- **Python fallback 退役**：删掉旧的 Python fallback 包与入口脚本，`lto` wrapper 只跑 `lto-rs`。原先的 Python 开关现在给出明确移除提示而非静默回退；历史 `.lto` state 兼容由 Rust fixture 测试保留。
+- **repo-owned tmux runner**：`lto runner --tmux-mode signal|sentinel|fire --target <pane>` 用直连 tmux 子进程派工，带 send-keys 前置安全检查、ready/skip 提示匹配、capture-pane 回收。不依赖第三方 tmux-autopilot。
+- **tmux 后端的 autopilot worker**：`lto autopilot --auto-exec --worker-runner tmux` 每个待办任务派一个有界 worker，按 `*.worker.json` 完成契约的 rc 更新任务状态，而非凭 pane 停了就算成功。
+- **O2 可观测事件接线**：runner 重试/healthcheck、audit、gate、budget、sandbox、judge、decision 的关键时刻都写进 `events.jsonl`；telemetry 多答「哪个 runner 失败率高/audit 收敛几轮」。
+- **host 亲验硬停止点**：新增 `tmux-goal-loop` playbook 与 `lto check --to closed --strict` 的 done-evidence 闸门(done 任务无证据直接拦 closeout)。
+
+完整技术条目见 [CHANGELOG.md](./CHANGELOG.md)。
+
 ## v0.3.0 新增（2026-06-09）
 
 这一版的主题是让 LTO **越用越聪明**——但聪明的是你这个主 agent，不是 LTO。它只机械摆数据，判断永远归你：
