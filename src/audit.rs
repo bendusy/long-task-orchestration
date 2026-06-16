@@ -123,8 +123,9 @@ pub fn parse_findings_values(items: &[Value]) -> Option<Vec<Finding>> {
     Some(findings)
 }
 
-static FENCE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)```json\s*(.*?)\s*```").unwrap());
+static FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)```json\s*(.*?)\s*```").expect("invalid audit JSON fence regex")
+});
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

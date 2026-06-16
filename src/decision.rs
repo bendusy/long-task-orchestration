@@ -464,7 +464,7 @@ pub fn direction_convergence_instruction(pool: &CandidatePool) -> String {
 }
 
 static JSON_FENCE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)```json\s*(.*?)\s*```").unwrap());
+    LazyLock::new(|| Regex::new(r"(?s)```json\s*(.*?)\s*```").expect("invalid JSON fence regex"));
 
 pub fn tally_votes(votes: &[DirectionVote], valid_task_ids: Option<&BTreeSet<String>>) -> Tally {
     let mut invalid_votes = Vec::new();

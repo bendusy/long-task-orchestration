@@ -78,7 +78,7 @@ static DANGEROUS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"^\s*\.\s+\S",
     ]
     .into_iter()
-    .map(|pattern| Regex::new(pattern).unwrap())
+    .map(|pattern| Regex::new(pattern).expect("invalid dangerous effect regex"))
     .collect()
 });
 
@@ -93,14 +93,14 @@ static ESCAPE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"\bln\s+-s\b",
     ]
     .into_iter()
-    .map(|pattern| Regex::new(pattern).unwrap())
+    .map(|pattern| Regex::new(pattern).expect("invalid escape effect regex"))
     .collect()
 });
 
 static NETWORK: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [r"\bcurl\b", r"\bwget\b", r"\bnc\b", r"\bssh\b", r"\bscp\b"]
         .into_iter()
-        .map(|pattern| Regex::new(pattern).unwrap())
+        .map(|pattern| Regex::new(pattern).expect("invalid network effect regex"))
         .collect()
 });
 

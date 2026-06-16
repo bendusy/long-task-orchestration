@@ -39,7 +39,7 @@ pub const COMMANDS: &[&str] = &[
 ];
 
 #[derive(Debug, Parser)]
-#[command(name = "lto-rs", about = "LTO Rust v2 core")]
+#[command(name = "lto-rs", version, about = "LTO Rust v2 core")]
 pub struct Args {
     #[arg(long, default_value = ".")]
     repo: PathBuf,
@@ -1039,6 +1039,14 @@ mod tests {
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
         assert_eq!(COMMANDS.len(), 24);
+    }
+
+    #[test]
+    fn clap_version_matches_package_version() {
+        assert_eq!(
+            Args::command().get_version(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
     }
 
     #[test]

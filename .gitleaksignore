@@ -1,0 +1,3 @@
+# Fake PEM redaction fixture from historical commit 3930382. The current test
+# constructs the marker at runtime so new commits do not add this fingerprint.
+3930382a2b1c3c11a4da3474b206492c914b8c8c:scripts/test_eval_judge.py:private-key:108

@@ -23,18 +23,19 @@ static SECRET_RE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .dot_matches_new_line(true)
     .build()
-    .unwrap()
+    .expect("invalid judge secret redaction regex")
 });
 
 static FULL_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?:\\?/|/)(?:Users|home)(?:\\?/|/)[^\s"'`,;:)\]}]+|/root/[^\s"'`,;:)\]}]+|[A-Za-z]:\\Users\\[^\s"'`,;:)\]}]+"#,
     )
-    .unwrap()
+    .expect("invalid judge private path redaction regex")
 });
 
-static FENCE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)```json\s*(.*?)\s*```").unwrap());
+static FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)```json\s*(.*?)\s*```").expect("invalid judge JSON fence regex")
+});
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrozenEvidence {

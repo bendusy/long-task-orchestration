@@ -662,11 +662,14 @@ fn validate_plugin_tree(root: &Path, errors: &mut Vec<String>) {
 }
 
 static ID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9._-]{1,80}$").unwrap());
-static VERSION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?$").unwrap());
-static ENV_KEY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Z][A-Z0-9_]{0,63}$").unwrap());
+    LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9._-]{1,80}$").expect("invalid plugin id regex"));
+static VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?$")
+        .expect("invalid plugin version regex")
+});
+static ENV_KEY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Z][A-Z0-9_]{0,63}$").expect("invalid plugin environment key regex")
+});
 const HOST_ENV_ALLOWLIST: &[&str] = &["CODEX_MODEL", "CODEX_PROFILE", "CODEX_JSON", "CODEX_IMAGES"];
 const ALLOWED_SANDBOX: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 const KNOWN_FAMILIES: &[&str] = &["openai", "anthropic", "google", "deepseek", "meta"];

@@ -25,6 +25,21 @@ def contains_any(text: str, needles: list[str]) -> list[str]:
     return [needle for needle in needles if needle in text]
 
 
+def cargo_package_version(cargo_toml: str) -> str | None:
+    in_package = False
+    for raw in cargo_toml.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_package = line == "[package]"
+            continue
+        if in_package and line.startswith("version"):
+            _, _, value = line.partition("=")
+            return value.strip().strip('"')
+    return None
+
+
 def main() -> int:
     errors: list[str] = []
 
@@ -51,8 +66,11 @@ def main() -> int:
     rust_release = read("references/rust-migration-release.md")
     oss_req = read("references/open-source-delivery-requirements.md")
     release_workflow = read(".github/workflows/rust-v2.yml")
+    version = read("VERSION").strip()
+    cargo_version = cargo_package_version(read("Cargo.toml"))
 
     check("references/open-source-delivery-requirements.md" in readme, "README links open-source delivery requirements", errors)
+    check(cargo_version == version, f"Cargo.toml package version matches VERSION ({cargo_version!r} vs {version!r})", errors)
     check("二进制下载是 release-gated" in readme, "README gates binary downloads on release assets", errors)
     check("Rust 二进制安装是 release-gated" in install, "INSTALL gates binary installs on release assets", errors)
     check("Binary installation is release-gated" in rust_release, "release doc gates binary availability on live assets", errors)

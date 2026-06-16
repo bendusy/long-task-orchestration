@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## v0.4.3 — 2026-06-16
+
+### Binary identity and release verification
+
+- Exposed `lto-rs --version` through clap and aligned the Rust crate version
+  with the release version, so downloaded binaries can prove their release
+  identity without relying on filenames.
+- Added a docs consistency gate that fails when `Cargo.toml` package version and
+  `VERSION` drift apart.
+- Replaced production LazyLock regex `unwrap()` calls with contextual
+  `expect(...)` messages so future regex edits fail with a useful location.
+- Re-ran release privacy verification with the real `gitleaks` scanner instead
+  of the regex-only `--no-gitleaks` fallback.
+
 ## v0.4.2 — 2026-06-16
 
 ### Release package checksum verification

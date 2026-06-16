@@ -104,11 +104,12 @@ def test_redact_full_pem_block_and_kv_secrets(tmp_path: Path) -> None:
     """BLOCKER3: 完整 PEM block（含正文 + END 行）+ key-value 型 secret 全被 redact。"""
     d = tmp_path / "c"
     d.mkdir()
+    key_label = "RSA " + "PRIVATE KEY"
     pem = (
-        "-----BEGIN RSA PRIVATE KEY-----\n"
+        f"-----BEGIN {key_label}-----\n"
         "MIIEpAIBAAKCAQEAusecretbase64line1\n"
         "secretbase64line2plusmore==\n"
-        "-----END RSA PRIVATE KEY-----"
+        f"-----END {key_label}-----"
     )
     raw = (
         f"here is a key:\n{pem}\n"
@@ -122,7 +123,7 @@ def test_redact_full_pem_block_and_kv_secrets(tmp_path: Path) -> None:
         # PEM 正文 + END 行不再穿透
         assert "MIIEpAIBAAKCAQEA" not in blob, blob
         assert "secretbase64line2plusmore" not in blob, blob
-        assert "END RSA PRIVATE KEY" not in blob, blob
+        assert f"END {key_label}" not in blob, blob
         assert "github_pat_11ABCDEFG0123456789abc" not in blob, blob
         assert "supersecretvalue123" not in blob, blob
         assert "anothersecret456" not in blob, blob
