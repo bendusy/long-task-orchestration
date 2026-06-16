@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 — 2026-06-16
 
 ### Host verification tmux loop playbook
 
@@ -46,8 +46,6 @@
   context.
 - Extended telemetry with runner failure-rate rollups and audit
   dispatch/finding/round metrics.
-
-## v0.5.0 — 2026-06-16
 
 ### Python fallback retirement
 
