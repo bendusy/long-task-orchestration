@@ -17,6 +17,7 @@
 | ⑤ | `AgentJobKind.TOURNAMENT` / `LOOP` 枚举 | ☆ 低 | **P3 不做** | YAGNI | 无真实触发场景，保持占位 |
 | ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
 | ⑨ | Scheduler runner lifecycle events / O2 caller-side wiring | ★★ 高 | P1 | ✅ 已实现 | O2 采纳 Option A：调用方 emit runner started/finished/retry/healthcheck，`scheduler.rs` 保持无 run_id / 无事件 I/O |
+| ⑩ | Host 合议 goal → tmux 短会话 loop → 异构审计 → 亲验闭环 playbook | ★★ 高 | P1 | ✅ 已实现 | T1/T2 Rust tmux 派工底座落地；playbook 进 `workflow-playbook.md`；closed check 默认拒绝无 evidence 的 done task |
 
 ## 依赖链
 
@@ -102,15 +103,15 @@
   plugin eval-run 和 audit 自动继承事件；`telemetry.json` 能派生 runner failure rate
   和 audit round/finding 计数；隐私脚本仍为 0 unclassified hits。
 
-## ⑩ Host 合议 goal → 派 coding agent 长跑 → 回收 → 亲验 闭环 playbook（远期，待派工底座）
+## ⑩ Host 合议 goal → 派 coding agent 长跑 → 回收 → 亲验 闭环 playbook（✅ 已实现，Rust tmux 底座落地）
 
 - **是什么**：把「host 合议形成 goal 文档 → 派一个 coding agent（如 codex）长时间自驱实现整个 goal → 完成后回收 → host 亲验」这个多轮闭环，沉淀成 host-agent **playbook**（不是 CLI、不是硬路由）。实测中它把长任务自动化推到很高程度。
-- **定位**：先 playbook 后 CLI。闭环目前才跑 3-4 轮且流程仍在演进（异构审计、dogfooding、撞车警示、授权口径都是边跑边加），合同未沉淀，现在落 CLI 违背 harness-first。
-- **阻塞依赖（为何现在不做）**：
-  - 当前可用形态「tmux 开交互窗口发 /goal 让 agent 多轮自驱」依赖 **host 侧 tmux-autopilot skill（不在本 repo）**。写进开源 playbook = 让 stranger 依赖私有工具，违反交付契约。
-  - 本 repo 的 `scripts/delegate/`（headless `codex exec`）是**一发一收**，跑不了「派一个大 goal 让 agent 自驱几小时」——任务粒度不匹配。
-- **触发条件（满足才动手）**：派工底座就位之一——① tmux-autopilot rust 化或被 LTO 吸收为 repo 内能力；或 ② LTO 自建「常驻交互式 runner」（能驱动多轮长任务，比现有 headless runner 重）。
-- **硬约束（写 playbook 时必须保留）**：**host 亲验是硬停止点，不可自动跳过**。实测每轮 coding agent 报「全绿完成」host 亲验都揪出真 bug。能自动化的是派工+回收+记录，不能自动化的是亲验判真假；hook 回来即当完成 = 自动放过 bug。
+- **定位**：先 playbook 后 CLI。已落在 `references/workflow-playbook.md` 的 `tmux-goal-loop`；仍不新增 `orchestrate` 命令，避免 harness 替 host agent 做语义判断。
+- **已解除的阻塞依赖（2026-06-16 Rust 落地）**：
+  - T1 把 tmux 派工能力吸收为 repo 内 Rust `runner: "tmux"`，直接调用 `Command::new("tmux")`，不依赖私有 `tmux-autopilot` skill。
+  - T2 扩 `lto autopilot --worker-runner tmux`，用短会话 worker + completion contract 推进 `state.tasks`，不是让单 agent 啃完整大 goal。
+  - T3 把闭环 playbook 写进开源 docs，并在 `lto check --to closed --strict` 加 default-FAIL evidence gate：done task 没有 evidence 时拒绝 closeout。
+- **硬约束（playbook 必须保留）**：**host 亲验是硬停止点，不可自动跳过**。实测每轮 coding agent 报「全绿完成」host 亲验都揪出真 bug。能自动化的是派工+回收+记录，不能自动化的是亲验判真假；hook 回来即当完成 = 自动放过 bug。
 
 ## ⑪ runner 调度效率：headless 冷启重载 context（P1，dogfood 实测真根因）
 

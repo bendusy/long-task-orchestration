@@ -648,6 +648,25 @@ fn phase_report(
                     format!("{} open unverified risk point(s)", open_risks.len())
                 },
             );
+            let done_without_evidence = done_tasks_without_evidence(state);
+            add_phase_check(
+                &mut checks,
+                "done_tasks_have_evidence",
+                if done_without_evidence.is_empty() {
+                    "ok"
+                } else {
+                    "missing"
+                },
+                true,
+                if done_without_evidence.is_empty() {
+                    "all done tasks carry evidence".to_string()
+                } else {
+                    format!(
+                        "done task(s) missing evidence: {}",
+                        done_without_evidence.join(", ")
+                    )
+                },
+            );
             add_ledger_phase_check(&mut checks, run_dir, ledger_status, true);
             let handoff = run_dir.join("handoff.md");
             add_phase_check(
@@ -860,6 +879,24 @@ fn open_unverified_risks(state: &crate::state::LtoState) -> Vec<Value> {
         .iter()
         .filter(|risk| util::risk_is_open_unverified(risk))
         .cloned()
+        .collect()
+}
+
+fn done_tasks_without_evidence(state: &crate::state::LtoState) -> Vec<String> {
+    util::json_array(&state.tasks)
+        .iter()
+        .filter(|task| task.get("status").and_then(Value::as_str) == Some("done"))
+        .filter(|task| {
+            task.get("evidence")
+                .and_then(Value::as_array)
+                .is_none_or(|items| items.is_empty())
+        })
+        .map(|task| {
+            task.get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string()
+        })
         .collect()
 }
 
@@ -3861,7 +3898,11 @@ mod tests {
         let mut state = base_state();
         state.current_phase = "closed".to_string();
         state.workspace.head = util::git_status(&h.repo).head;
-        state.tasks = json!([{"id": "T1", "status": "done"}]);
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "done",
+            "evidence": [{"kind": "manual", "summary": "host verified", "rc": 0}]
+        }]);
         state.gates = json!({});
         state.risk_points = json!([]);
         h.write_state(state);
@@ -3877,6 +3918,33 @@ mod tests {
             },
         );
         assert_eq!(outcome.errors, Vec::<String>::new());
+    }
+
+    #[test]
+    fn collect_check_rejects_closed_done_task_without_evidence() {
+        let h = Harness::new();
+        h.init_git();
+        let mut state = base_state();
+        state.current_phase = "closed".to_string();
+        state.workspace.head = util::git_status(&h.repo).head;
+        state.tasks = json!([{"id": "T1", "status": "done"}]);
+        state.gates = json!({});
+        state.risk_points = json!([]);
+        h.write_state(state);
+        fs::write(h.repo.join(".lto").join("r1").join("handoff.md"), "done\n").unwrap();
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("r1".into()),
+                strict: true,
+                to_phase: Some("closed".into()),
+                json: true,
+            },
+        );
+        let joined = outcome.errors.join("\n");
+        assert!(joined.contains("done_tasks_have_evidence"));
+        assert!(joined.contains("T1"));
     }
 
     #[test]

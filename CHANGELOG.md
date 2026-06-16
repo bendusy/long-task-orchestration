@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Host verification tmux loop playbook
+
+- Added the open-source `tmux-goal-loop` playbook for host-consensus goals:
+  repo-owned tmux short-session workers, heterogeneous audit, and an explicit
+  host verification hard stop before closeout.
+- Marked backlog item ⑩ as Rust-landed after T1/T2 supplied the repo-owned
+  tmux dispatch substrate, and documented that no private `tmux-autopilot`
+  skill is required.
+- Hardened `lto check --to closed --strict` with a default-fail evidence gate:
+  a `done` task without task evidence now blocks closeout.
+
 ### Tmux-backed autopilot workers
 
 - Extended `lto autopilot --auto-exec` with a `--worker-runner`
