@@ -19,6 +19,7 @@ pub mod runner_events;
 pub mod scheduler;
 pub mod state;
 pub mod telemetry;
+pub mod tmux_runner;
 pub mod worktree;
 
 pub use agent_job::{AgentJob, AgentResult, JobStatus, PermissionPolicy, Sandbox};

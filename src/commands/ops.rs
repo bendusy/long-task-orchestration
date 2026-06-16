@@ -61,6 +61,17 @@ pub struct RunnerOptions {
     pub prompt_file: Option<PathBuf>,
     pub job_file: Option<PathBuf>,
     pub job_id: Option<String>,
+    pub tmux_target: Option<String>,
+    pub tmux_mode: Option<String>,
+    pub tmux_sentinel: Option<PathBuf>,
+    pub tmux_session: Option<String>,
+    pub tmux_new_window: bool,
+    pub tmux_new_session: bool,
+    pub tmux_window_name: Option<String>,
+    pub tmux_ready_patterns: Vec<String>,
+    pub tmux_skip_prompts: Vec<String>,
+    pub tmux_ready_timeout_sec: Option<u64>,
+    pub tmux_bin: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -902,13 +913,24 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
-    if options.prompt.is_some() || options.prompt_file.is_some() {
+    let command_as_tmux_prompt =
+        options.runner == "tmux" && options.command.is_some() && options.task_id.is_none();
+    if options.prompt.is_some() || options.prompt_file.is_some() || command_as_tmux_prompt {
         let run_id = util::resolve_run_id(repo, options.run_id.as_deref())
             .unwrap_or_else(|_| "rust-runner".to_string());
+        let inline_prompt = options.prompt.clone().or_else(|| {
+            if command_as_tmux_prompt {
+                options.command.clone()
+            } else {
+                None
+            }
+        });
         let job = AgentJob {
-            job_id: options.job_id.unwrap_or_else(|| "runner-1".to_string()),
-            prompt_ref: options
-                .prompt
+            job_id: options
+                .job_id
+                .clone()
+                .unwrap_or_else(|| "runner-1".to_string()),
+            prompt_ref: inline_prompt
                 .clone()
                 .or_else(|| {
                     options
@@ -918,7 +940,7 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
                 })
                 .unwrap_or_default(),
             runner: options.runner.clone(),
-            prompt_is_inline: options.prompt.is_some(),
+            prompt_is_inline: inline_prompt.is_some(),
             model: None,
             env: BTreeMap::new(),
             permission_policy: readonly_intent_to_policy(&options.runner),
@@ -936,7 +958,7 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
             size: TaskSize::Small,
             test_cmd: None,
             needs_worktree: false,
-            meta: BTreeMap::from([("run_id".to_string(), json!(run_id))]),
+            meta: runner_job_meta(&options, &run_id),
         };
         let jobs = vec![job];
         crate::event_emit::emit_runner_started_jobs(
@@ -1627,6 +1649,56 @@ fn common_job_run_id(jobs: &[AgentJob]) -> Option<String> {
         run_id = Some(candidate.to_string());
     }
     run_id
+}
+
+fn runner_job_meta(options: &RunnerOptions, run_id: &str) -> BTreeMap<String, Value> {
+    let mut meta = BTreeMap::from([("run_id".to_string(), json!(run_id))]);
+    if options.runner != "tmux" {
+        return meta;
+    }
+    if let Some(value) = &options.tmux_target {
+        meta.insert("tmux_target".to_string(), json!(value));
+    }
+    if let Some(value) = &options.tmux_mode {
+        meta.insert("tmux_mode".to_string(), json!(value));
+    }
+    if let Some(value) = &options.tmux_sentinel {
+        meta.insert(
+            "tmux_sentinel".to_string(),
+            json!(value.display().to_string()),
+        );
+    }
+    if let Some(value) = &options.tmux_session {
+        meta.insert("tmux_session".to_string(), json!(value));
+    }
+    if options.tmux_new_window {
+        meta.insert("tmux_new_window".to_string(), json!(true));
+    }
+    if options.tmux_new_session {
+        meta.insert("tmux_new_session".to_string(), json!(true));
+    }
+    if let Some(value) = &options.tmux_window_name {
+        meta.insert("tmux_window_name".to_string(), json!(value));
+    }
+    if !options.tmux_ready_patterns.is_empty() {
+        meta.insert(
+            "tmux_ready_patterns".to_string(),
+            json!(options.tmux_ready_patterns),
+        );
+    }
+    if !options.tmux_skip_prompts.is_empty() {
+        meta.insert(
+            "tmux_skip_prompts".to_string(),
+            json!(options.tmux_skip_prompts),
+        );
+    }
+    if let Some(value) = options.tmux_ready_timeout_sec {
+        meta.insert("tmux_ready_timeout_sec".to_string(), json!(value));
+    }
+    if let Some(value) = &options.tmux_bin {
+        meta.insert("tmux_bin".to_string(), json!(value));
+    }
+    meta
 }
 
 fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
@@ -2784,6 +2856,17 @@ fn run_many_task_commands(repo: &Path, options: ParallelOptions) -> anyhow::Resu
             prompt_file: None,
             job_file: None,
             job_id: None,
+            tmux_target: None,
+            tmux_mode: None,
+            tmux_sentinel: None,
+            tmux_session: None,
+            tmux_new_window: false,
+            tmux_new_session: false,
+            tmux_window_name: None,
+            tmux_ready_patterns: Vec::new(),
+            tmux_skip_prompts: Vec::new(),
+            tmux_ready_timeout_sec: None,
+            tmux_bin: None,
         };
         match run_task_command(repo, runner_options) {
             Ok(()) => {
@@ -2844,6 +2927,17 @@ fn run_pipeline_task_commands(repo: &Path, options: PipelineOptions) -> anyhow::
                 prompt_file: None,
                 job_file: None,
                 job_id: None,
+                tmux_target: None,
+                tmux_mode: None,
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: None,
+                tmux_bin: None,
             };
             if run_task_command(repo, runner_options).is_ok() {
                 passed += 1;
@@ -3563,6 +3657,17 @@ mod tests {
                     prompt_file: None,
                     job_file: None,
                     job_id: None,
+                    tmux_target: None,
+                    tmux_mode: None,
+                    tmux_sentinel: None,
+                    tmux_session: None,
+                    tmux_new_window: false,
+                    tmux_new_session: false,
+                    tmux_window_name: None,
+                    tmux_ready_patterns: Vec::new(),
+                    tmux_skip_prompts: Vec::new(),
+                    tmux_ready_timeout_sec: None,
+                    tmux_bin: None,
                 },
             )
             .unwrap_err();
@@ -3608,6 +3713,17 @@ mod tests {
                 prompt_file: None,
                 job_file: None,
                 job_id: None,
+                tmux_target: None,
+                tmux_mode: None,
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: None,
+                tmux_bin: None,
             },
         )
         .unwrap();
@@ -3620,6 +3736,96 @@ mod tests {
             task["resolved_blockers"][0]["resolved_by"],
             "runner_success"
         );
+    }
+
+    #[test]
+    fn cmd_runner_tmux_command_uses_scheduler_path_and_emits_events() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        write_ok_healthcheck(&h.repo);
+        let fake_tmux = write_fake_tmux(&h.repo);
+
+        cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                run_id: Some("r1".into()),
+                task_id: None,
+                kind: "manual".into(),
+                command: Some("echo tmux-ok".into()),
+                cwd: None,
+                timeout: 5,
+                touch: Vec::new(),
+                note: None,
+                status_on_fail: "blocked".into(),
+                runner: "tmux".into(),
+                prompt: None,
+                prompt_file: None,
+                job_file: None,
+                job_id: Some("tmux-smoke".into()),
+                tmux_target: Some("sess:1.0".into()),
+                tmux_mode: Some("signal".into()),
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: Some(5),
+                tmux_bin: Some(fake_tmux.display().to_string()),
+            },
+        )
+        .unwrap();
+
+        let events =
+            fs::read_to_string(h.repo.join(".lto").join("r1").join("events.jsonl")).unwrap();
+        let event_rows = events
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(event_rows.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("runner.started")
+                && event
+                    .get("actor")
+                    .and_then(|actor| actor.get("id"))
+                    .and_then(Value::as_str)
+                    == Some("tmux")
+        }));
+        assert!(event_rows.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("runner.finished")
+                && event
+                    .get("actor")
+                    .and_then(|actor| actor.get("id"))
+                    .and_then(Value::as_str)
+                    == Some("tmux")
+        }));
+        let tmux_log = fs::read_to_string(h.repo.join("tmux-log.jsonl")).unwrap();
+        assert!(tmux_log.contains("[\"load-buffer\""));
+        assert!(tmux_log.contains("[\"paste-buffer\""));
+        assert!(tmux_log.contains("[\"wait-for\""));
+    }
+
+    fn write_ok_healthcheck(repo: &Path) {
+        let runners = repo.join("scripts").join("delegate").join("runners");
+        fs::create_dir_all(&runners).unwrap();
+        let script = runners.join("healthcheck.sh");
+        fs::write(
+            &script,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+shift
+printf '['
+first=1
+for runner in "$@"; do
+  if [ "$first" -eq 0 ]; then printf ','; fi
+  first=0
+  printf '{"agent":"%s","verdict":"OK"}' "$runner"
+done
+printf ']'
+"#,
+        )
+        .unwrap();
+        make_executable(&script);
     }
 
     #[test]
@@ -3799,6 +4005,17 @@ mod tests {
                 prompt_file: None,
                 job_file: None,
                 job_id: None,
+                tmux_target: None,
+                tmux_mode: None,
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: None,
+                tmux_bin: None,
             },
         )
         .unwrap();
@@ -3828,6 +4045,17 @@ mod tests {
                 prompt_file: None,
                 job_file: None,
                 job_id: None,
+                tmux_target: None,
+                tmux_mode: None,
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: None,
+                tmux_bin: None,
             },
         )
         .unwrap_err();
@@ -3899,6 +4127,38 @@ printf ']'
             util::KNOWN_RUNNERS.len() + 2
         );
     }
+
+    fn write_fake_tmux(repo: &Path) -> PathBuf {
+        let bin = repo.join("fake-tmux");
+        let log = repo.join("tmux-log.jsonl");
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import json, pathlib, sys
+log = pathlib.Path(r'''{log}''')
+args = sys.argv[1:]
+with log.open("a") as f:
+    f.write(json.dumps(args) + "\n")
+if args and args[0] == "capture-pane":
+    print("tmux capture ok")
+sys.exit(0)
+"#,
+            log = log.display(),
+        );
+        fs::write(&bin, script).unwrap();
+        make_executable(&bin);
+        bin
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) {}
 
     fn git(repo: &Path, args: &[&str]) {
         let out = Command::new("git")

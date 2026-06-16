@@ -111,7 +111,7 @@ pub enum Commands {
         record: bool,
     },
     #[command(about = "Run or dispatch one scheduler-backed task")]
-    Runner(RunnerCommand),
+    Runner(Box<RunnerCommand>),
     #[command(about = "Record or run an evidence-based judgment")]
     Judge(JudgeCommand),
     #[command(about = "Run an opt-in boundary hook")]
@@ -337,6 +337,28 @@ pub struct RunnerCommand {
     job_file: Option<PathBuf>,
     #[arg(long)]
     job_id: Option<String>,
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long = "tmux-mode", value_parser = ["signal", "sentinel", "fire"])]
+    tmux_mode: Option<String>,
+    #[arg(long)]
+    sentinel: Option<PathBuf>,
+    #[arg(long = "tmux-session")]
+    tmux_session: Option<String>,
+    #[arg(long = "new-window")]
+    new_window: bool,
+    #[arg(long = "new-session")]
+    new_session: bool,
+    #[arg(long = "window-name")]
+    window_name: Option<String>,
+    #[arg(long = "ready-pattern")]
+    ready_pattern: Vec<String>,
+    #[arg(long = "skip-prompt")]
+    skip_prompt: Vec<String>,
+    #[arg(long = "ready-timeout")]
+    ready_timeout: Option<u64>,
+    #[arg(long = "tmux-bin")]
+    tmux_bin: Option<String>,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -855,6 +877,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             ops::cmd_preflight(&args.repo, ops::PreflightOptions { run_id, record })?;
         }
         Commands::Runner(cmd) => {
+            let cmd = *cmd;
             ops::cmd_runner(
                 &args.repo,
                 ops::RunnerOptions {
@@ -872,6 +895,17 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     prompt_file: cmd.prompt_file,
                     job_file: cmd.job_file,
                     job_id: cmd.job_id,
+                    tmux_target: cmd.target,
+                    tmux_mode: cmd.tmux_mode,
+                    tmux_sentinel: cmd.sentinel,
+                    tmux_session: cmd.tmux_session,
+                    tmux_new_window: cmd.new_window,
+                    tmux_new_session: cmd.new_session,
+                    tmux_window_name: cmd.window_name,
+                    tmux_ready_patterns: cmd.ready_pattern,
+                    tmux_skip_prompts: cmd.skip_prompt,
+                    tmux_ready_timeout_sec: cmd.ready_timeout,
+                    tmux_bin: cmd.tmux_bin,
                 },
             )?;
         }

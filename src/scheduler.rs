@@ -4,6 +4,7 @@ use crate::agent_job::{
 };
 use crate::dispatch::TaskDescriptor;
 use crate::merge_review::{self, TestGateAction};
+use crate::tmux_runner;
 use crate::worktree::{self, WorktreeHandle};
 use serde::Deserialize;
 use serde_json::json;
@@ -310,16 +311,6 @@ impl Scheduler {
             .join("live")
             .join(format!("{}.hb.jsonl", job.job_id));
 
-        let runner = self.runners_dir.join(format!("{}.sh", job.runner));
-        if fs::metadata(&runner).await.is_err() {
-            return failure_result(
-                job,
-                attempt,
-                None,
-                format!("runner script not found: {}", runner.display()),
-            );
-        }
-
         let attempt_dir = match tempfile::Builder::new().prefix("lto_scheduler_").tempdir() {
             Ok(dir) => dir,
             Err(err) => return failure_result(job, attempt, None, format!("tempdir: {err}")),
@@ -330,6 +321,49 @@ impl Scheduler {
         };
         let effective_job = with_effective_dimensions(job, &prompt.path).await;
         let job = &effective_job;
+        if job.runner == "tmux" {
+            if job_needs_worktree(job) {
+                return failure_result(
+                    job,
+                    attempt,
+                    None,
+                    "tmux runner does not support scheduler-managed worktree isolation; target a pane already in the intended workspace or use a headless runner",
+                );
+            }
+            let mut result = match tmux_runner::run_job(job, &prompt.path, &self.repo).await {
+                Ok(outcome) => AgentResult {
+                    job_id: job.job_id.clone(),
+                    runner: job.runner.clone(),
+                    model: job.model.clone(),
+                    status: outcome.status,
+                    exit_code: outcome.exit_code,
+                    findings: vec![],
+                    reply_text: outcome.reply_text,
+                    cost: outcome.cost,
+                    permissions: BTreeMap::new(),
+                    artifacts: outcome.artifacts,
+                    attempts: attempt,
+                    error: outcome.error,
+                    task_type: job.task_type.clone(),
+                    size: job.size,
+                    merge_review: None,
+                },
+                Err(err) => failure_result(job, attempt, None, err.to_string()),
+            };
+            result.permissions = permission_snapshot(&job.permission_policy);
+            return result;
+        }
+
+        let runner = self.runners_dir.join(format!("{}.sh", job.runner));
+        if fs::metadata(&runner).await.is_err() {
+            return failure_result(
+                job,
+                attempt,
+                None,
+                format!("runner script not found: {}", runner.display()),
+            );
+        }
+
         let write_worktree = if job_needs_worktree(job) {
             match worktree::add_persistent_worktree(&self.repo, run_id, &job.job_id) {
                 Ok(handle) => Some(handle),
@@ -1921,6 +1955,45 @@ print(json.dumps(data))
         assert_eq!(result[0].status, JobStatus::Failed);
         assert!(result[0].error.contains("no worktree changes"));
         assert!(result[0].merge_review.is_none());
+    }
+
+    #[tokio::test]
+    async fn tmux_runner_fails_closed_for_scheduler_managed_worktree() {
+        let harness = Harness::new();
+        harness.set_health(json!([{"agent":"tmux","verdict":"OK"}]));
+        let mut job = make_job("tmux-write", "tmux");
+        job.permission_policy = PermissionPolicy {
+            sandbox: Sandbox::WorkspaceWrite,
+            reason: "tmux cannot enforce read-only".to_string(),
+            user_approved: false,
+            tools: Vec::new(),
+        };
+        job.needs_worktree = true;
+
+        let result = harness.scheduler().submit(vec![job]).await.unwrap();
+
+        assert_eq!(result[0].status, JobStatus::Failed);
+        assert!(result[0].error.contains("worktree isolation"));
+    }
+
+    #[tokio::test]
+    async fn unhealthy_tmux_runner_is_skipped_before_dispatch() {
+        let harness = Harness::new();
+        harness.set_health(json!([{"agent":"tmux","verdict":"MISSING"}]));
+        let mut job = make_job("tmux-missing", "tmux");
+        job.permission_policy = PermissionPolicy {
+            sandbox: Sandbox::WorkspaceWrite,
+            reason: "tmux cannot enforce read-only".to_string(),
+            user_approved: false,
+            tools: Vec::new(),
+        };
+        job.meta
+            .insert("tmux_target".to_string(), serde_json::json!("missing:1.0"));
+
+        let result = harness.scheduler().submit(vec![job]).await.unwrap();
+
+        assert_eq!(result[0].status, JobStatus::Skipped);
+        assert!(result[0].error.contains("runner unhealthy"));
     }
 
     #[tokio::test]

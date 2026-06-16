@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::merge_review::MergeReview;
 
-pub const KNOWN_RUNNERS: &[&str] = &["codex", "pi", "agy", "gemini", "claude"];
+pub const KNOWN_RUNNERS: &[&str] = &["codex", "pi", "agy", "gemini", "claude", "tmux"];
 pub const CODEX_SANDBOXES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -213,7 +213,7 @@ impl PermissionPolicy {
                     });
                 }
             }
-            "agy" | "gemini" if self.sandbox == Sandbox::ReadOnly => {
+            "agy" | "gemini" | "tmux" if self.sandbox == Sandbox::ReadOnly => {
                 return Err(AgentJobError::CannotEnforceReadOnly {
                     runner: runner.to_string(),
                 });
@@ -254,10 +254,15 @@ impl PermissionPolicy {
 }
 
 pub fn readonly_intent_to_policy(runner: &str) -> PermissionPolicy {
-    if runner == "agy" {
+    if matches!(runner, "agy" | "tmux") {
+        let reason = if runner == "tmux" {
+            "tmux targets an existing pane and cannot enforce read-only; workspace-write is the honest minimum permission snapshot"
+        } else {
+            "agy has no read-only sandbox; workspace-write is the minimal enforceable level to keep agy's heterogeneous review lens"
+        };
         return PermissionPolicy {
             sandbox: Sandbox::WorkspaceWrite,
-            reason: "agy has no read-only sandbox; workspace-write is the minimal enforceable level to keep agy's heterogeneous review lens".to_string(),
+            reason: reason.to_string(),
             user_approved: false,
             tools: Vec::new(),
         };
@@ -483,6 +488,19 @@ mod tests {
         assert_eq!(policy.sandbox, Sandbox::WorkspaceWrite);
         assert!(policy.reason.contains("no read-only"));
         assert!(policy.validate_for_runner("agy", &BTreeMap::new()).is_ok());
+
+        let tmux = readonly_intent_to_policy("tmux");
+        assert_eq!(tmux.sandbox, Sandbox::WorkspaceWrite);
+        assert!(tmux.reason.contains("cannot enforce read-only"));
+        assert!(tmux.validate_for_runner("tmux", &BTreeMap::new()).is_ok());
+
+        let readonly = PermissionPolicy::default();
+        assert_eq!(
+            readonly.validate_for_runner("tmux", &BTreeMap::new()),
+            Err(AgentJobError::CannotEnforceReadOnly {
+                runner: "tmux".to_string()
+            })
+        );
 
         let codex = readonly_intent_to_policy("codex");
         assert_eq!(codex.sandbox, Sandbox::ReadOnly);

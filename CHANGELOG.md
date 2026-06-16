@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Tmux runner adapter
+
+- Added a Rust-owned `runner: "tmux"` scheduler path that dispatches prompts
+  with direct `tmux` subprocess calls, supports signal/sentinel/fire
+  completion modes, safe send-keys preflight, ready/skip prompt matching, and
+  capture-pane output in `AgentResult`.
+- Extended `lto runner` with tmux target/session/sentinel/ready options, and
+  allowed `--runner tmux --command` without `--task-id` to exercise the
+  scheduler-backed tmux dispatch path directly.
+
 ### Observability O2 event wiring
 
 - Expanded the Rust event writer from the Phase 1 type list to a

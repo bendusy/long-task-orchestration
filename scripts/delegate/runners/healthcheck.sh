@@ -40,6 +40,19 @@ verdict() {
 
 results=()
 for agent in "${AGENTS[@]}"; do
+  if [[ "$agent" == "tmux" ]]; then
+    start=$SECONDS
+    if command -v tmux >/dev/null 2>&1 && tmux -V >/dev/null 2>&1; then
+      rc=0
+      bytes=1
+    else
+      rc=127
+      bytes=0
+    fi
+    elapsed=$((SECONDS - start))
+    results+=("$agent|$rc|${elapsed}s|$bytes|$(verdict "$rc" "$bytes")")
+    continue
+  fi
   runner="$SCRIPT_DIR/$agent.sh"
   if [[ ! -f "$runner" ]]; then
     results+=("$agent|-|-|0|MISSING")
