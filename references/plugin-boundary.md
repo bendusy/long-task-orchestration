@@ -242,15 +242,15 @@ Rust v2 owns the plugin path: list, validate, render-profile, eval, mount, sourc
 lto plugin list
 lto plugin validate plugins/deep-agent-profiles --json
 
-# Create an inert source note and optionally append it to plugin.json
+# Create an inert source note and append it to plugin.json by default
 lto plugin source-note plugins/deep-agent-profiles \
   --id note.example.article \
   --title "Interesting Article" \
   --url "https://example.com/article" \
   --claim "Article claims X improves Y" \
-  --hypothesis "Test whether X improves parse_rate" \
-  --append-manifest
-# source-note writes sources/<id>.json; pass --append-manifest to add it to plugin.json.
+  --hypothesis "Test whether X improves parse_rate"
+# source-note writes sources/<id>.json and appends it to plugin.json by default.
+# Pass --no-append-manifest only when recording a standalone note.
 
 # Render a profile into a normal prompt file; execution still goes through runner/AgentJob
 lto plugin render-profile plugins/deep-agent-profiles codex-audit-readonly-v1 \
