@@ -487,7 +487,7 @@ pub fn register_artifact(
             "artifacts": [],
         })
     };
-    let entry = artifact_entry(repo, run_id, path, meta)?;
+    let entry = artifact_entry(repo, run_id, path, meta.clone())?;
     let artifacts = json_array_mut(
         manifest
             .as_object_mut()
@@ -495,8 +495,12 @@ pub fn register_artifact(
             .entry("artifacts")
             .or_insert_with(|| Value::Array(Vec::new())),
     );
-    let entry_id = entry.get("id").and_then(Value::as_str).unwrap_or_default();
-    artifacts.retain(|item| item.get("id").and_then(Value::as_str) != Some(entry_id));
+    let entry_id = entry
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    artifacts.retain(|item| item.get("id").and_then(Value::as_str) != Some(entry_id.as_str()));
     artifacts.push(entry);
     manifest["updated_at"] = json!(iso_now());
     if let Some(parent) = manifest_path.parent() {
@@ -506,6 +510,21 @@ pub fn register_artifact(
         manifest_path,
         serde_json::to_string_pretty(&manifest)? + "\n",
     )?;
+    crate::events::safe_emit(
+        repo,
+        run_id,
+        crate::events::EventRecord {
+            event_type: "artifact.registered".to_string(),
+            actor_kind: "lto".to_string(),
+            phase: Some(meta.state.current_phase.clone()),
+            object_id: Some(entry_id),
+            object_type: Some(meta.kind.to_string()),
+            summary: meta.summary.to_string(),
+            artifact_refs: vec![repo_relative_path(repo, path).unwrap_or_default()],
+            fields: json!({"kind": meta.kind, "producer": meta.producer}),
+            ..crate::events::EventRecord::default()
+        },
+    );
     Ok(())
 }
 

@@ -1116,11 +1116,13 @@ pub fn cmd_memory(repo: &Path, action: MemoryAction) -> anyhow::Result<()> {
 
 pub fn cmd_task_add(repo: &Path, options: TaskAddOptions) -> anyhow::Result<()> {
     let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
+    let task_id = options.task_id.clone();
+    let title = options.title.clone();
     if util::json_array(&ctx.state.tasks)
         .iter()
-        .any(|task| task.get("id").and_then(Value::as_str) == Some(options.task_id.as_str()))
+        .any(|task| task.get("id").and_then(Value::as_str) == Some(task_id.as_str()))
     {
-        anyhow::bail!("task id already exists: {}", options.task_id);
+        anyhow::bail!("task id already exists: {}", task_id);
     }
     let phase = options
         .phase
@@ -1147,10 +1149,22 @@ pub fn cmd_task_add(repo: &Path, options: TaskAddOptions) -> anyhow::Result<()> 
     }
     util::json_array_mut(&mut ctx.state.tasks).push(task);
     util::save_run(&ctx)?;
-    println!(
-        "task {} added to phase '{}': {}",
-        options.task_id, phase, options.title
+    crate::events::safe_emit(
+        repo,
+        &ctx.run_id,
+        crate::events::EventRecord {
+            event_type: "task.created".to_string(),
+            actor_kind: "host".to_string(),
+            phase: Some(phase.clone()),
+            task_id: Some(task_id.clone()),
+            object_id: Some(task_id.clone()),
+            object_type: Some("task".to_string()),
+            summary: title.clone(),
+            ..crate::events::EventRecord::default()
+        },
     );
+    let _ = crate::telemetry::save(repo, &ctx.run_id);
+    println!("task {} added to phase '{}': {}", task_id, phase, title);
     Ok(())
 }
 
@@ -1203,7 +1217,29 @@ pub fn cmd_task_update(repo: &Path, options: TaskUpdateOptions) -> anyhow::Resul
         changes.push(format!("touched+{}", options.touch.len()));
     }
     task["last_update"] = json!(util::iso_now());
+    let event_phase = task
+        .get("phase")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     util::save_run(&ctx)?;
+    if let Some(status) = &options.status {
+        crate::events::safe_emit(
+            repo,
+            &ctx.run_id,
+            crate::events::EventRecord {
+                event_type: "task.status_changed".to_string(),
+                actor_kind: "host".to_string(),
+                phase: event_phase,
+                task_id: Some(options.task_id.clone()),
+                object_id: Some(options.task_id.clone()),
+                object_type: Some("task".to_string()),
+                summary: format!("task {} -> {}", options.task_id, status),
+                fields: json!({"status": status}),
+                ..crate::events::EventRecord::default()
+            },
+        );
+    }
+    let _ = crate::telemetry::save(repo, &ctx.run_id);
     println!("task {} updated: {}", options.task_id, changes.join(", "));
     Ok(())
 }
@@ -1246,6 +1282,19 @@ pub fn cmd_phase(repo: &Path, options: PhaseOptions) -> anyhow::Result<()> {
     let head = util::git_status(repo).head;
     util::append_phase_transition(&mut ctx.state, &current, &to_phase, &head);
     util::save_run(&ctx)?;
+    crate::events::safe_emit(
+        repo,
+        &ctx.run_id,
+        crate::events::EventRecord {
+            event_type: "phase.changed".to_string(),
+            actor_kind: "host".to_string(),
+            phase: Some(to_phase.clone()),
+            summary: format!("{current} -> {to_phase}"),
+            fields: json!({"from": current, "to": to_phase}),
+            ..crate::events::EventRecord::default()
+        },
+    );
+    let _ = crate::telemetry::save(repo, &ctx.run_id);
     util::sync_run_state_md(&ctx.run_dir.join("run-state.md"), &ctx.state)?;
     println!("phase: {current} -> {to_phase}");
     if matches!(to_phase.as_str(), "implementation" | "closed") {
@@ -1342,6 +1391,27 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
     );
     task["last_update"] = json!(util::iso_now());
     util::save_run(&ctx)?;
+    crate::events::safe_emit(
+        repo,
+        &ctx.run_id,
+        crate::events::EventRecord {
+            event_type: "runner.finished".to_string(),
+            actor_kind: "runner".to_string(),
+            actor_id: Some(options.runner.clone()),
+            phase: Some(ctx.state.current_phase.clone()),
+            task_id: Some(options.task_id.clone()),
+            object_id: Some(options.task_id.clone()),
+            object_type: Some("task".to_string()),
+            summary: format!("collected {} status={status}", options.runner),
+            fields: json!({
+                "status": status.clone(),
+                "tokens": meta.get("tokens").cloned().unwrap_or(Value::Null),
+                "elapsed_sec": options.elapsed_sec,
+            }),
+            ..crate::events::EventRecord::default()
+        },
+    );
+    let _ = crate::telemetry::save(repo, &ctx.run_id);
     println!(
         "collected {} run for task {}: status={status}",
         options.runner, options.task_id
@@ -1453,6 +1523,29 @@ fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
     }
     task["last_update"] = json!(util::iso_now());
     util::save_run(&ctx)?;
+    crate::events::safe_emit(
+        repo,
+        &ctx.run_id,
+        crate::events::EventRecord {
+            event_type: "runner.finished".to_string(),
+            actor_kind: "runner".to_string(),
+            actor_id: Some("lto-runner".to_string()),
+            phase: Some(ctx.state.current_phase.clone()),
+            task_id: Some(task_id.clone()),
+            object_id: Some(task_id.clone()),
+            object_type: Some("task".to_string()),
+            summary: format!("{} rc={rc}", options.kind),
+            fields: json!({
+                "kind": options.kind,
+                "command_hash": format!("{:x}", sha2::Sha256::digest(command.as_bytes())),
+                "rc": rc,
+                "elapsed_sec": elapsed,
+                "timeout": rc == 124,
+            }),
+            ..crate::events::EventRecord::default()
+        },
+    );
+    let _ = crate::telemetry::save(repo, &ctx.run_id);
     println!(
         "{} [{}] {} rc={rc}",
         if rc == 0 { "PASS" } else { "FAIL" },

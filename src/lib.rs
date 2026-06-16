@@ -7,14 +7,17 @@ pub mod commands;
 pub mod decision;
 pub mod dispatch;
 pub mod effect;
+pub mod events;
 pub mod llm_judge;
 pub mod merge_review;
 pub mod plugin;
 pub mod plugin_eval_run;
 pub mod process;
+pub mod redact;
 pub mod runner_events;
 pub mod scheduler;
 pub mod state;
+pub mod telemetry;
 pub mod worktree;
 
 pub use agent_job::{AgentJob, AgentResult, JobStatus, PermissionPolicy, Sandbox};

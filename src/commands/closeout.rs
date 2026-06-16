@@ -36,6 +36,21 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
     ctx.state.blocked_by = json!(options.blocked_by);
     ctx.state.next_action = json!(options.next_action);
     util::save_run(&ctx)?;
+    crate::events::safe_emit(
+        repo,
+        &ctx.run_id,
+        crate::events::EventRecord {
+            event_type: "run.closed".to_string(),
+            actor_kind: "host".to_string(),
+            phase: Some(ctx.state.current_phase.clone()),
+            summary: options.summary.clone(),
+            fields: json!({
+                "next_action": options.next_action.clone(),
+                "blocked_by": options.blocked_by.clone(),
+            }),
+            ..crate::events::EventRecord::default()
+        },
+    );
 
     write_closeout_section(&run_state_path, &options)?;
     util::register_artifact(
@@ -100,6 +115,7 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
         &handoff_path,
         build_handoff(&ctx, &options, &git, &artifacts),
     )?;
+    let _ = crate::telemetry::save(repo, &ctx.run_id);
 
     println!("{}", handoff_path.display());
     println!("interventions: none recorded by rust closeout");

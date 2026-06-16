@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +41,22 @@ def cargo_package_version(cargo_toml: str) -> str | None:
     return None
 
 
+def rust_owned_commands(cli_rs: str) -> list[str]:
+    match = re.search(r'pub const COMMANDS:\s*&\[&str\]\s*=\s*&\[(?P<body>.*?)\];', cli_rs, re.S)
+    if not match:
+        return []
+    return re.findall(r'"([^"]+)"', match.group("body"))
+
+
+def commands_doc_rows(commands_md: str) -> list[str]:
+    return re.findall(r"^\|\s*`([^` ]+)`", commands_md, flags=re.MULTILINE)
+
+
+def commands_doc_count(commands_md: str) -> int | None:
+    match = re.search(r"Command count:\s*(\d+)", commands_md)
+    return int(match.group(1)) if match else None
+
+
 def main() -> int:
     errors: list[str] = []
 
@@ -66,11 +83,21 @@ def main() -> int:
     rust_release = read("references/rust-migration-release.md")
     oss_req = read("references/open-source-delivery-requirements.md")
     release_workflow = read(".github/workflows/rust-v2.yml")
+    cli_rs = read("src/cli.rs")
+    commands_md = read("COMMANDS.md")
     version = read("VERSION").strip()
     cargo_version = cargo_package_version(read("Cargo.toml"))
+    rust_commands = rust_owned_commands(cli_rs)
+    documented_commands = commands_doc_rows(commands_md)
+    documented_count = commands_doc_count(commands_md)
+    help_row_count = len(rust_commands) + 1  # clap adds the built-in `help` pseudo-command.
 
     check("references/open-source-delivery-requirements.md" in readme, "README links open-source delivery requirements", errors)
     check(cargo_version == version, f"Cargo.toml package version matches VERSION ({cargo_version!r} vs {version!r})", errors)
+    check(bool(rust_commands), "src/cli.rs COMMANDS contract is parseable", errors)
+    check(documented_count == help_row_count, f"COMMANDS.md command count matches Rust help rows ({documented_count!r} vs {help_row_count})", errors)
+    check(sorted(documented_commands) == sorted(rust_commands), "COMMANDS.md table rows match Rust-owned commands", errors)
+    check("clap built-in `help`" in commands_md, "COMMANDS.md explains the generated help pseudo-command", errors)
     check("二进制下载是 release-gated" in readme, "README gates binary downloads on release assets", errors)
     check("Rust 二进制安装是 release-gated" in install, "INSTALL gates binary installs on release assets", errors)
     check("Binary installation is release-gated" in rust_release, "release doc gates binary availability on live assets", errors)

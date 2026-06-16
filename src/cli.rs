@@ -7,7 +7,7 @@ use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
 use anyhow::Context;
 use chrono::Utc;
 use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -427,8 +427,10 @@ pub enum PluginCommand {
         claims: Vec<String>,
         #[arg(long = "hypothesis")]
         hypotheses: Vec<String>,
-        #[arg(long = "append-manifest")]
+        #[arg(long = "append-manifest", conflicts_with = "no_append_manifest")]
         append_manifest: bool,
+        #[arg(long = "no-append-manifest")]
+        no_append_manifest: bool,
         #[arg(long)]
         json: bool,
     },
@@ -616,9 +618,11 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     claims,
                     hypotheses,
                     append_manifest,
+                    no_append_manifest,
                     json,
                 },
         } => {
+            let append_manifest = append_manifest || !no_append_manifest;
             let path = match plugin::create_source_note(
                 &dir,
                 &id,
@@ -695,41 +699,15 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             discover_risks,
             allow_same_family,
         } => {
-            let host = run_id
-                .or_else(|| current_run_id(&args.repo))
-                .and_then(|id| state::load_state(state::state_path(&args.repo, &id)).ok())
-                .map(|state| state.host_runtime)
-                .filter(|host| !host.is_empty())
-                .unwrap_or_else(|| "unknown".to_string());
-            let auditors = audit_dispatch::pick_auditors_with(&host, allow_same_family);
-            let severity = if discover_risks {
-                vec!["high", "critical", "medium"]
-            } else {
-                vec!["critical", "high", "medium", "low"]
-            };
-            let discoverer = if discover_risks {
-                audit_dispatch::pick_healthy_discoverer(&args.repo, &auditors, &host)
-            } else {
-                None
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "rust_v2": true,
-                    "mode": if discover_risks {
-                        "discover_risks"
-                    } else if auto_dispatch {
-                        "auto_dispatch"
-                    } else {
-                        "prepare"
-                    },
-                    "host": host,
-                    "auditors": auditors,
-                    "discoverer": discoverer,
-                    "severity": severity,
-                    "scheduler_healthcheck": "used_for_discover_risks"
-                }))?
-            );
+            cmd_audit(
+                &args.repo,
+                AuditOptions {
+                    run_id,
+                    auto_dispatch,
+                    discover_risks,
+                    allow_same_family,
+                },
+            )?;
         }
         Commands::Start {
             run_id,
@@ -1019,6 +997,472 @@ fn current_run_id(repo: &Path) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+struct AuditOptions {
+    run_id: Option<String>,
+    auto_dispatch: bool,
+    discover_risks: bool,
+    allow_same_family: bool,
+}
+
+fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
+    let run_id = options
+        .run_id
+        .or_else(|| current_run_id(repo))
+        .context("audit requires --run-id or .lto/current")?;
+    let run_dir = repo.join(".lto").join(&run_id);
+    let state_path = run_dir.join("state.json");
+    let state = state::load_state(&state_path)?;
+    let host = effective_audit_host(&state);
+    let auditors = audit_dispatch::pick_auditors_with(&host, options.allow_same_family);
+    let audit_dir = run_dir.join("audit");
+    fs::create_dir_all(&audit_dir)?;
+
+    if options.discover_risks {
+        dispatch_risk_discovery(
+            repo, &run_id, &run_dir, &audit_dir, &state, &host, &auditors,
+        )?;
+    }
+
+    let targets = high_risk_tasks(&state);
+    let brief_path = audit_dir.join(format!("audit-brief-{}.md", timestamp_slug()));
+    fs::write(&brief_path, build_audit_brief(&state, &host, &targets))?;
+    register_run_artifact(
+        repo,
+        &run_id,
+        &brief_path,
+        &state,
+        RunArtifactRecord {
+            kind: "audit_brief",
+            producer: "lto-rs.audit.prepare",
+            summary: "audit brief",
+            tags: &["audit", "brief"],
+        },
+    )?;
+
+    if !options.auto_dispatch {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "rust_v2": true,
+                "mode": "prepare",
+                "host": host,
+                "auditors": auditors,
+                "brief": util::repo_relative_path(repo, &brief_path)?,
+            }))?
+        );
+        return Ok(());
+    }
+
+    if auditors.is_empty() {
+        anyhow::bail!("audit auto-dispatch has no heterogeneous auditors for host {host}");
+    }
+    let runners_dir = repo.join("scripts").join("delegate").join("runners");
+    let results =
+        audit_dispatch::submit_auto_dispatch(repo, &runners_dir, &brief_path, &auditors, &host)?;
+    let replies_dir = audit_dir.join("replies");
+    fs::create_dir_all(&replies_dir)?;
+    let mut used = Vec::new();
+    let mut counts = SeverityCounts::default();
+    for result in &results {
+        let reply_path = replies_dir.join(format!("reply-{}.md", result.runner));
+        fs::write(&reply_path, &result.reply_text)?;
+        register_run_artifact(
+            repo,
+            &run_id,
+            &reply_path,
+            &state,
+            RunArtifactRecord {
+                kind: "audit_reply",
+                producer: "lto-rs.audit.auto_dispatch",
+                summary: &format!("{} audit reply", result.runner),
+                tags: &["audit", "reply"],
+            },
+        )?;
+        used.push(result.runner.clone());
+        counts.add_reply(&result.reply_text);
+        println!(
+            "  {}: {} exit={:?}",
+            result.runner,
+            result.status.as_str(),
+            result.exit_code
+        );
+    }
+    let ledger_path = run_dir.join("audit-ledger.md");
+    append_audit_ledger_round(
+        repo,
+        &run_id,
+        &ledger_path,
+        &state,
+        &replies_dir,
+        &used,
+        counts,
+    )?;
+    println!(
+        "audit ledger: {}",
+        util::repo_relative_path(repo, &ledger_path)?
+    );
+    Ok(())
+}
+
+fn dispatch_risk_discovery(
+    repo: &Path,
+    run_id: &str,
+    run_dir: &Path,
+    audit_dir: &Path,
+    state: &LtoState,
+    host: &str,
+    auditors: &[String],
+) -> anyhow::Result<()> {
+    let Some(discoverer) = audit_dispatch::pick_healthy_discoverer(repo, auditors, host) else {
+        anyhow::bail!("risk discovery has no healthy heterogeneous discoverer for host {host}");
+    };
+    let brief_path = audit_dir.join(format!("risk-brief-{}.md", timestamp_slug()));
+    fs::write(&brief_path, build_risk_brief(state, host))?;
+    register_run_artifact(
+        repo,
+        run_id,
+        &brief_path,
+        state,
+        RunArtifactRecord {
+            kind: "audit_brief",
+            producer: "lto-rs.audit.discover_risks",
+            summary: "risk discovery brief",
+            tags: &["audit", "risk", "brief"],
+        },
+    )?;
+    let runners_dir = repo.join("scripts").join("delegate").join("runners");
+    let job = audit_dispatch::build_risk_discovery_job(&brief_path, &discoverer, host);
+    let results = crate::scheduler::Scheduler::new(repo, runners_dir).submit_blocking(vec![job])?;
+    let Some(result) = results.first() else {
+        anyhow::bail!("risk discovery returned no result");
+    };
+    if result.status != crate::agent_job::JobStatus::Ok {
+        anyhow::bail!(
+            "risk discovery runner {} returned {} exit={:?}: {}",
+            result.runner,
+            result.status.as_str(),
+            result.exit_code,
+            result.error
+        );
+    }
+    let reply_path = audit_dir.join(format!("risk-reply-{}-{}.md", discoverer, timestamp_slug()));
+    fs::write(&reply_path, &result.reply_text)?;
+    register_run_artifact(
+        repo,
+        run_id,
+        &reply_path,
+        state,
+        RunArtifactRecord {
+            kind: "risk_discovery_reply",
+            producer: "lto-rs.audit.discover_risks",
+            summary: &format!("{discoverer} risk discovery reply"),
+            tags: &["audit", "risk", "reply"],
+        },
+    )?;
+    let risks = parse_findings_or_empty(&result.reply_text);
+    if risks.is_empty() {
+        println!("risk discovery: {discoverer} reported no structured risks");
+        return Ok(());
+    }
+    let state_path = run_dir.join("state.json");
+    let mut state = state::load_state(&state_path)?;
+    let risk_points = util::json_array_mut(&mut state.risk_points);
+    let mut next = risk_points.len() + 1;
+    for risk in risks {
+        let claim = risk
+            .get("claim")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if claim.is_empty() {
+            continue;
+        }
+        risk_points.push(json!({
+            "id": format!("RP-auto-{next}"),
+            "source": "risk-agent",
+            "claim": claim,
+            "evidence_to_check": risk.get("evidence_to_check").and_then(Value::as_str).unwrap_or(""),
+            "severity": risk.get("severity").and_then(Value::as_str).unwrap_or("medium"),
+            "status": "open",
+            "recorded_at": util::iso_now(),
+        }));
+        next += 1;
+    }
+    state::save_state(&state_path, &state)?;
+    util::sync_run_state_md(&run_dir.join("run-state.md"), &state)?;
+    println!("risk discovery: {discoverer} added risk points");
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SeverityCounts {
+    high: u64,
+    critical: u64,
+    minor: u64,
+}
+
+impl SeverityCounts {
+    fn add_reply(&mut self, text: &str) {
+        let findings = parse_findings_or_empty(text);
+        if findings.is_empty() {
+            self.high += text.matches("high").count() as u64;
+            self.critical += text.matches("critical").count() as u64;
+            return;
+        }
+        for finding in findings {
+            match finding
+                .get("severity")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "critical" => self.critical += 1,
+                "high" => self.high += 1,
+                "medium" | "low" => self.minor += 1,
+                _ => {}
+            }
+        }
+    }
+}
+
+fn parse_findings_or_empty(text: &str) -> Vec<Value> {
+    if let Some(findings) = crate::audit::parse_findings_text(text) {
+        return findings
+            .into_iter()
+            .filter_map(|finding| serde_json::to_value(finding).ok())
+            .collect();
+    }
+    parse_json_findings(text).unwrap_or_default()
+}
+
+fn parse_json_findings(text: &str) -> Option<Vec<Value>> {
+    serde_json::from_str::<Value>(text.trim())
+        .ok()
+        .and_then(findings_from_value)
+        .or_else(|| {
+            text.split("```json").skip(1).find_map(|tail| {
+                let body = tail.split("```").next()?.trim();
+                serde_json::from_str::<Value>(body)
+                    .ok()
+                    .and_then(findings_from_value)
+            })
+        })
+}
+
+fn findings_from_value(value: Value) -> Option<Vec<Value>> {
+    if let Some(items) = value.as_array() {
+        return Some(items.clone());
+    }
+    value.get("findings")?.as_array().cloned()
+}
+
+fn append_audit_ledger_round(
+    repo: &Path,
+    run_id: &str,
+    ledger_path: &Path,
+    state: &LtoState,
+    replies_dir: &Path,
+    auditors: &[String],
+    counts: SeverityCounts,
+) -> anyhow::Result<()> {
+    ensure_audit_ledger(ledger_path)?;
+    let content = fs::read_to_string(ledger_path)?;
+    let label = next_audit_round_label(&content);
+    let artifact = util::repo_relative_path(repo, replies_dir)?;
+    let row = format!(
+        "| {label} | {artifact} | {} | {} | {} | {} | {} | open |",
+        auditors.join(" "),
+        counts.high,
+        counts.critical,
+        counts.minor,
+        if label == "R1" { "start" } else { "flat" },
+    );
+    let updated = if label == "R1" {
+        let placeholder = "| R1 |  |  |  |  |  | start | open |";
+        if content.contains(placeholder) {
+            content.replacen(placeholder, &row, 1)
+        } else {
+            insert_audit_round_row(&content, &row)
+        }
+    } else {
+        insert_audit_round_row(&content, &row)
+    };
+    fs::write(ledger_path, updated)?;
+    register_run_artifact(
+        repo,
+        run_id,
+        ledger_path,
+        state,
+        RunArtifactRecord {
+            kind: "audit_ledger",
+            producer: "lto-rs.audit.collect",
+            summary: &format!("audit ledger updated {label}"),
+            tags: &["audit", "ledger"],
+        },
+    )?;
+    Ok(())
+}
+
+fn ensure_audit_ledger(path: &Path) -> anyhow::Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, include_str!("../templates/audit-ledger.md"))?;
+    Ok(())
+}
+
+fn next_audit_round_label(content: &str) -> String {
+    let max_round = content
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("| R"))
+        .filter_map(|tail| tail.split('|').next()?.trim().parse::<u64>().ok())
+        .max()
+        .unwrap_or(0);
+    if content.contains("| R1 |  |  |  |  |  | start | open |") || max_round == 0 {
+        "R1".to_string()
+    } else {
+        format!("R{}", max_round + 1)
+    }
+}
+
+fn insert_audit_round_row(content: &str, row: &str) -> String {
+    let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
+    let idx = lines
+        .iter()
+        .rposition(|line| line.trim_start().starts_with("| R"))
+        .map(|idx| idx + 1)
+        .unwrap_or(lines.len());
+    lines.insert(idx, row.to_string());
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+struct RunArtifactRecord<'a> {
+    kind: &'a str,
+    producer: &'a str,
+    summary: &'a str,
+    tags: &'a [&'a str],
+}
+
+fn register_run_artifact(
+    repo: &Path,
+    run_id: &str,
+    path: &Path,
+    state: &LtoState,
+    record: RunArtifactRecord<'_>,
+) -> anyhow::Result<()> {
+    util::register_artifact(
+        repo,
+        run_id,
+        path,
+        util::ArtifactMeta {
+            kind: record.kind,
+            producer: record.producer,
+            state,
+            summary: record.summary,
+            tags: record.tags,
+        },
+    )
+}
+
+fn effective_audit_host(state: &LtoState) -> String {
+    if !state.host_runtime.trim().is_empty() {
+        return state.host_runtime.trim().to_string();
+    }
+    std::env::var("LTO_HOST_RUNTIME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "codex".to_string())
+}
+
+fn high_risk_tasks(state: &LtoState) -> Vec<Value> {
+    state
+        .tasks
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|task| {
+            let status = task
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("pending");
+            status != "skipped"
+        })
+        .collect()
+}
+
+fn build_audit_brief(state: &LtoState, host: &str, targets: &[Value]) -> String {
+    let mut lines = vec![
+        "# LTO Heterogeneous Audit Brief".to_string(),
+        String::new(),
+        format!("- goal: {}", state.goal),
+        format!("- host_runtime: {host}"),
+        format!("- phase: {}", state.current_phase),
+        String::new(),
+        "## Audit Targets".to_string(),
+        String::new(),
+    ];
+    for task in targets {
+        lines.push(format!(
+            "### {}: {}",
+            task.get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("<unknown>"),
+            task.get("title").and_then(Value::as_str).unwrap_or("")
+        ));
+        if let Some(files) = task.get("touched_files").and_then(Value::as_array) {
+            let files = files
+                .iter()
+                .filter_map(Value::as_str)
+                .take(12)
+                .collect::<Vec<_>>();
+            if !files.is_empty() {
+                lines.push(format!("- touched: {}", files.join(", ")));
+            }
+        }
+        if let Some(evidence) = task
+            .get("evidence")
+            .and_then(Value::as_array)
+            .and_then(|v| v.last())
+        {
+            lines.push(format!("- latest evidence: {}", compact_json(evidence)));
+        }
+        lines.push(String::new());
+    }
+    lines.extend([
+        "## Required Output".to_string(),
+        String::new(),
+        "Return the strongest blockers first. End with a JSON findings list.".to_string(),
+        "Use severity critical/high/medium/low. Use [] if there are no findings.".to_string(),
+        String::new(),
+        "```json".to_string(),
+        r#"[{"severity":"high","claim":"...","evidence_to_check":"...","file":"..."}]"#.to_string(),
+        "```".to_string(),
+    ]);
+    lines.join("\n")
+}
+
+fn build_risk_brief(state: &LtoState, host: &str) -> String {
+    format!(
+        "# LTO Risk Discovery Brief\n\n- goal: {}\n- host_runtime: {}\n- phase: {}\n\nRead current state and recent changed files. Return only new high/critical/medium risks as JSON findings. Return [] if no new risks.\n",
+        state.goal, host, state.current_phase
+    )
+}
+
+fn compact_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".to_string())
+}
+
+fn timestamp_slug() -> String {
+    Utc::now().format("%Y%m%d-%H%M%S").to_string()
+}
+
 struct StartRunOptions {
     run_id: Option<String>,
     goal: String,
@@ -1085,6 +1529,23 @@ fn start_run(repo: &Path, options: StartRunOptions) -> anyhow::Result<PathBuf> {
 
     fs::create_dir_all(repo.join(".lto"))?;
     fs::write(repo.join(".lto").join("current"), format!("{run_id}\n"))?;
+    crate::events::safe_emit(
+        repo,
+        &run_id,
+        crate::events::EventRecord {
+            event_type: "run.started".to_string(),
+            actor_kind: "host".to_string(),
+            actor_id: if state.host_runtime.is_empty() {
+                None
+            } else {
+                Some(state.host_runtime.clone())
+            },
+            phase: Some(state.current_phase.clone()),
+            summary: state.goal.clone(),
+            fields: json!({"why": state.why, "done_when": state.done_when}),
+            ..crate::events::EventRecord::default()
+        },
+    );
     util::register_artifact(
         repo,
         &run_id,
@@ -1109,6 +1570,7 @@ fn start_run(repo: &Path, options: StartRunOptions) -> anyhow::Result<PathBuf> {
             tags: &["state"],
         },
     )?;
+    let _ = crate::telemetry::save(repo, &run_id);
     Ok(run_dir)
 }
 
@@ -1310,11 +1772,89 @@ mod tests {
     }
 
     #[test]
+    fn plugin_source_note_defaults_to_appending_manifest() {
+        let args = Args::try_parse_from([
+            "lto-rs",
+            "plugin",
+            "source-note",
+            "plugins/deep-agent-profiles",
+            "--id",
+            "x.note",
+            "--title",
+            "A source",
+            "--url",
+            "https://example.test/source",
+        ])
+        .unwrap();
+        let Commands::Plugin {
+            command:
+                PluginCommand::SourceNote {
+                    append_manifest,
+                    no_append_manifest,
+                    ..
+                },
+        } = args.command
+        else {
+            panic!("expected plugin source-note");
+        };
+        assert!(append_manifest || !no_append_manifest);
+    }
+
+    #[test]
+    fn plugin_source_note_can_disable_manifest_append() {
+        let args = Args::try_parse_from([
+            "lto-rs",
+            "plugin",
+            "source-note",
+            "plugins/deep-agent-profiles",
+            "--id",
+            "x.note",
+            "--title",
+            "A source",
+            "--url",
+            "https://example.test/source",
+            "--no-append-manifest",
+        ])
+        .unwrap();
+        let Commands::Plugin {
+            command:
+                PluginCommand::SourceNote {
+                    append_manifest,
+                    no_append_manifest,
+                    ..
+                },
+        } = args.command
+        else {
+            panic!("expected plugin source-note");
+        };
+        assert!(!append_manifest && no_append_manifest);
+        assert!(
+            Args::try_parse_from([
+                "lto-rs",
+                "plugin",
+                "source-note",
+                "plugins/deep-agent-profiles",
+                "--id",
+                "x.note",
+                "--title",
+                "A source",
+                "--url",
+                "https://example.test/source",
+                "--append-manifest",
+                "--no-append-manifest",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn commands_markdown_tracks_rust_command_contract() {
         let doc =
             std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("COMMANDS.md"))
                 .unwrap();
-        assert!(doc.contains("Command count: 24."));
+        assert!(doc.contains("Command count: 25."));
+        assert!(doc.contains("24 Rust-owned business"));
+        assert!(doc.contains("clap built-in `help`"));
         for command in COMMANDS {
             assert!(
                 doc.contains(&format!("| `{command}`")),

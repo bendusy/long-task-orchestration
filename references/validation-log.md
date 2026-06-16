@@ -12,12 +12,15 @@ fallback，完整删除必须等待人工 gate 和阶段 C wrapper/docs/tests �
 | Source-note unit | `cargo test --locked source_note` | 5/5 passed；覆盖字段、非法 id、symlink `sources/`、append manifest 幂等、非 object manifest |
 | Source-note CLI smoke | 临时 plugin + `cargo run --quiet -- plugin source-note ... --append-manifest --json` | `sources/x.note.json` 写入成功，manifest `source_notes` 为 `["sources/x.note.json"]` |
 | Source-note parity | 同一临时 plugin 分别跑 Python `plugin source-note` 与 Rust `plugin source-note`，忽略 `captured_at` 后比较 JSON | `source-note parity OK` |
+| Source-note default parity fix | 同一 plugin 副本分别跑 Python/Rust `plugin source-note`，**不传** `--append-manifest` / `--no-append-manifest` | `source-note default parity OK`；rc=0；note 字段忽略 `captured_at` 后一致；两边 manifest 都 append `sources/parity.note.json` |
 | Eval-run unit | `cargo test --locked plugin_eval_run` | 6/6 passed；覆盖 A/B 两腿、token sidecar、negative scheduler reject、env allowlist/blocklist、missing eval pack |
 | Eval-run parity | 同一临时 plugin + 同一 shell fake runner 分别跑 Python `scripts/lto_run.py plugin eval-run` 与 Rust `cargo run -- plugin eval-run`，比较 `ok/plugin_id/eval_id/deferred/case verdict/status/parse/leak/delta/token` subset | `eval-run parity OK` |
 | Ownership gate | `python3 scripts/check_python_rust_ownership.py` | `PYTHON/RUST OWNERSHIP OK`，Rust help 与 manifest 均包含 `source-note`/`eval-run` |
 | Docs gate | `python3 scripts/check_docs_consistency.py` | `DOCS CONSISTENCY OK` |
 | Rust full test | `cargo test --locked --all-targets` | 146 lib tests + 2 integration tests passed |
 | Rust clippy | `cargo clippy --locked --all-targets -- -D warnings` | passed after options-struct cleanup |
+| Rust observability gate | `cargo test --locked events -- --nocapture`; `cargo test --locked telemetry -- --nocapture`; true `obs-smoke` run through `start → task-add → runner → phase --set observe → closeout` | `events.jsonl` and `telemetry.json` produced by Rust; final event count matched (`10 == 10`); `runner_calls=1`; `tasks_done=1`; no raw `stdout`/`stderr`/`reply_text`; no `control_recommendations` |
+| Rust observability locking | `cargo test --locked events -- --nocapture` | covers redaction, raw-output rejection, duplicate `event_id` tolerant read, and 32 concurrent appends with unique monotonic event ids |
 
 **安全删除说明**：`references/python-rust-ownership.md` 与
 `references/open-source-delivery-requirements.md` 已写明 Python 删除不是按文件年龄删，
@@ -25,9 +28,10 @@ fallback，完整删除必须等待人工 gate 和阶段 C wrapper/docs/tests �
 rollback preserved → delete」执行；`scripts/delegate/runners/*.sh` 明确不得随
 Python fallback 删除。
 
-**Phase C 状态**：未进入。`references/specs/2026-06-16-python-removal-via-rust-port.md`
-已补 C.5 执行交接单,明确删除候选、必须保留文件、active docs 改口径、v0.5.0
-版本同步、验证命令和停止条件；该清单只在用户明确批准 Phase C 后执行。
+**Phase C 状态**：尚未删除 Python fallback。`references/specs/2026-06-16-python-removal-via-rust-port.md`
+已补 C.5 执行交接单，明确删除候选、必须保留文件、active docs 改口径、v0.5.0
+版本同步、验证命令和停止条件；`events.py`/`telemetry.py` 的删除前置已由 Rust
+`src/events.rs`/`src/telemetry.rs` 接管并通过上方 observability gate。
 
 ## 2026-05-31：cross-runtime 真执行实测（codex 当宿主）
 

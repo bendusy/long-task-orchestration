@@ -287,7 +287,7 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 ## Resources
 
 **入口与文档**
-- `src/main.rs` / `src/cli.rs` — Rust v2 当前接管入口（24 命令 CLI）
+- `src/main.rs` / `src/cli.rs` — Rust v2 当前接管入口（24 个业务命令；`--help` 另显示 clap 内置 `help` 行；plugin 含 `source-note` / `eval-run`）
 - `scripts/lto_run.py` — Python 兼容 fallback（旧命令分发到 `lto/commands/`）
 - `scripts/write_decision.py` — ADR-first 决策落盘 helper（写 `docs/decisions/` + state + artifact manifest）
 - `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper

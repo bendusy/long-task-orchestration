@@ -100,7 +100,7 @@ lto --use-python --repo <目标仓库> <子命令> [参数]
 
 跨 runtime 当宿主的专项坑（沙箱、派工、preflight）见 `cross-runtime-host-notes.md`——不同家差异大，派工前先读。
 
-## 24 个命令速查
+## 24 个业务命令速查
 
 > 参数真源摘要见仓库根目录 [COMMANDS.md](../COMMANDS.md)。下表按常用工作流排序；`audit --discover-risks` 是 audit 的重要变体，与主命令同计。
 
