@@ -124,9 +124,9 @@ host 亲验坐实（grep 全仓定义数 > 使用数，扣除测试）：
 - **有真实工作流场景** → 在 workflow-playbook.md 写清触发信号 + 给一个 `plugin mount` 实跑示例（让它至少有一条文档化的使用路径），并在某个测试/smoke 里 validate。
 - **无场景/重复** → 从仓库删除（plugins/ 目录 + README 引用），别留装饰性插件冒充能力。
 
-**架构岔路 host 裁决**：`adversarial-audit` 大概率该留（对抗审计是 LTO 核心卖点），但要给它真实接线示例；`meeting-transcript` 在开源 LTO 里大概率是 yh 时代残留（**注意 yh 隐私边界——若插件内容含办文/呈批痕迹必须删，不只是不挂载**）。codex 逐个判，commit message 说明每个的去留依据。
+**架构岔路 host 裁决**：`adversarial-audit` 大概率该留（对抗审计是 LTO 核心卖点），但要给它真实接线示例；`meeting-transcript` 在开源 LTO 里大概率是私有领域时代残留（**注意隐私边界——若插件内容含私有业务痕迹必须删，不只是不挂载**）。逐个判，commit message 说明每个的去留依据。
 
-> ⚠️ **yh 隐私红线**：处置 meeting-transcript 等插件时，`grep -riE 'yihub|办文|呈批|cap' plugins/` 必须零业务命中，有则连内容一起删干净（参考 CLAUDE.md 6/10 剥离记录：去 yh 的 diff 应全是删除行）。
+> ⚠️ **隐私红线**：处置 meeting-transcript 等插件时，扫描插件内容确保无私有业务领域痕迹，有则连内容一起删干净（去敏感内容的 diff 应全是删除行）。
 
 ---
 
