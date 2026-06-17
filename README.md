@@ -79,6 +79,19 @@ optional sinks: am memory publish/resume, release docs, changelog
 - **runner/audit/worktree 是 affordance**。它们提供派工、异构检查和可弃沙箱，不改变最终责任归属。
 - **macOS/Linux 优先**。Windows native support 暂停；当前内置 runner 协议依赖 `scripts/delegate/runners/*.sh` 和 `healthcheck.sh`，WSL/Unix-like shell 属于用户侧环境验证。
 
+### 放到业界 loop 工程坐标里看 LTO
+
+业界把 agent harness 看成可叠加的四层 loop（LangChain "loop engineering" / swyx "loopcraft"）。LTO 是一个**覆盖 L1–L4 的长任务 harness**，各层状态如下：
+
+| Loop 层 | 是什么 | LTO 落点 | 状态 |
+|---|---|---|---|
+| **L1 Agent** | model 调 tool 循环到完成 | `runner` / `scheduler` / `agent_job`（dumb loop，智能在 model/host） | ✅ |
+| **L2 Verification** | grader 检查输出、不达标反馈 | `audit --auto-dispatch`（**跨族异构** runner 互审）+ `judge` + `check` gate | ✅ **差异化**：业界多用单模型 LLM-as-judge，LTO 用异构 runner 跨族互审，抗同族盲区 |
+| **L3 Event-driven** | 事件触发 agent 后台跑，非手动调 | `events.jsonl` 已是结构化事件总线（runner/audit/gate/budget/sandbox/judge）；tmux 派工 + 完成通知正在补「事件 → 触发」闭环 | 🟡 事件总线就绪，触发层在建 |
+| **L4 Hill-climbing** | 扫历史 trace、改进 harness 自身 | 跨 run 数据挖掘（按 runner 模型 × 任务 × 时间聚合，喂回 host 出 tuning brief） | 🟡 路线（见 `references/backlog.md`） |
+
+**贯穿原则——薄 harness + 人在环**：LTO 赌「模型变强、harness 变薄」（primitive 不硬路由、preset 是 host playbook 不是固定菜单）。L4 与业界关键分歧是：LTO 挖掘出的是**证据和 brief**，喂 host 决策，**绝不自动改写 harness / 自动 promote**——所有路线判断和敏感操作（`git push`、closeout）都回到 host 和人。这与 Anthropic「薄 harness」、各家「human oversight at every level」一致，LTO 把人在环守得更严。
+
 ## 插件系统怎么用
 
 插件是 data-only path plugin：它可以提供 source note、path/playbook JSON、runtime profile、prompt suffix、output schema 和 eval pack；不能执行任意代码、自动提升权限、替 host 选 workflow 或自动 promotion。边界见 [references/plugin-boundary.md](./references/plugin-boundary.md)，真实 A/B eval 设计见 [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md)。
