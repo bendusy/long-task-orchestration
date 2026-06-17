@@ -17,7 +17,7 @@
 | 核心 CLI | 必需 | git | HEAD 锚定、drift 检测、worktree 沙箱 | 多数长任务证据不完整 |
 | 操作系统 | 必需 | macOS / Linux | 当前 CI、release binary、内置 shell runner 支持面 | Windows 原生支持暂缓；可用 WSL/类 Unix shell 自行验证 |
 | 宿主 | 必需 | Codex / Claude Code / pi / agy / 其他能读 `SKILL.md` 并跑 shell 的 agent | 作为主 agent 推进任务 | LTO 只是文件和脚本，不能自己工作 |
-| 异构审计 | 内置 | `scripts/delegate/` | 标准化派 codex/claude/pi/agy 审计 | runtime 不可用时手动 `audit --collect` |
+| 异构审计 | 内置 | `scripts/delegate/` | 标准化派 codex/claude/pi/agy 审计 | runtime 不可用时用 `collect-agent-run` 或 manual evidence 登记已有报告 |
 | 异构审计 | 可选 | `tmux` | 内置 delegate 的可观测并行窗口 | 无 tmux 时用 headless 子进程 |
 | 异构审计 | 可选 | codex / claude / pi / agy CLI，至少 2 个非宿主家族可用 | 真异构交叉审计 | 同 runtime 自审，必须声明对抗性弱 |
 | artifact memory | 可选 | ANIMEM 或 memory-flow compatible sink | 跨 runtime / 跨项目发现历史 run 和产物 | 本地 `.lto` + ADR 仍完整可用 |

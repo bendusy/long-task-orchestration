@@ -20,6 +20,16 @@ CODEX_WORKDIR="${CODEX_WORKDIR:-$PWD}"
 # RH1: CODEX_SANDBOX 由 scheduler 在 spawn 时以隔离 env 显式注入（_effective_env），
 # 不从用户 shell/父进程继承——与「不走继承 env」统一为「scheduler 构造侧注入」。
 CODEX_SANDBOX="${CODEX_SANDBOX:-read-only}"
+case "$CODEX_SANDBOX" in
+  read-only|workspace-write|danger-full-access) ;;
+  *)
+    # Codex host sessions may export implementation-specific sandbox names
+    # such as "seatbelt". Those are not valid `codex exec -s` values; fallback
+    # keeps standalone healthcheck/manual runner calls read-only instead of
+    # failing before auth/network can be probed.
+    CODEX_SANDBOX="read-only"
+    ;;
+esac
 JOB_ID="${LTO_JOB_ID:-}"
 
 if [[ ! -f "$PROMPT_FILE" ]]; then

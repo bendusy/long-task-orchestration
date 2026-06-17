@@ -10,6 +10,7 @@
 - Python 退役判断不能按 `scripts/*.py` 数量判断。`7070d77 feat: retire python fallback` 删除的是旧 `scripts/lto/` 包、`scripts/lto_run.py` 和 fallback 测试；当前保留的 Python 文件是构建/CI/ADR 辅助工具，不是运行时 fallback。
 - 发现 3 个值得修正或另立 goal 的真实漂移：`autopilot --decide`、`audit --collect <reply-dir>`、`budget extend/start budget caps` 在部分活跃文档中被描述为当前命令，但当前 `lto-rs --help` 没有这些参数或子命令。
 - 本任务 dogfooding 发现并修复 1 个 LTO 自身 bug：`audit --auto-dispatch --discover-risks` 在健康检查 probe 失败时曾 fail-open 选择首个 auditor，现改为 fail-closed 返回 “no healthy heterogeneous discoverer”。验证：`cargo test --locked audit_dispatch` 通过。
+- 最终异构审计已在提升权限下跑通：`PROBE_TIMEOUT=30 scripts/delegate/runners/healthcheck.sh codex pi agy --json` 三家 OK；`cargo run --quiet -- audit --run-id 20260617-rust-inheritance-readme-investigation --auto-dispatch --discover-risks` 由 pi/agy 完成，HIGH/CRITICAL=0，留下 2 条 medium 文档/报告改进项并已处理。
 - 插件系统已经能生效：`validate -> render-profile -> eval -> mount -> eval-run` 全链路可跑。当前 `plugins/` 目录实证有 6 个插件，不是 goal 文档里写的 7 个。
 - 预设工作流是 host-agent playbook，不是 `lto workflow run X`。当前 playbook 覆盖 review、enterprise-audit、debug、migration、claim-verify、research、feature-dev、tmux-goal-loop、docs-sync、release、direction-review。
 
@@ -52,9 +53,9 @@
 Rust 对主运行时的继承总体成立，但不是“无缺口”。当前应把缺口区分为三类：
 
 1. **已完整继承**：命令面、state/check/runner/audit auto-dispatch、sandbox、memory、plugin、events/telemetry。
-2. **代码存在但 CLI 未暴露或未接线**：decision convergence engine 与 `autopilot --decide`。
+2. **代码存在但完全未接入当前产品面**：decision convergence engine 与 `autopilot --decide`。当前 `src/decision.rs` 没有外部 `crate::decision` consumer，只有内部单元测试覆盖。
 3. **活跃文档描述了不存在的命令面**：`audit --collect`、`budget extend`、start budget caps。
-4. **狗食修复已落地**：risk discovery 的 runner 健康检查现在 fail-closed；本机当前 runner 健康状态仍全红，所以 phase audit 会明确失败而不是伪造审计通过。
+4. **狗食修复已落地**：risk discovery 的 runner 健康检查现在 fail-closed；沙箱内 runner 不健康会明确失败而不是伪造审计通过。提升权限后 codex/pi/agy healthcheck 全绿，最终 pi/agy 异构审计已完成。
 
 ## B. 架构与代码提升点
 
@@ -117,11 +118,11 @@ Rust 对主运行时的继承总体成立，但不是“无缺口”。当前应
 
 收益/风险：收益中；风险低。
 
-### B5. Medium：decision engine 存在但产品面未闭环
+### B5. Medium：decision engine 存在但当前没有外部消费者
 
-证据：`src/decision.rs:145-248` 实现 direction/review/both convergence；`src/event_emit.rs:428-455` 有 decision event；但 `src/cli.rs:154-174` 的 autopilot 参数没有 `--decide`，`src/commands/ops.rs:1095-1172` 的 autopilot path 也没有调用 decision engine。
+证据：`src/decision.rs:145-248` 实现 direction/review/both convergence；`src/event_emit.rs:428-455` 有 decision event；但 `src/cli.rs:154-174` 的 autopilot 参数没有 `--decide`，`src/commands/ops.rs:1095-1172` 的 autopilot path 也没有调用 decision engine。`rg -n "decision::|use crate::decision|crate::decision" src` 当前无命中，说明该 engine 没有外部 consumer；现有覆盖主要是 `src/decision.rs` 内部单元测试，缺少产品路径集成测试。
 
-改进方向：host 需要先裁决：保留 decision engine 作为内部库，还是恢复 `autopilot --decide`。若恢复，必须加 help、tests、docs、budget cap、heterogeneous runner gate。
+改进方向：host 需要先裁决：保留 decision engine 作为内部库、删除/归档未接线代码，还是恢复 `autopilot --decide`。若恢复，必须加 help、CLI dispatch、integration tests、docs、budget cap、heterogeneous runner gate，避免只靠内部单测证明产品可用性。
 
 收益/风险：收益取决于真实使用频率；风险中高，容易把 LTO 从 harness 推向 planner。
 
