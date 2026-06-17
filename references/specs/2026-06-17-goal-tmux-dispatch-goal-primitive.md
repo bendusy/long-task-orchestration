@@ -3,6 +3,13 @@
 > 致 codex:沿用既有约束(LTO 自管 / 每 Phase 异构审计 / dogfooding / 红线不弱化 / commit 你写、release/tag 归 host)。
 > **这份做 tmux 派 goal 原语(把主 agent 手搓 send-keys 的派工标准化）。做完停,别顺手改别的 backlog 项。**
 > 这是 `src/tmux_runner.rs` 的自然扩展（已有 signal/sentinel/fire 模式 + send-keys preflight），不是从零造。
+>
+> **历史修正**：本 spec 的完成通知部分是早期设计，后续已被
+> `2026-06-17-goal-L3-dispatch-L4-mining-unified.md` 修正为写
+> `events.jsonl` 而不是 `turns.jsonl`；BUG-6 又进一步修正 pi：
+> `dispatch-goal --runner pi` 必须走真实 TUI，当前只记录
+> `completion_mode=manual-pi-tui`，不写 `agent.turn.completed`，直到
+> pi hook/sentinel 完成信号实装。
 
 ---
 
@@ -143,8 +150,8 @@ dispatch-goal 派出去后「agent 跑完了没」由这个子系统答。**host
 - **复用 tmux_runner.rs**,别重写 tmux 操作层（裁决 2）。
 - **三家入口按实测表编排**（必读),codex 用 `/goal`、pi 直发、agy 用 `-i`,别统一成一种（会错）。
 - **探针确认 + literal 路径是硬要求**（坑 1/2,漏了派工会失败/打进 shell）。
-- **派发不阻塞等 goal 完成**（裁决 1）;但完成通知信号在派发时挂好（Phase 2），不是留空接口。
+- **派发不阻塞等 goal 完成**（裁决 1）;codex/agy 完成通知信号在派发时挂好（Phase 2），pi TUI 当前只记录 `manual-pi-tui`，不是留空接口也不是假自动完成。
 - **完成通知用 codex Stop hook 不用 notify**（host 实测 codex 有完整 hooks.json，feishu_hub/roostery 已用）;改用户全局文件必须仲裁追加+备份+可回滚（裁决 B）。
 - **LTO 只报 turn 完成，不替 host 判 goal 完成**（裁决 A）。
-- dogfood:dispatch-goal 自己派测试 goal 给三家实跑通 + 完成信号真触发才算完。
+- dogfood:dispatch-goal 自己派测试 goal 给三家实跑通；codex/agy 完成信号真触发，pi 只验证真 TUI 派工和 `manual-pi-tui` 模式。
 - host 亲验是硬停止点;commit 你写,release/tag 归 host。

@@ -87,7 +87,7 @@ optional sinks: am memory publish/resume, release docs, changelog
 |---|---|---|---|
 | **L1 Agent** | model 调 tool 循环到完成 | `runner` / `scheduler` / `agent_job`（dumb loop，智能在 model/host） | ✅ |
 | **L2 Verification** | grader 检查输出、不达标反馈 | `audit --auto-dispatch`（**跨族异构** runner 互审）+ `judge` + `check` gate | ✅ **差异化**：业界多用单模型 LLM-as-judge，LTO 用异构 runner 跨族互审，抗同族盲区 |
-| **L3 Event-driven** | 事件触发 agent 后台跑，非手动调 | `events.jsonl` 结构化事件总线 + `dispatch-goal` 派工与完成通知闭环 | ✅ 已实现 |
+| **L3 Event-driven** | 事件触发 agent 后台跑，非手动调 | `events.jsonl` 结构化事件总线 + `dispatch-goal` 派工；codex/agy 自动完成通知，pi TUI 完成暂需人工/后续 hook | ✅ 已实现 |
 | **L4 Hill-climbing** | 扫历史 trace、改进 harness 自身 | 跨 run 数据挖掘（按 runner 模型 × 任务 × 时间聚合，只读喂回 host 出 tuning brief） | ✅ 已实现（`recap --mine`） |
 
 **贯穿原则——薄 harness + 人在环**：LTO 赌「模型变强、harness 变薄」（primitive 不硬路由、preset 是 host playbook 不是固定菜单）。L4 与业界关键分歧是：LTO 挖掘出的是**证据和 brief**，喂 host 决策，**绝不自动改写 harness / 自动 promote**——所有路线判断和敏感操作（`git push`、closeout）都回到 host 和人。这与 Anthropic「薄 harness」、各家「human oversight at every level」一致，LTO 把人在环守得更严。

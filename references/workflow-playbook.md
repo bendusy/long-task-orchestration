@@ -318,8 +318,10 @@ run-state、task evidence 或等价 artifact：
   `plugins/adversarial-audit` 的 refuter profile）。
 - `lto runner` 落实现证据；`lto audit --auto-dispatch` 做 impl-audit。
 - 长目标要交给 codex/pi/agy 在 tmux 中自驱时，用 `lto dispatch-goal`
-  派 goal；完成通知写入对应 run 的 `events.jsonl` 中的
-  `agent.turn.completed`，不写单独的 turns 日志。
+  派 goal；codex Stop hook 和 agy pane-exit wrapper 会把完成通知写入
+  对应 run 的 `events.jsonl` 中的 `agent.turn.completed`，不写单独的
+  turns 日志。pi 走真实 TUI 派工，当前只记录 `manual-pi-tui`，直到
+  可靠 hook/sentinel 实装前不声称自动完成。
 - worktree_exec 在 dispatch 阶段隔离写入（specify 全程 read-only，
   spec 收口后才开 worktree）。
 - `lto judge` / `lto closeout`。

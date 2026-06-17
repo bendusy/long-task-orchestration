@@ -2,11 +2,11 @@
 
 ## v0.6.0 — 事件驱动 + 跨 run 复盘，调度更快更稳（2026-06-17）
 
-这一版把 LTO 从"能调度、能审计"推进到覆盖完整的四层 agent loop：派工能自动通知完成、跑过的历史能挖出来指导下一次怎么派，同时修了两个会影响数据正确性和性能的底层问题。
+这一版把 LTO 从"能调度、能审计"推进到覆盖完整的四层 agent loop：派工能记录完成信号、跑过的历史能挖出来指导下一次怎么派，同时修了两个会影响数据正确性和性能的底层问题。
 
 ### 新功能
 
-- **派工完成自动通知（L3 事件驱动）**：`lto dispatch-goal` 把一个 goal 文件派给 codex / pi / agy 在 tmux 里跑，agent 跑完会自动写一条完成事件，不用你盯着屏幕等。配套 `agent-turn-completed` 把完成信号落进事件流。
+- **派工完成通知（L3 事件驱动）**：`lto dispatch-goal` 把一个 goal 文件派给 codex / pi / agy 在 tmux 里跑；codex Stop hook 与 agy pane-exit wrapper 会把完成信号落进事件流。pi 走真实 TUI 派工，当前完成模式诚实标为 `manual-pi-tui`，不伪装成自动 `agent.turn.completed`。
 - **跨 run 复盘，越用越聪明（L4）**：新增 `lto recap --mine`——扫描你所有历史 run，按"哪个 runner × 什么任务 × 什么时段"聚合出失败率、耗时、审计轮次，生成一份只读的调优简报喂给你决策。它只给建议，绝不自动改配置或替你选 runner（人始终在环）。
 - **审计省 token**：一次性的审计/评审派工自动走精简上下文（pi/claude 不再冷加载几万 token 的技能和上下文文件），并复用会话命中 provider 的 prompt 缓存，审计轮次多时明显更省更快。
 
@@ -16,6 +16,7 @@
 - **事件写入提速（O(N) → O(1)）**：以前每写一条事件都要把整个事件日志文件全文读一遍来算序号，事件多了会拖慢。现在用一个计数文件 O(1) 拿序号；计数文件损坏时能自愈（回退重算），不会丢事件。
 - **加固事件锁与脱敏**：事件写入的并发锁改为失败即拒绝（不再可能脏写交错），密钥/路径脱敏规则统一收口、补全了之前漏掉的几种格式。
 - **修 audit 派工容错**：风险发现的派工不再单点死在某一家 runner，会自动 failover 到健康的异构 runner。
+- **修 pi dispatch-goal 派工姿势**：pi 不再通过非 TTY `--print` shell wrapper 派 goal，而是在 tmux pane 中启动真实 TUI 后直发 prompt，避免 TUI 被管道/非终端降级成静默单发。
 
 ### 架构
 
@@ -38,7 +39,7 @@
 
 ### Tasks
 
-- **L3**: L3 dispatch-goal and agent.turn.completed event notification (done)
+- **L3**: L3 dispatch-goal, codex/agy agent.turn.completed events, and pi manual TUI completion mode (done)
   - [manual] architecture_alignment: L3 belongs in existing tmux_runner/runner dispatch surfa
   - [manual] first_principles: L3 is the sensor layer for L4; if turn completion is written t
   - [manual] L3 implemented: KNOWN_EVENT_TYPES includes agent.turn.completed; dispatch-goal r
@@ -143,11 +144,14 @@
 ### L3 dispatch-goal and L4 cross-run mining
 
 - Added `lto dispatch-goal` for tmux-backed goal dispatch to codex, pi, and agy,
-  reusing the Rust tmux carrier instead of adding a second tmux layer. pi and
-  agy run through exiting shell wrappers so pane-exit completion can be emitted.
+  reusing the Rust tmux carrier instead of adding a second tmux layer. codex
+  uses its TUI `/goal` path, pi uses a true TUI prompt path, and agy still runs
+  through an exiting shell wrapper so pane-exit completion can be emitted.
 - Added `agent.turn.completed` to the events whitelist and a hook-facing
-  `agent-turn-completed` emitter. Completion notifications now go to
-  `.lto/<run>/events.jsonl`; no `turns.jsonl` stream is written.
+  `agent-turn-completed` emitter. Codex/agy completion notifications now go to
+  `.lto/<run>/events.jsonl`; no `turns.jsonl` stream is written. pi TUI
+  dispatch records `completion_mode=manual-pi-tui` with no completion event
+  until a real hook/sentinel completion path exists.
 - Codex dispatch installs an idempotent Stop hook with backup/uninstall support
   and updates its own LTO marker when the target repo changes. agy dispatch
   uses `agy --print` so the shell wrapper can emit completion on process exit;

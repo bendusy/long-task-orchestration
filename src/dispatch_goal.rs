@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const LTO_HOOK_MARKER: &str = "long-task-orchestration";
 const CODEX_STOP_HOOK: &str = include_str!("../scripts/hooks/codex-stop-notify.sh");
 const AGY_PRINT_TIMEOUT: &str = "24h";
+const GOAL_CONSTRAINT_SUMMARY: &str = "Use LTO discipline: keep LTO self-managed, run required redlines, use heterogeneous audit before closeout, write the local commit when accepted, and leave release/tag/push to the host.";
 
 #[derive(Debug, Clone)]
 pub struct DispatchGoalOptions {
@@ -34,6 +35,8 @@ struct GoalRunnerPlan {
     ready_patterns: Vec<String>,
     confirm_patterns: Vec<String>,
     needs_probe: bool,
+    completion_event: Option<String>,
+    completion_mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +103,8 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
                 "runner": options.runner,
                 "goal": goal_path.display().to_string(),
                 "target": outcome.target,
-                "completion_event": "agent.turn.completed",
+                "completion_event": outcome.completion_event,
+                "completion_mode": outcome.completion_mode,
                 "turns_jsonl": false,
                 "hook_status": hook_status.status,
             }),
@@ -113,7 +117,11 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     println!("runner={}", options.runner);
     println!("target={}", outcome.target);
     println!("dispatch_record={}", dispatch_path.display());
-    println!("completion_event=agent.turn.completed");
+    println!(
+        "completion_event={}",
+        outcome.completion_event.as_deref().unwrap_or("none")
+    );
+    println!("completion_mode={}", outcome.completion_mode);
     println!("hook_status={} {}", hook_status.status, hook_status.detail);
     Ok(())
 }
@@ -154,14 +162,12 @@ fn run_dispatch(
     runtime
         .block_on(async {
             let target = tmux_runner::prepare_dispatch_target(&config).await?;
-            if options.new_window {
-                tmux_runner::send_dispatch_text(
-                    &config,
-                    &target,
-                    &format!("cd {}", shell_single_quote(&cwd.display().to_string())),
-                )
-                .await?;
-            }
+            tmux_runner::send_dispatch_text(
+                &config,
+                &target,
+                &format!("cd {}", shell_single_quote(&cwd.display().to_string())),
+            )
+            .await?;
             if let Some(launch) = &plan.launch {
                 tmux_runner::send_dispatch_text(&config, &target, launch).await?;
                 tmux_runner::wait_for_dispatch_ready(&config, &target).await?;
@@ -178,6 +184,8 @@ fn run_dispatch(
                 target,
                 capture,
                 repo: cwd.display().to_string(),
+                completion_event: plan.completion_event,
+                completion_mode: plan.completion_mode,
             })
         })
         .map_err(|err| anyhow!("dispatch-goal tmux failure in {}: {err}", repo.display()))
@@ -188,6 +196,8 @@ struct GoalDispatchOutcome {
     target: String,
     capture: String,
     repo: String,
+    completion_event: Option<String>,
+    completion_mode: String,
 }
 
 fn runner_plan(
@@ -202,19 +212,23 @@ fn runner_plan(
         "codex" => GoalRunnerPlan {
             launch: Some(format!("LTO_RUN_ID={} codex", shell_single_quote(run_id))),
             prompt: format!("/goal {goal}"),
-            ready_patterns: vec!["›".to_string(), "gpt-".to_string()],
+            ready_patterns: vec!["gpt-".to_string()],
             confirm_patterns: vec!["Pursuing goal".to_string(), "Working".to_string()],
             needs_probe: true,
+            completion_event: Some("agent.turn.completed".to_string()),
+            completion_mode: "auto-event".to_string(),
         },
         "pi" => GoalRunnerPlan {
-            launch: None,
-            prompt: pi_shell_command(run_id, repo, cwd, &goal_prompt(&goal)),
-            ready_patterns: Vec::new(),
-            confirm_patterns: vec![
-                "pi --no-skills".to_string(),
-                "agent-turn-completed".to_string(),
-            ],
-            needs_probe: false,
+            launch: Some(format!(
+                "LTO_RUN_ID={} pi --no-skills --no-context-files --no-extensions",
+                shell_single_quote(run_id)
+            )),
+            prompt: goal_prompt(&goal),
+            ready_patterns: vec!["deepseek".to_string(), "ctx".to_string()],
+            confirm_patterns: vec!["Working".to_string()],
+            needs_probe: true,
+            completion_event: None,
+            completion_mode: "manual-pi-tui".to_string(),
         },
         "agy" => {
             let prompt = goal_prompt(&goal);
@@ -244,6 +258,8 @@ fn runner_plan(
                     "agent-turn-completed".to_string(),
                 ],
                 needs_probe: false,
+                completion_event: Some("agent.turn.completed".to_string()),
+                completion_mode: "auto-event".to_string(),
             }
         }
         _ => unreachable!("runner validated"),
@@ -251,26 +267,8 @@ fn runner_plan(
 }
 
 fn goal_prompt(goal: &str) -> String {
-    format!("Read the file {goal} and execute it. Follow only the instructions in that goal file.")
-}
-
-fn pi_shell_command(run_id: &str, repo: &Path, cwd: &Path, prompt: &str) -> String {
-    let repo = absolutize(repo)
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| repo.display().to_string());
-    let completion = format!(
-        "{} --repo {} agent-turn-completed --run-id {} --runner pi --cwd {} --rc \"$rc\" --summary {} --source pane-exit",
-        shell_single_quote(&current_lto_bin()),
-        shell_single_quote(&repo),
-        shell_single_quote(run_id),
-        shell_single_quote(&cwd.display().to_string()),
-        shell_single_quote("pi command exited")
-    );
     format!(
-        "LTO_RUN_ID={} pi --no-skills --no-context-files --no-extensions --print {}; rc=$?; {}",
-        shell_single_quote(run_id),
-        shell_single_quote(prompt),
-        completion
+        "Read the file {goal} and execute it. Follow only the instructions in that goal file. {GOAL_CONSTRAINT_SUMMARY}"
     )
 }
 
@@ -293,7 +291,8 @@ fn write_dispatch_record(
         "target": outcome.target,
         "repo": outcome.repo,
         "dispatched_at": crate::state::iso_now(),
-        "completion_event": "agent.turn.completed",
+        "completion_event": outcome.completion_event,
+        "completion_mode": outcome.completion_mode,
         "turns_jsonl": false,
         "hook_status": {
             "status": hook_status.status,
@@ -343,7 +342,7 @@ fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookS
     let repo_abs = absolutize(repo)?.display().to_string();
     let lto_bin = current_lto_bin();
     let command = format!(
-        "LTO_REPO={} LTO_BIN={} bash {}",
+        "LTO_REPO_FALLBACK={} LTO_BIN={} bash {}",
         shell_single_quote(&repo_abs),
         shell_single_quote(&lto_bin),
         shell_single_quote(&script_path.display().to_string())
@@ -575,26 +574,86 @@ mod tests {
             runner_plan("codex", goal, "r1", Path::new("/repo"), Path::new("/repo")).prompt,
             "/goal /tmp/goal.md"
         );
+        assert_eq!(
+            runner_plan("codex", goal, "r1", Path::new("/repo"), Path::new("/repo")).ready_patterns,
+            vec!["gpt-".to_string()]
+        );
+        assert_eq!(
+            runner_plan("codex", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+                .completion_event
+                .as_deref(),
+            Some("agent.turn.completed")
+        );
         assert!(
             runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"))
-                .prompt
+                .launch
+                .as_deref()
+                .unwrap()
                 .starts_with("LTO_RUN_ID='r1' pi --no-skills")
         );
         assert!(
             !runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"))
-                .prompt
-                .contains("cargo fmt")
+                .launch
+                .as_deref()
+                .unwrap()
+                .contains("--print")
         );
         assert!(
             runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"))
                 .prompt
-                .contains("agent-turn-completed")
+                .starts_with("Read the file ")
+        );
+        assert!(
+            runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+                .prompt
+                .contains(GOAL_CONSTRAINT_SUMMARY)
+        );
+        assert!(runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo")).needs_probe);
+        assert_eq!(
+            runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo")).completion_event,
+            None
+        );
+        assert_eq!(
+            runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo")).completion_mode,
+            "manual-pi-tui"
         );
         assert!(
             runner_plan("agy", goal, "r1", Path::new("/repo"), Path::new("/repo"))
                 .prompt
                 .starts_with("agy --print-timeout '24h' --print ")
         );
+        assert!(
+            runner_plan("agy", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+                .prompt
+                .contains("Use LTO discipline")
+        );
+        assert_eq!(
+            runner_plan("agy", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+                .completion_event
+                .as_deref(),
+            Some("agent.turn.completed")
+        );
+    }
+
+    #[test]
+    fn pi_dispatch_confirmation_does_not_reuse_ready_text() {
+        let goal = Path::new("/tmp/goal.md");
+        let plan = runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"));
+
+        assert!(
+            plan.confirm_patterns
+                .iter()
+                .any(|pattern| pattern == "Working")
+        );
+        for ready in &plan.ready_patterns {
+            assert!(
+                !plan
+                    .confirm_patterns
+                    .iter()
+                    .any(|confirm| confirm.eq_ignore_ascii_case(ready)),
+                "pi confirm pattern must not accept ready text `{ready}`"
+            );
+        }
     }
 
     #[test]
@@ -636,11 +695,9 @@ mod tests {
         let stop = value["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 1);
         assert_eq!(stop[0]["_lto_repo"], repo.display().to_string());
-        assert!(
-            stop[0]["hooks"][0]["command"]
-                .as_str()
-                .unwrap()
-                .contains(repo.to_str().unwrap())
-        );
+        let command = stop[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(command.contains("LTO_REPO_FALLBACK="));
+        assert!(!command.contains("LTO_REPO="));
+        assert!(command.contains(repo.to_str().unwrap()));
     }
 }

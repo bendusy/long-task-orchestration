@@ -17,6 +17,7 @@
 | ✅ BUG-4 | 派工结果不进 `state.agent_runs` → autonomous_gate 失真（与 Phase D 同一问题两面）— 已落地 run-scoped scheduler 回填 | 高 | host 先 grep 亲验是否真没回填 |
 | ✅ BUG-1 | scheduler 管道写端泄漏 → 超时任务挂死 — 已加 bounded drain / bounded kill wait | 中 | await 加 `tokio::time::timeout` |
 | ✅ BUG-5 | `.events.lock` 孤立锁 → run 永久卡死 — 已加 pid/owner/time stale recovery + hard-link reclaim，保留 live-lock fail-closed | 低概率高后果 | 加 stale 锁检测（pid+时间戳），不回退 ⑫ fail-closed |
+| ✅ BUG-6 | pi dispatch-goal 非 TTY/`--print` 姿势错误 → 改为 tmux 真 TUI 派工，完成模式诚实标 `manual-pi-tui` | 中（异构池可用性） | 不准用管道/非 TTY 捕获 pi TUI；没有 hook/sentinel 前不伪造自动完成 |
 | ✅ BUG-3 | worktree 异常早退泄漏 persistent worktree — 已坐实并加 scheduler cleanup guard | 中 | host 先亲验真伪再改 |
 | ✅ BUG-8 | 错误静默吞没（heartbeat 文件泄漏确定修；其余确认真才改）— 已修 heartbeat 泄漏、stderr/stdout drain error 记录、tmux sentinel read fail-closed；reply 半截归因驳回 | 中/低 | 逐条核 |
 | BUG-2 残留 | 半写合法数字前缀 / count() 非纯读 | 非阻断 | 顺手硬化，不专门返工 |
@@ -78,7 +79,8 @@ Claude 子代理（同族）漏掉这些，跨族 codex/agy 独立审 + host 亲
   - ❌ "thinking level 爆炸" → 是表象，非真因。
   - ✅ **真根因（host 实测坐实）**：派 pi 时用了 `pi "$(cat ...)" | tee` —— **管道 `| tee` 把 pi TUI 的 stdout 变成非 TTY**，pi 检测到非终端就把交互 TUI 降级成单发/静默，无回显、reply 抓空。codex/agy 正常正因为它们在 pane 里直接跑（TTY）。**正确姿势**：tmux pane 直接起裸 `pi` 进真 TUI（不带 `-p`、不带管道，纯 TTY，状态栏显示 `(deepseek) deepseek-v4-pro • high` + `ctx ~29k/1.0M`），再用 `dispatch_agent.sh -m sentinel` 交付 prompt + 哨兵——和 codex 完全一样。实测这样派 pi 正常 `Working`。
   - **次要优化（非阻塞）**：pi.sh（`:61` deepseek-v4-pro，默认 thinking high）若用于 headless 批量审计，可按 job kind 设 `--thinking low/medium` 提速；但这是优化不是 bug 根因。
-  - **修方向**：① 修 `pi.sh` / dispatch 路径——确保 pi 永远在 TTY 下跑，绝不用管道捕获 TUI 输出（reply 走 dispatch sentinel + 从 TUI/log 捞，不靠 `| tee`）。② 文档化 pi 正确派工姿势（真 TUI + sentinel）。
+  - **修方向（已校准到 dispatch-goal 面）**：① 修 `dispatch-goal` 的 pi 路径——确保 pi 在 TTY/TUI 下跑，绝不用管道捕获 TUI 输出。② 文档化 pi 正确派工姿势（真 TUI；完成事件等 hook/sentinel 实装后再自动化）。
+  - **✅ 已完成（2026-06-17）**：`dispatch-goal --runner pi` 不再生成 `pi --print ...; agent-turn-completed` shell wrapper，而是在 tmux pane 中启动 `pi --no-skills --no-context-files --no-extensions` 真 TUI，等待 ready/probe 后直发 `Read the file ...` prompt。dispatch record / stdout / event fields 对 pi 记录 `completion_event=null`、`completion_mode=manual-pi-tui`，避免在 pi hook/sentinel 未实装前伪造 `agent.turn.completed`。`scripts/delegate/runners/pi.sh` 的 headless audit 路径仍保持 `pi -p --mode json`，不属于 BUG-6 的 dispatch-goal TUI 派工面。
   - **价值**：pi 长期"不可用"实为派工姿势错，修好后异构 runner 池恢复四家，audit/judge 跨族能力完整。
 
 - **BUG-7 state/events 双写不一致（三家全命中，host 亲验坐实，高危——本轮最该修）**：`ops.rs:1533` `save_run` 后 `:1535` `safe_emit` 两步无事务，`safe_emit` 失败静默吞错（`events.rs` eprintln + 返回 None）→ `state.agent_runs` 写了但 `events.jsonl` 没写 → `autonomous_gate`（读 state）与 `cross_run_mining`（读 events，`telemetry.rs:242`）**永久分歧**，两个 reader 报不同 {runs, results}。这是 BUG-4 的精确化：不只"不写 state"，而是两个真源会漂。**codex+agy+pi 三家独立全部命中**，最高信任。**修方向**：让 autonomous_gate / cross_run_mining 读同一数据源（events 为投影则两者都从 state 或都从 events 派生），或两处读取加一致性校验告警；保留 ⑫ 的 safe_emit fail-closed，但 emit 失败要让 state 写入也可感知（不能一方静默成功一方静默失败）。

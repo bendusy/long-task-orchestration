@@ -11,14 +11,14 @@
 L3(dispatch-goal 派工 + 完成通知)和 L4(⑥ 跨 run 复利)**不是两个独立任务,是一条数据流的两端**:
 
 ```
-L3: dispatch 派 codex/pi/agy 长跑 → 每次 turn 完成 → 写 events.jsonl(agent.turn.completed)
+L3: dispatch 派 codex/pi/agy 长跑 → 能可靠观测完成的 runner 写 events.jsonl(agent.turn.completed); pi TUI 当前只记录 completion_mode=manual-pi-tui，不伪造自动完成
                                                           ↓ 同一个文件
 L4: 扫所有 run 的 events.jsonl → 按 (runner 模型 × 任务类型 × 时间) 跨 run 聚合
                               → 哪个 runner 在哪类任务真有效 / 哪条路径反复翻车
                               → 喂 host 出 tuning brief（host 决定，LTO 不自动改 harness）
 ```
 
-**关键**:L3 派出去的 codex/pi/agy 的 turn 完成数据,**正是 L4 要挖的「不同 agent 模型 × 时间」的原料**。backlog ⑥ 明写「必须 ① events.jsonl 先攒够真实日志才有数据可挖」——L3 就是那个「攒数据」的传感器。**分开做会割裂数据流,合起做才是一条贯穿 L1→L4 的事件流。**
+**关键**:L3 派出去的、能可靠观测完成的 runner turn 完成数据,**正是 L4 要挖的「不同 agent 模型 × 时间」的原料**。backlog ⑥ 明写「必须 ① events.jsonl 先攒够真实日志才有数据可挖」——L3 就是那个「攒数据」的传感器。pi TUI 在 completion hook/sentinel 未实装前只提供派工样本，不提供 `agent.turn.completed` 样本。**分开做会割裂数据流,合起做才是一条贯穿 L1→L4 的事件流。**
 
 ## ⚠️ 必读:旧 spec 的割裂(本 goal 必须修)
 
@@ -35,7 +35,8 @@ L4: 扫所有 run 的 events.jsonl → 按 (runner 模型 × 任务类型 × 时
 ## 核心架构裁决(host 已盘清，别另择)
 
 **裁决 1:完成通知 = 写 events.jsonl 的 `agent.turn.completed` 事件(不写 turns.jsonl)。**
-- codex Stop hook / pane-died / sentinel 收到完成信号 → `safe_emit(... "agent.turn.completed" ... fields{runner, session_id, cwd, summary, rc?})`。
+- 仅当 runner 有可靠完成信号时才写 `agent.turn.completed`；codex Stop hook / pane-died / sentinel 收到完成信号 → `safe_emit(... "agent.turn.completed" ... fields{runner, session_id, cwd, summary, rc?})`。
+- pi TUI 当前没有已接入的可靠完成信号，dispatch 只记录 `completion_mode=manual-pi-tui`，不写 `agent.turn.completed`。
 - run 路由靠 payload 的 `cwd`/`session_id`(host 实测 codex Stop hook payload 有这俩)→ 映射到对应 run_id 写它的 events.jsonl。
 - 先扩 `KNOWN_EVENT_TYPES` 加 `agent.turn.completed`(先决,否则拒写)。
 
@@ -53,12 +54,12 @@ L4: 扫所有 run 的 events.jsonl → 按 (runner 模型 × 任务类型 × 时
 
 ## Phase L3-1:dispatch-goal 核心派发(复用旧 spec Phase 1)
 
-按 `2026-06-17-goal-tmux-dispatch-goal-primitive.md` 的 Phase 1 实现:`lto dispatch-goal --runner <codex|pi|agy> --goal <file>`,三家入口编排(codex `/goal` literal / pi 非交互 `--print` wrapper / agy 非交互 `--print` wrapper)+ TUI 坑封装(探针确认 + literal 路径)。复用 `tmux_runner.rs`。注:live `agy --help` 已核实 `-i` 是 `--prompt-interactive`,不能作为可靠的进程退出完成通知点;pi/agy 的 `--print` wrapper 才能由 shell 在退出时 emit `agent.turn.completed`。
+按 `2026-06-17-goal-tmux-dispatch-goal-primitive.md` 的 Phase 1 实现:`lto dispatch-goal --runner <codex|pi|agy> --goal <file>`,三家入口编排(codex `/goal` literal / pi 真 TUI 直发 prompt / agy 非交互 `--print` wrapper)+ TUI 坑封装(探针确认 + literal 路径)。复用 `tmux_runner.rs`。注:live `agy --help` 已核实 `-i` 是 `--prompt-interactive`,不能作为可靠的进程退出完成通知点;agy 的 `--print` wrapper 才能由 shell 在退出时 emit `agent.turn.completed`。pi dispatch-goal 必须保持 TTY/TUI，当前 `completion_event=null` 且 `completion_mode=manual-pi-tui`，直到 pi hook/sentinel 完成信号实装。
 - **判据**:三家 dogfood 实跑通(派测试 goal,确认开跑)。详见旧 spec Phase 1 判据。
 
 ## Phase L3-2:完成通知子系统 → 写 events.jsonl(修割裂)
 
-按旧 spec 的完成通知子系统(codex Stop hook + pane-died + 21 边界 + 自动装 hook + 仲裁 + 降级),**但完成信号 emit `agent.turn.completed` 到 events.jsonl,不写 turns.jsonl**(裁决 1)。
+按旧 spec 的完成通知子系统(codex Stop hook + pane-died + 21 边界 + 自动装 hook + 仲裁 + 降级),**但只有可靠完成信号才 emit `agent.turn.completed` 到 events.jsonl,不写 turns.jsonl**(裁决 1)。
 - 先扩 `KNOWN_EVENT_TYPES` 加 `agent.turn.completed`(先决)。
 - codex Stop hook 脚本(纯 bash / schema 容错 / always exit 0)→ 调 `lto` 内部命令或直接 emit:把 cwd/session_id/summary 写成 `agent.turn.completed` 事件到对应 run 的 events.jsonl。
 - 21 边界、自动装(幂等+备份+可回滚)、仲裁(用户已有 Stop hook 不覆盖)、降级(没装 hook → pane-died/sentinel 兜底)全保留。
@@ -98,7 +99,7 @@ L4: 扫所有 run 的 events.jsonl → 按 (runner 模型 × 任务类型 × 时
 - **先扩 KNOWN_EVENT_TYPES**(先决,否则 agent.turn.completed 被拒写)。
 - **L4 只读守人在环**(裁决 3):recap --mine 绝不自动改 harness/配置/runner 优先级,只出 brief 喂 host。这是硬红线(LTO 与 LangChain L4 的分歧线),审计要确认只读性。
 - **复用不重写**:tmux_runner.rs(L3)/ telemetry.rs by_runner(L4)/ cmd_runs(枚举)/ safe_emit(events)/ codex Stop hook 自动装(旧 spec 设计)——别从零造。
-- 三家入口按实测表并结合 live CLI 纠偏(codex /goal、pi `--print` wrapper、agy `--print` wrapper);TUI 探针+literal 硬要求。
+- 三家入口按实测表并结合 live CLI 纠偏(codex /goal、pi 真 TUI prompt、agy `--print` wrapper);TUI 探针+literal 硬要求。
 - 自动装 codex hook 改用户全局 config 必须幂等+备份+可回滚+仲裁(不覆盖用户已有 hook)。
-- dogfood:dispatch-goal 自己派测试 goal 三家实跑通 + 完成事件真进 events.jsonl + recap --mine 真出 brief 才算完。
+- dogfood:dispatch-goal 自己派测试 goal 三家实跑通；codex/agy 完成事件真进 events.jsonl，pi 只验证真 TUI 派工和 `manual-pi-tui` 模式；recap --mine 真出 brief 才算完。
 - host 亲验是硬停止点;commit 你写,release/tag/push 归 host。
