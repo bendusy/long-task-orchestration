@@ -149,7 +149,7 @@ $L plugin eval-run plugins/adversarial-audit \
 
 `lto-rs` 当前版本走 Rust-only path：source build 用 `cargo`，安装后的 `lto` wrapper 执行 `lto-rs`，Python fallback 不再存在。二进制下载是 release-gated：下载前必须实查 GitHub Releases 是否有对应 `.tar.gz` 和 `.sha256`，校验 checksum 后再运行 `./lto-rs self-test`。不要在未查 live release assets 前声称 GitHub 已有可下载 Rust 二进制。
 
-Release 流程归 host：`lto release --dry-run`、验证、VERSION/CHANGELOG 更新、tag push，然后 CI `release-binaries` 上传 macOS/Linux assets。本任务不负责 release 或 tag。更完整的公开交付门槛见 [references/open-source-delivery-requirements.md](./references/open-source-delivery-requirements.md) 和 [references/rust-migration-release.md](./references/rust-migration-release.md)。
+Release 流程归 host，按确定性 SOP 走：完整步骤见 [references/release-workflow.md](./references/release-workflow.md)，发版前必跑 `bash scripts/release_preflight.sh --version X.Y.Z`（检查版本三处一致 / 隐私扫描 / CI 全部红线 / self-test，全绿才发）。概要：写人话 CHANGELOG → 同步三处版本（Cargo.toml/VERSION/Cargo.lock）→ preflight → commit/push → tag push 触发 CI `release-binaries` 构建 3 平台二进制并上传。更完整的公开交付门槛见 [references/open-source-delivery-requirements.md](./references/open-source-delivery-requirements.md) 和 [references/rust-migration-release.md](./references/rust-migration-release.md)。
 
 ## 什么时候不该用 LTO
 
