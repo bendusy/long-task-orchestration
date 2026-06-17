@@ -81,16 +81,22 @@ pub fn emit(repo: &Path, run_id: &str, record: EventRecord) -> anyhow::Result<Va
         fs::create_dir_all(parent)?;
     }
     let _lock = acquire_events_lock(&path)?;
-    let count = count_file_events(&path)?;
+    let count = read_event_counter(&path)?;
     if count >= HARD_STOP_AT && !record.force {
         anyhow::bail!("event log hard stop at {HARD_STOP_AT} events ({count} present)");
     }
     if count >= WARN_AT {
         eprintln!("warning: event log has {count} events (warn threshold {WARN_AT})");
     }
+    let new_event_id = count + 1;
+    // Persist counter BEFORE writing the event. If the process crashes after
+    // the counter write but before the event append, the event_id gap is
+    // harmless (monotonic, no duplicates). The alternative (counter last)
+    // risks duplicate event_ids on crash — worse.
+    write_event_counter(&path, new_event_id)?;
     let mut event = json!({
         "schema_version": SCHEMA_VERSION,
-        "event_id": count + 1,
+        "event_id": new_event_id,
         "run_id": run_id,
         "at": state::iso_now(),
         "type": record.event_type,
@@ -149,7 +155,7 @@ pub fn read(repo: &Path, run_id: &str) -> anyhow::Result<Vec<Value>> {
 }
 
 pub fn count(repo: &Path, run_id: &str) -> anyhow::Result<usize> {
-    count_file_events(&events_path(repo, run_id))
+    read_event_counter(&events_path(repo, run_id))
 }
 
 pub fn events_path(repo: &Path, run_id: &str) -> PathBuf {
@@ -164,6 +170,34 @@ fn count_file_events(path: &Path) -> anyhow::Result<usize> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .count())
+}
+
+fn events_counter_path(events_path: &Path) -> PathBuf {
+    events_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".events.count")
+}
+
+/// Read the current event count from the counter file.
+/// On first access for a run (no counter file yet), falls back to counting
+/// events.jsonl lines and writes the counter file so subsequent reads are O(1).
+/// Caller must hold the events lock.
+fn read_event_counter(events_path: &Path) -> anyhow::Result<usize> {
+    let counter_path = events_counter_path(events_path);
+    if !counter_path.exists() {
+        let count = count_file_events(events_path)?;
+        fs::write(&counter_path, count.to_string())?;
+        return Ok(count);
+    }
+    let text = fs::read_to_string(&counter_path)?;
+    Ok(text.trim().parse::<usize>().unwrap_or(0))
+}
+
+/// Persist the current event count to the counter file.
+/// Caller must hold the events lock.
+fn write_event_counter(events_path: &Path, count: usize) -> anyhow::Result<()> {
+    fs::write(events_counter_path(events_path), count.to_string()).map_err(Into::into)
 }
 
 struct EventsLockGuard {
@@ -384,5 +418,170 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0]["summary"], "first");
         assert_eq!(events[1]["summary"], "second");
+    }
+
+    #[test]
+    fn event_counter_increments_correctly_and_is_written_to_file() {
+        // BUG-2: counter file replaces O(N) full-file line counting.
+        // After N emits the counter file must read N and the (N+1)th
+        // event must carry event_id N+1.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let ev_path = events_path(repo, "r1");
+        let counter_path = events_counter_path(&ev_path);
+
+        for i in 1..=100 {
+            let event = emit(
+                repo,
+                "r1",
+                EventRecord {
+                    event_type: "artifact.registered".to_string(),
+                    actor_kind: "lto".to_string(),
+                    summary: format!("event {i}"),
+                    ..EventRecord::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(event["event_id"], i, "event_id mismatch at emit {i}");
+            let raw = fs::read_to_string(&counter_path).unwrap();
+            assert_eq!(
+                raw.trim(),
+                i.to_string(),
+                "counter file mismatch at emit {i}"
+            );
+        }
+        // Counter file is tiny — just a few bytes, not ~100 lines of JSON.
+        let counter_size = fs::metadata(&counter_path).unwrap().len();
+        let events_size = fs::metadata(&ev_path).unwrap().len();
+        assert!(
+            counter_size < events_size / 2,
+            "counter file ({counter_size}B) should be much smaller than events file ({events_size}B)"
+        );
+    }
+
+    #[test]
+    fn hard_stop_triggers_at_limit_via_counter_file() {
+        // HARD_STOP_AT must still fire when the counter reaches 50k.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let ev_path = events_path(repo, "r1");
+        fs::create_dir_all(ev_path.parent().unwrap()).unwrap();
+        // Seed the counter at HARD_STOP_AT.
+        fs::write(
+            events_counter_path(&ev_path),
+            crate::events::HARD_STOP_AT.to_string(),
+        )
+        .unwrap();
+        let err = emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "should be blocked".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("hard stop"),
+            "expected hard stop error, got: {err}"
+        );
+        // force=true bypasses the limit.
+        let event = emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "forced".to_string(),
+                force: true,
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(event["event_id"], HARD_STOP_AT + 1);
+    }
+
+    #[test]
+    fn counter_migrates_from_existing_events_file() {
+        // When a run predates the counter file, the first emit must fall
+        // back to counting events.jsonl lines and persist the counter.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let ev_path = events_path(repo, "r1");
+        fs::create_dir_all(ev_path.parent().unwrap()).unwrap();
+        fs::write(
+            &ev_path,
+            "{\"event_id\":1}\n{\"event_id\":2}\n{\"event_id\":3}\n",
+        )
+        .unwrap();
+        assert!(!events_counter_path(&ev_path).exists());
+
+        let event = emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "migration test".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        // 3 existing events → next event_id = 4.
+        assert_eq!(event["event_id"], 4);
+        // Counter file must now exist with value 4.
+        let counter_val = fs::read_to_string(events_counter_path(&ev_path)).unwrap();
+        assert_eq!(counter_val.trim(), "4");
+        // Second emit uses counter (O(1)), not re-counting the file.
+        let event2 = emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "second after migration".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(event2["event_id"], 5);
+    }
+
+    #[test]
+    fn counter_read_write_is_atomic_under_lock() {
+        // Multiple concurrent emitters under the file lock must produce
+        // unique, gap-free event_ids via the counter file (not full reads).
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().to_path_buf();
+        let handles = (0..64)
+            .map(|idx| {
+                let repo = repo.clone();
+                std::thread::spawn(move || {
+                    emit(
+                        &repo,
+                        "r1",
+                        EventRecord {
+                            event_type: "artifact.registered".to_string(),
+                            actor_kind: "lto".to_string(),
+                            summary: format!("concurrent {idx}"),
+                            ..EventRecord::default()
+                        },
+                    )
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let mut ids = read(&repo, "r1")
+            .unwrap()
+            .into_iter()
+            .map(|event| event["event_id"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=64).collect::<Vec<_>>());
     }
 }
