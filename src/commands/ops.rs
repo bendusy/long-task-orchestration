@@ -1525,7 +1525,7 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
         size: TaskSize::Unknown,
         merge_review: None,
     };
-    let result_value = serde_json::to_value(result)?;
+    let result_value = serde_json::to_value(&result)?;
     let agent_runs = util::json_object_mut(&mut ctx.state.agent_runs);
     let entries = agent_runs
         .entry(options.task_id.clone())
@@ -1560,6 +1560,8 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
             object_type: Some("task".to_string()),
             summary: format!("collected {} status={status}", options.runner),
             fields: json!({
+                "runner": options.runner.clone(),
+                "model": result.model.clone(),
                 "status": status.clone(),
                 "tokens": meta.get("tokens").cloned().unwrap_or(Value::Null),
                 "elapsed_sec": options.elapsed_sec,
@@ -4770,6 +4772,44 @@ sys.exit(0)
             args,
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    #[test]
+    fn collect_agent_run_emits_runner_and_model_fields() {
+        let h = Harness::new();
+        h.write_state(LtoState {
+            tasks: json!([
+                {"id": "T1", "status": "pending", "commands_run": [], "evidence": [], "blockers": []}
+            ]),
+            ..base_state()
+        });
+        fs::write(h.repo.join("reply.txt"), "collected output\n").unwrap();
+
+        cmd_collect_agent_run(
+            &h.repo,
+            CollectAgentRunOptions {
+                run_id: Some("r1".into()),
+                task_id: "T1".into(),
+                runner: "codex".into(),
+                reply: PathBuf::from("reply.txt"),
+                meta: None,
+                model: Some("gpt-5".into()),
+                status: Some("ok".into()),
+                elapsed_sec: Some(12.0),
+                note: None,
+            },
+        )
+        .unwrap();
+
+        let events =
+            fs::read_to_string(h.repo.join(".lto").join("r1").join("events.jsonl")).unwrap();
+        let finished = events
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|event| event.get("type").and_then(Value::as_str) == Some("runner.finished"))
+            .unwrap();
+        assert_eq!(finished["fields"]["runner"], json!("codex"));
+        assert_eq!(finished["fields"]["model"], json!("gpt-5"));
     }
 
     #[test]

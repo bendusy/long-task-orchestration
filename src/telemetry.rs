@@ -195,6 +195,7 @@ pub struct CrossRunMining {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CrossRunMiningEntry {
     pub runner: String,
+    pub model: String,
     pub task_type: String,
     pub time_window: String,
     pub dispatches: usize,
@@ -243,7 +244,7 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
     let run_ids = discover_run_ids(repo)?;
     let mut audit_rounds_by_run = BTreeMap::<String, usize>::new();
     let mut subjective_runs = BTreeSet::<String>::new();
-    let mut slots = BTreeMap::<(String, String, String), CrossRunSlot>::new();
+    let mut slots = BTreeMap::<(String, String, String, String), CrossRunSlot>::new();
 
     for run_id in &run_ids {
         let events = match events::read(repo, run_id) {
@@ -263,10 +264,13 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
             subjective_runs.insert(run_id.clone());
         }
 
+        let model_hints = model_hints_for_run(&events);
         for event in events {
             match event_type(&event) {
                 "runner.finished" => record_runner_finished(&mut slots, run_id, &event),
-                "agent.turn.completed" => record_agent_turn_completed(&mut slots, run_id, &event),
+                "agent.turn.completed" => {
+                    record_agent_turn_completed(&mut slots, run_id, &event, &model_hints);
+                }
                 _ => {}
             }
         }
@@ -282,7 +286,7 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
 
     let entries = slots
         .into_iter()
-        .map(|((runner, task_type, time_window), slot)| {
+        .map(|((runner, model, task_type, time_window), slot)| {
             let dispatches = slot.distinct_runs.len();
             let failed = slot.failed_runs.len();
             let total_audit_rounds = slot
@@ -292,6 +296,7 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
                 .sum::<usize>();
             CrossRunMiningEntry {
                 runner,
+                model,
                 task_type,
                 time_window,
                 dispatches,
@@ -320,7 +325,7 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
 }
 
 fn record_runner_finished(
-    slots: &mut BTreeMap<(String, String, String), CrossRunSlot>,
+    slots: &mut BTreeMap<(String, String, String, String), CrossRunSlot>,
     run_id: &str,
     event: &Value,
 ) {
@@ -364,12 +369,17 @@ fn record_runner_finished(
 }
 
 fn record_agent_turn_completed(
-    slots: &mut BTreeMap<(String, String, String), CrossRunSlot>,
+    slots: &mut BTreeMap<(String, String, String, String), CrossRunSlot>,
     run_id: &str,
     event: &Value,
+    model_hints: &BTreeMap<(String, String, String), Option<String>>,
 ) {
     let runner = runner_from_event(event);
-    let key = mining_key(event, &runner);
+    let key = mining_key_with_model(
+        event,
+        &runner,
+        model_for_completed(event, &runner, model_hints),
+    );
     let slot = slots.entry(key).or_default();
     slot.completed_runs.insert(run_id.to_string());
     slot.distinct_runs.insert(run_id.to_string());
@@ -426,7 +436,70 @@ fn runner_status(event: &Value) -> String {
         })
 }
 
-fn mining_key(event: &Value, runner: &str) -> (String, String, String) {
+fn model_hints_for_run(events: &[Value]) -> BTreeMap<(String, String, String), Option<String>> {
+    let mut hints = BTreeMap::new();
+    for event in events {
+        if event_type(event) != "runner.finished" {
+            continue;
+        }
+        let model = model_from_event(event);
+        if model == "unknown" {
+            continue;
+        }
+        let runner = runner_from_event(event);
+        let key = task_slot_key(event, &runner);
+        hints
+            .entry(key)
+            .and_modify(|existing: &mut Option<String>| {
+                if existing.as_ref() != Some(&model) {
+                    *existing = None;
+                }
+            })
+            .or_insert(Some(model));
+    }
+    hints
+}
+
+fn model_from_event(event: &Value) -> String {
+    event
+        .get("fields")
+        .and_then(|fields| fields.get("model"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn model_for_completed(
+    event: &Value,
+    runner: &str,
+    model_hints: &BTreeMap<(String, String, String), Option<String>>,
+) -> String {
+    let model = model_from_event(event);
+    if model != "unknown" {
+        return model;
+    }
+    model_hints
+        .get(&task_slot_key(event, runner))
+        .and_then(|model| model.clone())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn mining_key(event: &Value, runner: &str) -> (String, String, String, String) {
+    mining_key_with_model(event, runner, model_from_event(event))
+}
+
+fn mining_key_with_model(
+    event: &Value,
+    runner: &str,
+    model: String,
+) -> (String, String, String, String) {
+    let (runner, task_type, time_window) = task_slot_key(event, runner);
+    (runner, model, task_type, time_window)
+}
+
+fn task_slot_key(event: &Value, runner: &str) -> (String, String, String) {
     (
         runner.to_string(),
         task_type(
@@ -747,11 +820,196 @@ mod tests {
             .iter()
             .find(|entry| entry.runner == "codex" && entry.task_type == "implementation")
             .unwrap();
+        assert_eq!(entry.model, "unknown");
         assert_eq!(entry.distinct_runs, 2);
         assert_eq!(entry.failed, 2);
         assert_eq!(entry.ok, 2);
         assert_eq!(entry.agent_turn_completed, 1);
         assert_eq!(entry.avg_retry, Some(1.0));
+    }
+
+    #[test]
+    fn cross_run_mining_splits_same_runner_task_by_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        for run_id in ["r1", "r2"] {
+            let run_dir = repo.join(".lto").join(run_id);
+            fs::create_dir_all(&run_dir).unwrap();
+            fs::write(
+                run_dir.join("state.json"),
+                serde_json::to_string_pretty(&LtoState {
+                    run_id: run_id.to_string(),
+                    ..LtoState::default()
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "model": "gpt-5", "status": "ok"}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        emit(
+            repo,
+            "r2",
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "model": "gpt-5.5", "status": "failed"}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let mining = cross_run_mining(repo).unwrap();
+        let mut models = mining
+            .entries
+            .iter()
+            .filter(|entry| entry.runner == "codex" && entry.task_type == "implementation")
+            .map(|entry| (entry.model.as_str(), entry.ok, entry.failed))
+            .collect::<Vec<_>>();
+        models.sort();
+        assert_eq!(models, vec![("gpt-5", 1, 0), ("gpt-5.5", 0, 1)]);
+    }
+
+    #[test]
+    fn cross_run_mining_infers_missing_turn_model_from_unique_run_slot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_dir = repo.join(".lto").join("r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("state.json"),
+            serde_json::to_string_pretty(&LtoState {
+                run_id: "r1".to_string(),
+                ..LtoState::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "model": "gpt-5", "status": "ok"}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "agent.turn.completed".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "rc": 0}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let mining = cross_run_mining(repo).unwrap();
+        let mut models = mining
+            .entries
+            .iter()
+            .filter(|entry| entry.runner == "codex" && entry.task_type == "implementation")
+            .map(|entry| {
+                (
+                    entry.model.as_str(),
+                    entry.ok,
+                    entry.failed,
+                    entry.agent_turn_completed,
+                )
+            })
+            .collect::<Vec<_>>();
+        models.sort();
+        assert_eq!(models, vec![("gpt-5", 1, 0, 1)]);
+    }
+
+    #[test]
+    fn cross_run_mining_keeps_missing_turn_model_unknown_when_run_slot_is_ambiguous() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_dir = repo.join(".lto").join("r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("state.json"),
+            serde_json::to_string_pretty(&LtoState {
+                run_id: "r1".to_string(),
+                ..LtoState::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        for model in ["gpt-5", "gpt-5.5"] {
+            emit(
+                repo,
+                "r1",
+                EventRecord {
+                    event_type: "runner.finished".to_string(),
+                    actor_kind: "runner".to_string(),
+                    actor_id: Some("codex".to_string()),
+                    task_id: Some("L3".to_string()),
+                    fields: json!({"runner": "codex", "model": model, "status": "ok"}),
+                    ..EventRecord::default()
+                },
+            )
+            .unwrap();
+        }
+        emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "agent.turn.completed".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "rc": 0}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let mining = cross_run_mining(repo).unwrap();
+        let mut models = mining
+            .entries
+            .iter()
+            .filter(|entry| entry.runner == "codex" && entry.task_type == "implementation")
+            .map(|entry| {
+                (
+                    entry.model.as_str(),
+                    entry.ok,
+                    entry.failed,
+                    entry.agent_turn_completed,
+                )
+            })
+            .collect::<Vec<_>>();
+        models.sort();
+        assert_eq!(
+            models,
+            vec![
+                ("gpt-5", 1, 0, 0),
+                ("gpt-5.5", 1, 0, 0),
+                ("unknown", 1, 0, 1),
+            ]
+        );
     }
 
     #[test]
@@ -789,6 +1047,7 @@ mod tests {
             .iter()
             .find(|entry| entry.runner == "pi")
             .unwrap();
+        assert_eq!(entry.model, "unknown");
         assert_eq!(entry.task_type, "implementation");
         assert_eq!(entry.distinct_runs, 1);
         assert_eq!(entry.failed, 1);

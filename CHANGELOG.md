@@ -67,6 +67,17 @@
   wired `ledger_sequence` into `check`/`closeout` ledger gate messages so audit
   non-convergence reports include the blocker sequence.
 
+### Phase C model-aware cross-run mining
+
+- Extended `recap --mine` cross-run mining from `runner x task x time_window` to
+  `runner x model x task x time_window`, preserving old events by grouping
+  missing or empty model fields as `unknown`. `agent.turn.completed` events
+  without a model inherit the unique model from the same run/runner/task/time
+  slot when one exists; ambiguous multi-model slots stay `unknown`.
+- Added the model column to the read-only mining brief and made manual
+  `collect-agent-run` emit `runner.finished.fields.runner/model`, matching the
+  scheduler-backed event shape. Derived WARN lines now include the model name.
+
 ### L3 dispatch-goal and L4 cross-run mining
 
 - Added `lto dispatch-goal` for tmux-backed goal dispatch to codex, pi, and agy,

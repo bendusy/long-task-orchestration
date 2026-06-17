@@ -25,7 +25,7 @@
 **🟡 待做 Phase**：
 | Phase | 内容 | 价值 |
 |---|---|---|
-| C | 补 ⑦ **model 维度** 到 cross_run_mining（slot key 3→4 元组加 model） | 高（四层 loop 真缺口） |
+| ✅ C | 补 ⑦ **model 维度** 到 cross_run_mining（slot key 3→4 元组加 model）— 已落地并通过 R2 异构审计收敛 | 高（四层 loop 真缺口） |
 | ✅ A | 接线/删除 4 个函数孤岛（parse_agy_stdout / command_with_args / ledger_sequence / os_strs）— commit `45178a9` | 小（热身） |
 | ✅ B | agy runner 事件解析未接进生产流 — commit `45178a9` 删除 `runner_events` 整体孤岛，见本节裁决 | 中 |
 | F | 4 个未挂载插件去留裁决（含隐私扫描 meeting-transcript） | 中 |
@@ -135,6 +135,15 @@ host 亲验坐实（grep 全仓定义数 > 使用数，扣除测试）：
 - model 缺失时优雅降级（老 run 无 model 字段 → 标 "unknown"，不 panic）。
 
 **完成判据**：`recap --mine` 输出表格有 model 列；构造一个带 model 的 events.jsonl fixture 测试断言按 model 分组；老 run（无 model）不崩、标 unknown；`cargo test` 全绿。
+
+**当前裁决（2026-06-17）**：已按最小接线分支落地。`cross_run_mining` 现在按
+`runner × model × task_type × time_window` 分组；老事件缺失/空 model 时降级为
+`unknown`。`agent.turn.completed` 不扩 CLI，但会在同一 run、同一 runner/task/time
+槽位只有一个明确 `runner.finished` model 时继承该 model；多模型歧义保持
+`unknown`，避免错误归因。`recap --mine` 表格和派生 WARN 均显示 model，
+`collect-agent-run` 的 manual `runner.finished` 事件也补齐 `fields.runner/model`。
+R1 pi/agy 审计指出 split-slot 和 WARN 缺 model；修复后 R2 pi/agy 返回 `[]`，
+`audit_ledger_check --strict` 判定 `CONVERGED`。
 
 ## Phase D：③ autonomous_gate 升级为证据驱动（中，但守红线）
 

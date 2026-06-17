@@ -389,14 +389,16 @@ fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
         lines.push("未发现可挖掘的 runner.finished 或 agent.turn.completed 事件。".to_string());
         return lines.join("\n");
     }
-    lines.push("| Runner | 任务类型 | 时间窗 | distinct runs | 失败率 | 平均耗时 | 平均 retry | 平均 audit 轮次 | turn.completed | 评估类型 |".to_string());
+    lines.push("| Runner | Model | 任务类型 | 时间窗 | distinct runs | 失败率 | 平均耗时 | 平均 retry | 平均 audit 轮次 | turn.completed | 评估类型 |".to_string());
     lines.push(
-        "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |".to_string(),
+        "| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |"
+            .to_string(),
     );
     for entry in &mining.entries {
         lines.push(format!(
-            "| {} | {} | {} | {} | {:.1}% | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {:.1}% | {} | {} | {} | {} | {} |",
             entry.runner,
+            entry.model,
             entry.task_type,
             entry.time_window,
             entry.distinct_runs,
@@ -420,8 +422,9 @@ fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
         if rate >= 0.3 && entry.distinct_runs >= 3 {
             emitted = true;
             lines.push(format!(
-                "WARN {} 在 {} 类任务 failure_rate={:.1}% over {} distinct runs。",
+                "WARN {} ({}) 在 {} 类任务 failure_rate={:.1}% over {} distinct runs。",
                 entry.runner,
+                entry.model,
                 entry.task_type,
                 rate * 100.0,
                 entry.distinct_runs
@@ -430,8 +433,9 @@ fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
         if entry.avg_audit_rounds.unwrap_or(0.0) >= 3.0 {
             emitted = true;
             lines.push(format!(
-                "WARN {} 关联 runs 平均 audit 收敛轮次 {:.1}。",
+                "WARN {} ({}) 关联 runs 平均 audit 收敛轮次 {:.1}。",
                 entry.runner,
+                entry.model,
                 entry.avg_audit_rounds.unwrap_or(0.0)
             ));
         }
@@ -532,6 +536,7 @@ mod tests {
             run_count: 2,
             entries: vec![crate::telemetry::CrossRunMiningEntry {
                 runner: "pi".to_string(),
+                model: "deepseek-v4-pro".to_string(),
                 task_type: "implementation".to_string(),
                 time_window: "2026-06-17".to_string(),
                 dispatches: 2,
@@ -550,7 +555,7 @@ mod tests {
 
         assert!(brief.contains("只读分析：不写配置、不改 runner 优先级、不自动 route/promote。"));
         assert!(brief.contains(
-            "| pi | implementation | 2026-06-17 | 2 | 50.0% | 12.0s | 0.5 | 1.0 | 2 | 客观测量 |"
+            "| pi | deepseek-v4-pro | implementation | 2026-06-17 | 2 | 50.0% | 12.0s | 0.5 | 1.0 | 2 | 客观测量 |"
         ));
     }
 
