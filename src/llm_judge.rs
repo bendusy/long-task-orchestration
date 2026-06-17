@@ -3,7 +3,7 @@ use crate::agent_job::{
 };
 use crate::audit::{BlockerQuality, JudgeVerdict, SubjectiveJudgment, same_family};
 use crate::scheduler::{HealthProbe, Scheduler};
-use regex::{Regex, RegexBuilder};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -14,24 +14,10 @@ use std::sync::LazyLock;
 pub const VERDICT_SCHEMA_VERSION: u64 = 1;
 pub const MAX_JUDGE_INPUT_BYTES: usize = 256 * 1024;
 pub const JUDGE_POOL: &[&str] = &["codex", "pi", "agy", "claude"];
+#[cfg(test)]
 const REDACT_SECRET: &str = "[REDACTED_SECRET]";
+#[cfg(test)]
 const REDACT_PATH: &str = "[REDACTED_PATH]";
-
-static SECRET_RE: LazyLock<Regex> = LazyLock::new(|| {
-    RegexBuilder::new(
-        r#"-----BEGIN[^-]*PRIVATE KEY-----.*?-----END[^-]*PRIVATE KEY-----|sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?i:api[_-]?key|secret|token|password|passwd|pwd|access[_-]?token)\s*[:=]\s*["']?[A-Za-z0-9_\-./+=]{6,}["']?"#,
-    )
-    .dot_matches_new_line(true)
-    .build()
-    .expect("invalid judge secret redaction regex")
-});
-
-static FULL_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?:\\?/|/)(?:Users|home)(?:\\?/|/)[^\s"'`,;:)\]}]+|/root/[^\s"'`,;:)\]}]+|[A-Za-z]:\\Users\\[^\s"'`,;:)\]}]+"#,
-    )
-    .expect("invalid judge private path redaction regex")
-});
 
 static FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)```json\s*(.*?)\s*```").expect("invalid judge JSON fence regex")
@@ -78,11 +64,13 @@ pub fn judge_output_schema() -> Value {
     })
 }
 
+/// Re-export the single redaction source of truth (backlog ⑫). Kept as a
+/// `llm_judge::redact_text` symbol so existing callers (ops.rs, tmux_runner.rs)
+/// need no change. Uses the verbatim variant (no whitespace-collapse / no
+/// truncation) so frozen-evidence keeps its exact shape for stable hashing —
+/// the patterns now live in one place: `crate::redact`.
 pub fn redact_text(text: &str) -> String {
-    let without_secrets = SECRET_RE.replace_all(text, REDACT_SECRET);
-    FULL_PATH_RE
-        .replace_all(&without_secrets, REDACT_PATH)
-        .into_owned()
+    crate::redact::redact_secrets_and_paths(text)
 }
 
 pub fn freeze_evidence(

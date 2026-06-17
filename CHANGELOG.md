@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Hardening from heterogeneous audit findings (backlog ⑫)
+
+- events.jsonl now fails closed on lock timeout: instead of a lock-less
+  best-effort write that could interleave a corrupt JSONL line, `emit` returns
+  an error (dropped by `safe_emit`) — events are an observability projection, so
+  losing one clean event beats corrupting the log. The record is also written in
+  a single `write_all` so it stays atomic under `O_APPEND`.
+- Unified secret/path redaction into one source of truth in `redact.rs`. The
+  former weaker copy leaked `/root`, Windows paths, `github_pat_` tokens and
+  `key=value` pairs into events/telemetry; the merged superset covers them.
+  `llm_judge` re-exports a verbatim variant (no whitespace-collapse/truncation)
+  so frozen-evidence hashing keeps its exact shape.
+- Investigated but not changed (auditor false positives, verified): `test_cmd`
+  shell execution is a trusted operator-supplied command that never passes
+  through the `classify_effect` gate, and `RunnerFamily::Unknown` already
+  isolates by name. ReDoS was a non-issue (Rust's regex engine is linear-time).
+
 ### Lean context for one-shot review dispatch (backlog ⑪)
 
 - Audit and judge jobs now set `LTO_LEAN_CONTEXT=1` on the dispatched job env.

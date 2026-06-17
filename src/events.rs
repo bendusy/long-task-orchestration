@@ -112,8 +112,14 @@ pub fn emit(repo: &Path, run_id: &str, record: EventRecord) -> anyhow::Result<Va
     if !fields.is_null() && !fields.as_object().is_some_and(serde_json::Map::is_empty) {
         event["fields"] = fields;
     }
+    // Single write_all of the line+newline (backlog ⑫): writeln! emits the JSON
+    // and the '\n' as two separate write() syscalls; one buffered write_all keeps
+    // the record atomic under O_APPEND, so even a future concurrent writer cannot
+    // interleave mid-line. Belt-and-suspenders with the fail-closed lock above.
+    let mut line = serde_json::to_string(&event)?;
+    line.push('\n');
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-    writeln!(file, "{}", serde_json::to_string(&event)?)?;
+    file.write_all(line.as_bytes())?;
     Ok(event)
 }
 
@@ -169,12 +175,21 @@ impl Drop for EventsLockGuard {
     }
 }
 
+const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn acquire_events_lock(path: &Path) -> anyhow::Result<Option<EventsLockGuard>> {
+    acquire_events_lock_with_timeout(path, LOCK_TIMEOUT)
+}
+
+fn acquire_events_lock_with_timeout(
+    path: &Path,
+    timeout: Duration,
+) -> anyhow::Result<Option<EventsLockGuard>> {
     let lock_path = path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(".events.lock");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + timeout;
     loop {
         match OpenOptions::new()
             .write(true)
@@ -184,8 +199,16 @@ fn acquire_events_lock(path: &Path) -> anyhow::Result<Option<EventsLockGuard>> {
             Ok(_) => return Ok(Some(EventsLockGuard { path: lock_path })),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 if Instant::now() >= deadline {
-                    eprintln!("warning: events lock timeout; proceeding best-effort");
-                    return Ok(None);
+                    // fail-closed (backlog ⑫): refuse a lock-less best-effort write.
+                    // Two writers without the lock can interleave a half-written
+                    // JSONL line that read() silently skips → lost events. Events
+                    // are an observability projection (.lto state is the source of
+                    // truth), so dropping one clean event via safe_emit's Err arm
+                    // is strictly better than corrupting the log. Consistent with
+                    // the repo's read-only / sandbox fail-closed posture.
+                    anyhow::bail!(
+                        "events lock timeout; refusing best-effort write to avoid interleave"
+                    );
                 }
                 thread::sleep(Duration::from_millis(20));
             }
@@ -305,6 +328,40 @@ mod tests {
             .collect::<Vec<_>>();
         ids.sort_unstable();
         assert_eq!(ids, (1..=32).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn lock_timeout_fails_closed_instead_of_lockless_write() {
+        // backlog ⑫: when the lock is held, acquiring with a 0-timeout must bail
+        // (fail-closed), never return Ok(None) to take the best-effort path. The
+        // lock-less path previously risked interleaved/corrupt JSONL lines.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Hold the lock by creating the lock file ourselves.
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        fs::write(&lock_path, b"").unwrap();
+
+        match acquire_events_lock_with_timeout(&path, Duration::from_millis(0)) {
+            Err(err) => assert!(err.to_string().contains("lock timeout"), "got: {err}"),
+            Ok(_) => panic!("held lock with 0 timeout must fail, not fall back to lock-less write"),
+        }
+
+        // Releasing the lock restores normal emit (no corruption, no leftover state).
+        // We don't call emit() while the lock is held — that would block ~5s on the
+        // real LOCK_TIMEOUT; the low-level fail-closed contract above is the point.
+        fs::remove_file(&lock_path).unwrap();
+        let ok = safe_emit(
+            tmp.path(),
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "after unlock".to_string(),
+                ..EventRecord::default()
+            },
+        );
+        assert!(ok.is_some(), "emit should succeed once the lock is free");
     }
 
     #[test]

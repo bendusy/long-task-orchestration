@@ -136,14 +136,14 @@
 - **不破坏**：异构性不变（仍跨族 failover）；只是去掉每次冷启重载的浪费 + warm cache 跨轮。
 - **撤回的错误方向**：原 ⑪ 写「给 audit 加 runner 优先级绕开 pi」是**治标且方向错**——pi 慢是调度方式（冷启重载）不是 pi 本身,绕开它没解决根因（agy/claude headless 同样冷启）。先修调度效率，不是排序。
 
-## ⑫ 存量 security/并发关切（异构 auditor 挖出，2026-06-17，待 host 决策是否立 goal）
+## ⑫ 存量 security/并发关切（异构 auditor 挖出 → 逐条深核定性 → 真问题已修，2026-06-17）
 
-> 来源：⑪ Phase 1 收口跑 `lto audit`（pi+agy 审全 codebase），挖出与本次 diff 无关的**存量**问题。host 亲验抽查后保留「真值得跟」的，过滤掉行号幻觉误报（如 pi 报 audit.rs:102 丢 unknown severity，亲验该行实为提取 file 字段）。**未深核，立 goal 时需专门一轮异构审逐条验 PoC**。
+> 来源：⑪ Phase 1 收口跑 `lto audit`（pi+agy 审全 codebase）挖出的**存量**问题。**处置方法（防 auditor 误报盲改）**：每条派独立子代理读真源 + 构造 PoC 判真假，host 亲验关键论据，只修真问题，误报记录不改。坐实「auditor 系统性偏差：把事实信号工具误当安全边界、不核引擎类型就报 ReDoS、把不相关环节凑成攻击链」。
 
-- **events.rs lock 超时 fallback**（pi CRITICAL）：`acquire_events_lock` 5s 超时后无锁 best-effort 写，并发下可能 JSONL 行交错→损坏行被 `read()` 静默跳过。待压测验证可触发性。
-- **redact 双正则不一致**（pi HIGH + agy ReDoS HIGH）：`redact.rs` vs `llm_judge.rs` 两套 SECRET_RE/path 正则，dot_matches_new_line/JWT/path 模式不同，一存疏漏即脱敏绕过。无跨模块一致性测试。建议合一或加一致性 gate。
-- **shell_command 可绕 classify_effect**（pi HIGH）：`merge_review.rs` 的 test_cmd 走 `sh -c`，classify_effect 是正则 denylist 非结构解析，理论可绕（`echo safe && sh -c 'rm -rf .'`）。待 PoC 验证。
-- **RunnerFamily::Unknown 隔离**（agy HIGH）：未知 runtime 归 Unknown 时跨族隔离是否失效，待核。
+- **events.rs lock 超时 fallback**（pi CRITICAL → 实为 LOW/MEDIUM → ✅ 已修）：深核判定半真——持锁路径完全串行、5s 超时正常永不触发、read dedup 兜底、LTO 实际不在进程内并发 emit，四层缓解被 pi 漏判。但仍是真隐患。**修**（fail-closed 哲学）：锁超时 `bail!` 拒绝无锁 best-effort 写（`events.rs` `acquire_events_lock_with_timeout`），事件经 `safe_emit` 优雅丢弃而非污染 JSONL（events 是投影，.lto state 才是真源）；顺手把 `writeln!` 改单次 `write_all` 保 O_APPEND 原子。测试 `lock_timeout_fails_closed_instead_of_lockless_write`（timeout 可注入，0ms 即测不等 5s）。
+- **redact 双正则不一致**（pi HIGH + agy ReDoS → 覆盖盲点真 / 双标假 / ReDoS 误报 → ✅ 已修）：深核——`redact.rs` 弱套 ⊂ `llm_judge.rs` 强套，弱套漏 `/root`/Windows/`github_pat_`/`key=value`（这些落 events.jsonl/telemetry 是真泄漏）；但两套作用于**不相交输出域**，非「同数据双标」；ReDoS **误报**（Rust `regex` crate 线性引擎，实测 150k 病态输入 4ms）。**修**：合一为 `redact.rs` 单一真源（强套超集 + 修 PEM 单行 BEGIN 漏脱的回归），`llm_judge::redact_text` 转调 `crate::redact::redact_secrets_and_paths`（拆出**保原样不压空白不截断**的变体，judge 冻结证据需精确 shape；`redact_text` 仍压空白+截断给 events）。测试 `redacts_superset_secrets_and_paths_from_backlog_12`。
+- **shell_command 可绕 classify_effect**（pi HIGH → 误报，不修）：深核坐实——test_cmd **根本不过 classify_effect gate**（该 gate 只在 worktree.rs/ops.rs 沙箱原语，host 已亲验）；test_cmd 是受信操作者配置（等价 CI script，能写 job-spec 者已有 RCE），`sh -c` 是必需语义。pi 把沙箱 gate 嫁接到 test_cmd 凑攻击链。加 test_cmd 的 gate 会误杀合法测试命令、零安全收益（CLAUDE.md「形似不等于同病」同款）。**不修**。
+- **RunnerFamily::Unknown 隔离**（agy HIGH → 误报，不修）：host 亲验——`derive(PartialEq,Eq)` + `Unknown(String)` 带名，不同名 Unknown 是不同族（隔离成立）；AUDITOR_POOL 写死已知 runner，Unknown 实际不出现在审计选择。不构成真洞。
 - 已知非新问题（不立项）：readonly intent 对 agy 升 workspace-write（pi HIGH）——`runner-readonly-contract.md` 早记录，agy 无 read-only 档，设计如此。
 
 > 维护：项落地后更新本表「状态」列并在 `CHANGELOG.md` 记一笔；新 deferred 入此表，勿散落记忆。
