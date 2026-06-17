@@ -1384,14 +1384,17 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
         &host,
         &run_id,
     )?;
-    crate::event_emit::emit_runner_results(
+    crate::event_emit::emit_runner_results_checked(
         repo,
         &run_id,
         Some(state.current_phase.as_str()),
         None,
         "audit.auto_dispatch",
         &results,
-    );
+    )?;
+    let mut run_ctx = util::load_run(repo, Some(&run_id))?;
+    util::append_agent_results_to_state(&mut run_ctx.state, None, &results)?;
+    util::save_run(&run_ctx)?;
     let replies_dir = audit_dir.join("replies");
     fs::create_dir_all(&replies_dir)?;
     let mut used = Vec::new();
@@ -1525,14 +1528,17 @@ fn dispatch_risk_discovery(
     let Some(result) = results.first() else {
         anyhow::bail!("risk discovery returned no result");
     };
-    crate::event_emit::emit_runner_results(
+    crate::event_emit::emit_runner_results_checked(
         repo,
         run_id,
         Some(state.current_phase.as_str()),
         None,
         "audit.risk_discovery",
         &results,
-    );
+    )?;
+    let mut run_ctx = util::load_run(repo, Some(run_id))?;
+    util::append_agent_results_to_state(&mut run_ctx.state, None, &results)?;
+    util::save_run(&run_ctx)?;
     if result.status != crate::agent_job::JobStatus::Ok {
         anyhow::bail!(
             "risk discovery runner {} returned {} exit={:?}: {}",

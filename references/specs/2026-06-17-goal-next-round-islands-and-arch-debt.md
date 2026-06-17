@@ -14,7 +14,7 @@
 **🔴 待做 BUG（本轮优先级从上到下）**：
 | # | 问题 | 严重度 | 落地前必做 |
 |---|---|---|---|
-| BUG-4 | 派工结果不进 `state.agent_runs` → autonomous_gate 失真（与 Phase D 同一问题两面） | 高 | host 先 grep 亲验是否真没回填 |
+| ✅ BUG-4 | 派工结果不进 `state.agent_runs` → autonomous_gate 失真（与 Phase D 同一问题两面）— 已落地 run-scoped scheduler 回填 | 高 | host 先 grep 亲验是否真没回填 |
 | BUG-1 | scheduler 管道写端泄漏 → 超时任务挂死 | 中 | await 加 `tokio::time::timeout` |
 | BUG-5 | `.events.lock` 孤立锁 → run 永久卡死 | 低概率高后果 | 加 stale 锁检测（pid+时间戳），不回退 ⑫ fail-closed |
 | BUG-3 | worktree 异常早退泄漏 persistent worktree | 待定 | host 先亲验真伪再改 |
@@ -29,13 +29,13 @@
 | ✅ A | 接线/删除 4 个函数孤岛（parse_agy_stdout / command_with_args / ledger_sequence / os_strs）— commit `45178a9` | 小（热身） |
 | ✅ B | agy runner 事件解析未接进生产流 — commit `45178a9` 删除 `runner_events` 整体孤岛，见本节裁决 | 中 |
 | ✅ F | 4 个未挂载插件去留裁决（含隐私扫描私域插件）— 已删除私域残留，保留三类场景插件并补 mount 路径 | 中 |
-| D | autonomous_gate 升级证据驱动（与 BUG-4 联动，守 fail-closed 红线） | 中 |
+| ✅ D | autonomous_gate 升级证据驱动（与 BUG-4 联动，守 fail-closed 红线）— gate 现在保留计数门并追加 cross_run_mining 风险门 | 中 |
 | E | runner_plan 硬编码抽象 | 可选（并入权限批） |
 
 **🔵 架构债（同族，未来一个"权限批"一起做，本轮不单独动）**：权限模型四家不通约 + 派工 sh/CLI 权限决策收进 Rust + Phase E runner_plan 抽象。另：`lto release` plan 不含 Cargo.toml（发版工具增强项，目前 `scripts/release_preflight.sh` 兜住）。
 
 **▶ 本轮建议执行顺序**：
-1. **BUG-4 + Phase D**（同一问题两面，一起做）——高价值，gate 失真影响 autonomous
+1. **✅ BUG-4 + Phase D**（同一问题两面，一起做）——run-scoped scheduler results 回填 state，gate 读 mining 风险信号
 2. **Phase C**（model 维度）——L4 越用越聪明的核心
 3. **BUG-1 + BUG-5 + BUG-8**（scheduler/events 健壮性，一批）
 4. **Phase A / B / F**（孤岛清理）
@@ -64,6 +64,7 @@ Claude 子代理（同族）漏掉这些，跨族 codex/agy 独立审 + host 亲
   - **⬜ 已知改进项（codex 第二轮揪，host 校准为非阻断，记录不返工）**：① **半写留合法数字前缀**：`fs::write` 半写若截成合法小数字（`1234`→`1`）parse 成功不触发自愈→理论仍可能重复 event_id。极罕见（小文件 write 多为单 syscall），作硬化项不阻断。② **count() 非严格纯读**：损坏路径 `fs::remove_file`（`events.rs:204`）是写副作用，与 docstring "Pure read" 不符——改 docstring 或把删文件挪出 count 路径，小事。两点边际收益递减，不搞第三轮返工（auditor 会越钻越深，区分阻断 bug vs 理论边界）。
 - **BUG-3 worktree 异常早退泄漏持久 worktree（codex，待 host 深核）**：codex 报 scheduler worktree 路径异常早退会泄漏 persistent worktree。**codex 落地前 host 先亲验**：grep `worktree.rs` 的 `WorktreeHandle`/`Drop`/`prune`，确认早退路径真不清理才修。
 - **BUG-4 派工结果只进 events/telemetry 不进 state.agent_runs（codex，高价值，与 ③ 联动）**：codex 报 scheduler 派工结果只 emit 到 events/telemetry，**不写 `state.agent_runs`**。而 `autonomous_gate`（③）和预算闸门**正是数 `state.agent_runs`**——意味着跑了很多 agent 但 gate 看不到，gate 判断失真。**这条与 Phase D（③ autonomous_gate）是同一问题的两面**：gate 不准既因为它只计数不读 ⑥，也因为它数的 `agent_runs` 根本没被 scheduler 回填。**host 亲验**：grep scheduler 结果回收处有无 `state.agent_runs` 写入；若真没有，这比"gate 读 ⑥"更根本——先让派工结果如实落 state，gate 才有真数据可数。
+  - **✅ 已完成（2026-06-17）**：不改 run-agnostic `Scheduler`，在 caller 层为 run-scoped scheduler dispatch 回填 `state.agent_runs`。覆盖 `runner --prompt/--job-file`、`run parallel/pipeline --job-file`、`audit --auto-dispatch`、`audit --discover-risks`、`judge --execute` 和 autopilot tmux worker；普通 `runner --command` 仍作为 task evidence，不污染 agent runs；`plugin eval-run` 仍作为 eval/report 域，不写业务 run agent_runs。runner result events 改为 checked emit，event 写失败时不保存 state，延续 BUG-7 的 fail-closed 方向。
 - **BUG-5 .events.lock 孤立锁导致 run 永久卡死（agy，host 亲验部分坐实，低概率高后果）**：`.events.lock` 是磁盘实体文件锁（`events.rs:185` O_EXCL 创建 / `:173` Drop 删除），**无 stale 锁检测**。若 LTO 进程被 `kill -9`/OOM/掉电/panic，`EventsLockGuard::Drop` 不执行 → 锁残留 → resume 时所有 emit 卡自旋 + 5s 超时 fail-closed → **该 run 永久卡死在事件写入无法恢复**。这是 ⑫ fail-closed 加固的真实副作用（防了脏写但没处理孤立锁）。触发需进程异常死亡且恰好持锁，概率低但后果是 run 不可恢复。**修**：加 stale 锁检测——锁文件写入持有者 pid + 时间戳，acquire 时若持有者进程已死或锁超龄（如 > timeout 的若干倍）则强夺清理。**红线**：不准回退 ⑫ 的 fail-closed（`events.rs:211` 拒绝无锁脏写要保留），stale 检测是叠加不是替换。
 
 - **架构观察 派工 sh 脚本 vs CLI 内置（研究 run `20260617-075932-sh-lto-cli`，非 bug，供未来权限批参考）**：派工走 `scripts/delegate/runners/*.sh` 而非 Rust CLI 内置，是**有意分层**：CLI（`scheduler.rs`）管通用调度（找脚本/注入 env/spawn/捕获 reply/并发/重试/healthcheck 汇总），sh 管每家 runner 的方言适配（codex `exec -s` / pi `-p --provider --tools` / claude `--allowedTools --permission-mode` / agy `--sandbox`，四家 flag+权限机制+token schema 全不同）。符合"薄 harness + runner 是 affordance"哲学，且 runner CLI 演进快（codex.sh 注释 "flags change over time" + 内置 flag 探针），sh 改一行不用重编。**真代价**：① 权限逻辑两边重复（`agent_job.rs::readonly_intent_to_policy` + 各 sh 脚本各一份"agy 无 read-only/pi 工具列表"，改一处要同步两处）② shell 坑（fail-silent Python token 解析、bash 数组 tricky 扩展、`<<<` 非 POSIX）③ 跨平台锁死 Unix。**判断（不单独重构，ROI 低）**：权限**决策**该收进 Rust（四家可穷举，单一来源消除两边不同步），token schema 该收进 Rust（类型安全可测）；但 flag **翻译**留 sh（演进快）。这与下方"架构债：权限模型四家不通约"是同族——**合并进未来权限批一起做**（那时本就要动 `agent_job.rs` 权限抽象），现在不为它单独动刀。
@@ -156,6 +157,13 @@ R1 pi/agy 审计指出 split-slot 和 WARN 缺 model；修复后 R2 pi/agy 返�
 **架构岔路 host 裁决**：若深核发现 autonomous 模式当前真实使用率为零、且升级 gate 收益不明 → 记录为「保持计数版，文档说清 gate 不读 ⑥ 是有意为之」也是合法结论。codex 先判这个 Phase 值不值做（autonomous 有没有真实使用场景），不值就降级为「文档澄清 + backlog 第15行改为属实描述」，别硬塞数据驱动。
 
 **完成判据**：要么 gate 真读 ⑥ 信号且 fail-closed（测试断言高风险信号下 gate 拒绝），要么 backlog 第15行改成与代码一致的诚实描述 + 文档说明为何不读 ⑥；`cargo test` 全绿。
+
+**当前裁决（2026-06-17）**：已选择“真读 ⑥ 信号”分支。`autonomous_gate`
+保留原 `state.agent_runs` 计数门（>=5 run / >=10 result），并在通过后读取
+`cross_run_mining`。mining 不可用、无 entries、dispatch 证据不足、仅主观样本、
+出现 timeout/rate_limited 或高失败率（>=50%，且样本 >=3）时全部 fail-closed，
+只返回 host-facing reason，不改 runner 权重、不写配置、不自动 promote。为支持
+限流风险解释，`CrossRunMiningEntry` 增加 `rate_limited` 计数。
 
 ## Phase E：runner_plan 硬编码抽象（中，抽象债最痛的一处）
 

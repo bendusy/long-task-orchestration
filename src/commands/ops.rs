@@ -924,7 +924,7 @@ fn non_empty_file(path: &Path) -> bool {
 pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
-        let run_id = common_job_run_id(&jobs);
+        let run_id = job_file_run_id(repo, options.run_id.as_deref(), &jobs)?;
         if let Some(run_id) = &run_id {
             crate::event_emit::emit_runner_started_jobs(
                 repo,
@@ -953,15 +953,19 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
             }
         };
         if let Some(run_id) = run_id {
-            crate::event_emit::emit_runner_results(
-                repo,
-                &run_id,
-                None,
-                None,
-                "runner.job_file",
-                &results,
-            );
-            let _ = crate::telemetry::save(repo, &run_id);
+            if let Ok(mut ctx) = util::load_run(repo, Some(&run_id)) {
+                emit_and_record_runner_results(repo, &mut ctx, None, "runner.job_file", &results)?;
+            } else {
+                crate::event_emit::emit_runner_results(
+                    repo,
+                    &run_id,
+                    None,
+                    None,
+                    "runner.job_file",
+                    &results,
+                );
+                let _ = crate::telemetry::save(repo, &run_id);
+            }
         }
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
@@ -971,6 +975,7 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
     if options.prompt.is_some() || options.prompt_file.is_some() || command_as_tmux_prompt {
         let run_id = util::resolve_run_id(repo, options.run_id.as_deref())
             .unwrap_or_else(|_| "rust-runner".to_string());
+        let mut run_ctx = util::load_run(repo, Some(&run_id)).ok();
         let inline_prompt = options.prompt.clone().or_else(|| {
             if command_as_tmux_prompt {
                 options.command.clone()
@@ -1014,10 +1019,11 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
             meta: runner_job_meta(&options, &run_id),
         };
         let jobs = vec![job];
+        let phase = run_ctx.as_ref().map(|ctx| ctx.state.current_phase.as_str());
         crate::event_emit::emit_runner_started_jobs(
             repo,
             &run_id,
-            None,
+            phase,
             None,
             "runner.prompt",
             &jobs,
@@ -1037,15 +1043,19 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
                 return Err(err);
             }
         };
-        crate::event_emit::emit_runner_results(
-            repo,
-            &run_id,
-            None,
-            None,
-            "runner.prompt",
-            &results,
-        );
-        let _ = crate::telemetry::save(repo, &run_id);
+        if let Some(ctx) = &mut run_ctx {
+            emit_and_record_runner_results(repo, ctx, None, "runner.prompt", &results)?;
+        } else {
+            crate::event_emit::emit_runner_results(
+                repo,
+                &run_id,
+                None,
+                None,
+                "runner.prompt",
+                &results,
+            );
+            let _ = crate::telemetry::save(repo, &run_id);
+        }
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
@@ -1596,7 +1606,7 @@ pub fn cmd_hook(repo: &Path, options: HookOptions) -> anyhow::Result<()> {
 pub fn cmd_parallel(repo: &Path, options: ParallelOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
-        let run_id = common_job_run_id(&jobs);
+        let run_id = job_file_run_id(repo, options.run_id.as_deref(), &jobs)?;
         if let Some(run_id) = &run_id {
             crate::event_emit::emit_runner_started_jobs(
                 repo,
@@ -1625,15 +1635,19 @@ pub fn cmd_parallel(repo: &Path, options: ParallelOptions) -> anyhow::Result<()>
             }
         };
         if let Some(run_id) = run_id {
-            crate::event_emit::emit_runner_results(
-                repo,
-                &run_id,
-                None,
-                None,
-                "run.parallel",
-                &results,
-            );
-            let _ = crate::telemetry::save(repo, &run_id);
+            if let Ok(mut ctx) = util::load_run(repo, Some(&run_id)) {
+                emit_and_record_runner_results(repo, &mut ctx, None, "run.parallel", &results)?;
+            } else {
+                crate::event_emit::emit_runner_results(
+                    repo,
+                    &run_id,
+                    None,
+                    None,
+                    "run.parallel",
+                    &results,
+                );
+                let _ = crate::telemetry::save(repo, &run_id);
+            }
         }
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
@@ -1644,7 +1658,7 @@ pub fn cmd_parallel(repo: &Path, options: ParallelOptions) -> anyhow::Result<()>
 pub fn cmd_pipeline(repo: &Path, options: PipelineOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
-        let run_id = common_job_run_id(&jobs);
+        let run_id = job_file_run_id(repo, options.run_id.as_deref(), &jobs)?;
         if let Some(run_id) = &run_id {
             crate::event_emit::emit_runner_started_jobs(
                 repo,
@@ -1673,15 +1687,19 @@ pub fn cmd_pipeline(repo: &Path, options: PipelineOptions) -> anyhow::Result<()>
             }
         };
         if let Some(run_id) = run_id {
-            crate::event_emit::emit_runner_results(
-                repo,
-                &run_id,
-                None,
-                None,
-                "run.pipeline",
-                &results,
-            );
-            let _ = crate::telemetry::save(repo, &run_id);
+            if let Ok(mut ctx) = util::load_run(repo, Some(&run_id)) {
+                emit_and_record_runner_results(repo, &mut ctx, None, "run.pipeline", &results)?;
+            } else {
+                crate::event_emit::emit_runner_results(
+                    repo,
+                    &run_id,
+                    None,
+                    None,
+                    "run.pipeline",
+                    &results,
+                );
+                let _ = crate::telemetry::save(repo, &run_id);
+            }
         }
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
@@ -1720,6 +1738,38 @@ fn common_job_run_id(jobs: &[AgentJob]) -> Option<String> {
         run_id = Some(candidate.to_string());
     }
     run_id
+}
+
+fn job_file_run_id(
+    repo: &Path,
+    explicit_run_id: Option<&str>,
+    jobs: &[AgentJob],
+) -> anyhow::Result<Option<String>> {
+    if explicit_run_id.is_some() {
+        return util::resolve_run_id(repo, explicit_run_id).map(Some);
+    }
+    Ok(common_job_run_id(jobs))
+}
+
+fn emit_and_record_runner_results(
+    repo: &Path,
+    ctx: &mut util::RunContext,
+    task_id: Option<&str>,
+    context: &str,
+    results: &[AgentResult],
+) -> anyhow::Result<()> {
+    crate::event_emit::emit_runner_results_checked(
+        repo,
+        &ctx.run_id,
+        Some(ctx.state.current_phase.as_str()),
+        task_id,
+        context,
+        results,
+    )?;
+    util::append_agent_results_to_state(&mut ctx.state, task_id, results)?;
+    util::save_run(ctx)?;
+    let _ = crate::telemetry::save(repo, &ctx.run_id);
+    Ok(())
 }
 
 fn runner_job_meta(options: &RunnerOptions, run_id: &str) -> BTreeMap<String, Value> {
@@ -2030,14 +2080,17 @@ fn cmd_llm_judge(repo: &Path, options: JudgeOptions) -> anyhow::Result<()> {
                 }
             };
             if let Some(ctx) = &run_ctx {
-                crate::event_emit::emit_runner_results(
+                crate::event_emit::emit_runner_results_checked(
                     repo,
                     &ctx.run_id,
                     Some(ctx.state.current_phase.as_str()),
                     None,
                     "judge.llm",
                     &results,
-                );
+                )?;
+                let mut updated_ctx = ctx.clone();
+                util::append_agent_results_to_state(&mut updated_ctx.state, None, &results)?;
+                util::save_run(&updated_ctx)?;
             }
             let Some(result) = results.first() else {
                 if let Some(ctx) = &run_ctx {
@@ -2348,6 +2401,7 @@ fn auto_exec_tasks(
     let mut held = 0;
     let mut failed = 0;
     let mut retry_blocked = 0;
+    let mut agent_results = Vec::<(String, AgentResult)>::new();
     let carrier = select_worker_carrier(options);
     for task in util::json_array_mut(&mut ctx.state.tasks) {
         let status = task
@@ -2441,14 +2495,24 @@ fn auto_exec_tasks(
                 task["last_update"] = json!(util::iso_now());
             }
             WorkerCarrier::Tmux => {
-                let outcome =
-                    run_tmux_autopilot_worker(repo, &ctx.run_id, task, &command, options)?;
+                let outcome = run_tmux_autopilot_worker(
+                    repo,
+                    &ctx.run_id,
+                    ctx.state.current_phase.as_str(),
+                    task,
+                    &command,
+                    options,
+                )?;
                 match outcome {
-                    TmuxWorkerOutcome::Held { reason } => {
+                    TmuxWorkerOutcome::Held { reason, result } => {
+                        if let Some(result) = result {
+                            agent_results.push((id.clone(), result));
+                        }
                         held += 1;
                         println!("    [{id}] HELD -- {reason}");
                     }
-                    TmuxWorkerOutcome::Ran { rc, job_id } => {
+                    TmuxWorkerOutcome::Ran { rc, job_id, result } => {
+                        agent_results.push((id.clone(), result));
                         executed += 1;
                         println!("    [{id}] tmux rc={rc} job={job_id}");
                         if rc == 0 {
@@ -2486,6 +2550,9 @@ fn auto_exec_tasks(
     println!(
         "auto-exec: executed={executed} held={held} failed={failed} retry_blocked={retry_blocked}"
     );
+    for (task_id, result) in agent_results {
+        util::append_agent_results_to_state(&mut ctx.state, Some(&task_id), &[result])?;
+    }
     Ok(())
 }
 
@@ -2505,8 +2572,15 @@ impl WorkerCarrier {
 }
 
 enum TmuxWorkerOutcome {
-    Held { reason: String },
-    Ran { rc: i32, job_id: String },
+    Held {
+        reason: String,
+        result: Option<AgentResult>,
+    },
+    Ran {
+        rc: i32,
+        job_id: String,
+        result: AgentResult,
+    },
 }
 
 fn select_worker_carrier(options: &AutopilotOptions) -> WorkerCarrier {
@@ -2542,6 +2616,7 @@ fn tmux_binary_available(tmux_bin: &str) -> bool {
 fn run_tmux_autopilot_worker(
     repo: &Path,
     run_id: &str,
+    phase: &str,
     task: &mut Value,
     command: &str,
     options: &AutopilotOptions,
@@ -2618,14 +2693,14 @@ fn run_tmux_autopilot_worker(
     );
     let results = match submit_jobs(repo, jobs.clone()) {
         Ok(results) => {
-            crate::event_emit::emit_runner_results(
+            crate::event_emit::emit_runner_results_checked(
                 repo,
                 run_id,
-                None,
+                Some(phase),
                 Some(&task_id),
                 "autopilot.tmux_worker",
                 &results,
-            );
+            )?;
             results
         }
         Err(err) => {
@@ -2640,12 +2715,14 @@ fn run_tmux_autopilot_worker(
             );
             return Ok(TmuxWorkerOutcome::Held {
                 reason: format!("tmux worker submission failed: {err}"),
+                result: None,
             });
         }
     };
     let Some(result) = results.into_iter().next() else {
         return Ok(TmuxWorkerOutcome::Held {
             reason: "tmux worker returned no result".to_string(),
+            result: None,
         });
     };
     if result.status != JobStatus::Ok {
@@ -2655,7 +2732,10 @@ fn run_tmux_autopilot_worker(
             "evidence",
             tmux_worker_evidence(command, &contract_path, &job_id, &result, 1, &reason),
         );
-        return Ok(TmuxWorkerOutcome::Held { reason });
+        return Ok(TmuxWorkerOutcome::Held {
+            reason,
+            result: Some(result),
+        });
     }
     let contract = read_tmux_worker_contract(&contract_path)?;
     let rc = contract
@@ -2677,7 +2757,7 @@ fn run_tmux_autopilot_worker(
         "evidence",
         tmux_worker_evidence(command, &contract_path, &job_id, &result, rc, &summary),
     );
-    Ok(TmuxWorkerOutcome::Ran { rc, job_id })
+    Ok(TmuxWorkerOutcome::Ran { rc, job_id, result })
 }
 
 fn tmux_worker_prompt(
@@ -3000,6 +3080,13 @@ fn json_u64_field(value: &Value, key: &str) -> u64 {
     value.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
+const AUTONOMOUS_MIN_AGENT_RUNS: u64 = 5;
+const AUTONOMOUS_MIN_AGENT_RESULTS: u64 = 10;
+const AUTONOMOUS_MIN_MINING_RUNS: usize = 5;
+const AUTONOMOUS_MIN_MINING_DISPATCHES: usize = 10;
+const AUTONOMOUS_HIGH_FAILURE_RATE: f64 = 0.5;
+const AUTONOMOUS_HIGH_FAILURE_MIN_RUNS: usize = 3;
+
 fn autonomous_gate(repo: &Path) -> (bool, String) {
     let mut runs = 0_u64;
     let mut results = 0_u64;
@@ -3019,16 +3106,85 @@ fn autonomous_gate(repo: &Path) -> (bool, String) {
             }
         }
     }
-    if runs >= 5 && results >= 10 {
-        (true, format!("{runs} run / {results} results"))
-    } else {
-        (
+    if runs < AUTONOMOUS_MIN_AGENT_RUNS || results < AUTONOMOUS_MIN_AGENT_RESULTS {
+        return (
             false,
             format!(
-                "autonomous requires >=5 real agent-run runs and >=10 results; current {runs}/{results}"
+                "autonomous requires >={AUTONOMOUS_MIN_AGENT_RUNS} real agent-run runs and >={AUTONOMOUS_MIN_AGENT_RESULTS} results; current {runs}/{results}"
             ),
-        )
+        );
     }
+    let mining = match crate::telemetry::cross_run_mining(repo) {
+        Ok(mining) => mining,
+        Err(err) => return (false, format!("cross-run mining unavailable: {err}")),
+    };
+    if mining.entries.is_empty() {
+        return (
+            false,
+            "cross-run mining has no runner.finished or agent.turn.completed entries".to_string(),
+        );
+    }
+    let mining_dispatches = mining
+        .entries
+        .iter()
+        .map(|entry| entry.distinct_runs)
+        .sum::<usize>();
+    if mining.run_count < AUTONOMOUS_MIN_MINING_RUNS
+        || mining_dispatches < AUTONOMOUS_MIN_MINING_DISPATCHES
+    {
+        return (
+            false,
+            format!(
+                "autonomous requires mining evidence >={AUTONOMOUS_MIN_MINING_RUNS} runs and >={AUTONOMOUS_MIN_MINING_DISPATCHES} dispatches; current {}/{}",
+                mining.run_count, mining_dispatches
+            ),
+        );
+    }
+    if mining
+        .entries
+        .iter()
+        .all(|entry| entry.subjective_non_measurement)
+    {
+        return (
+            false,
+            "cross-run mining evidence is only subjective/non-measurement runs".to_string(),
+        );
+    }
+    if let Some(entry) = mining
+        .entries
+        .iter()
+        .find(|entry| entry.timeout > 0 || entry.rate_limited > 0)
+    {
+        return (
+            false,
+            format!(
+                "cross-run mining risk for {}/{}: timeout={} rate_limited={}",
+                entry.runner, entry.model, entry.timeout, entry.rate_limited
+            ),
+        );
+    }
+    if let Some(entry) = mining.entries.iter().find(|entry| {
+        entry.distinct_runs >= AUTONOMOUS_HIGH_FAILURE_MIN_RUNS
+            && (entry.failed as f64 / entry.distinct_runs as f64) >= AUTONOMOUS_HIGH_FAILURE_RATE
+    }) {
+        return (
+            false,
+            format!(
+                "cross-run mining risk for {}/{}: failure_rate={:.1}% over {} dispatches",
+                entry.runner,
+                entry.model,
+                (entry.failed as f64 / entry.distinct_runs as f64) * 100.0,
+                entry.distinct_runs
+            ),
+        );
+    }
+    (
+        true,
+        format!(
+            "{runs} state-agent-run runs / {results} results; mining runs={} dispatches={mining_dispatches}",
+            mining.run_count
+        ),
+    )
 }
 
 fn memory_projection(repo: &Path, ctx: &util::RunContext) -> anyhow::Result<Value> {
@@ -3772,9 +3928,14 @@ mod tests {
         }
 
         fn write_state(&self, state: LtoState) {
-            let run_dir = self.repo.join(".lto").join("r1");
-            fs::create_dir_all(&run_dir).unwrap();
+            self.write_state_as("r1", state);
             fs::write(self.repo.join(".lto").join("current"), "r1\n").unwrap();
+        }
+
+        fn write_state_as(&self, run_id: &str, mut state: LtoState) {
+            state.run_id = run_id.to_string();
+            let run_dir = self.repo.join(".lto").join(run_id);
+            fs::create_dir_all(&run_dir).unwrap();
             state::save_state(run_dir.join("state.json"), &state).unwrap();
             fs::write(
                 run_dir.join("run-state.md"),
@@ -4240,6 +4401,40 @@ printf ']'
         make_executable(&script);
     }
 
+    fn write_fake_codex_runner(repo: &Path) {
+        let runners = repo.join("scripts").join("delegate").join("runners");
+        fs::create_dir_all(&runners).unwrap();
+        let script = runners.join("codex.sh");
+        fs::write(
+            &script,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+prompt_file="$1"
+reply_file="$2"
+printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
+"#,
+        )
+        .unwrap();
+        make_executable(&script);
+    }
+
+    fn write_inline_codex_job_file(repo: &Path, job_id: &str) -> PathBuf {
+        let path = repo.join(format!("{job_id}.json"));
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "job_id": job_id,
+                "runner": "codex",
+                "prompt_ref": format!("prompt for {job_id}"),
+                "prompt_is_inline": true,
+                "task_type": "implementation"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
     #[test]
     fn autopilot_tmux_worker_runs_pending_tasks_and_uses_contracts() {
         let h = Harness::new();
@@ -4308,6 +4503,148 @@ printf ']'
         assert!(events.contains("autopilot.tmux_worker"));
         assert!(events.contains("runner.started"));
         assert!(events.contains("runner.finished"));
+        assert!(events.contains("\"phase\":\"implementation\""));
+        let agent_runs = util::iter_agent_runs(&state.agent_runs);
+        assert_eq!(agent_runs.len(), 2);
+        assert!(agent_runs.iter().all(|result| {
+            result.runner == "tmux" && result.task_type.as_deref() == Some("autopilot_worker")
+        }));
+    }
+
+    #[test]
+    fn cmd_runner_prompt_scheduler_path_records_agent_run() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        write_ok_healthcheck(&h.repo);
+        write_fake_codex_runner(&h.repo);
+
+        cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                run_id: Some("r1".into()),
+                task_id: None,
+                kind: "manual".into(),
+                command: None,
+                cwd: None,
+                timeout: 5,
+                touch: Vec::new(),
+                note: None,
+                status_on_fail: "blocked".into(),
+                runner: "codex".into(),
+                prompt: Some("hello from prompt".into()),
+                prompt_file: None,
+                job_id: Some("prompt-job".into()),
+                tmux_target: None,
+                tmux_mode: None,
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: None,
+                tmux_bin: None,
+                job_file: None,
+            },
+        )
+        .unwrap();
+
+        let state = h.state();
+        let agent_runs = util::iter_agent_runs(&state.agent_runs);
+        assert_eq!(agent_runs.len(), 1);
+        assert_eq!(agent_runs[0].job_id, "prompt-job");
+        assert_eq!(agent_runs[0].runner, "codex");
+        assert_eq!(agent_runs[0].status, JobStatus::Ok);
+        let events =
+            fs::read_to_string(h.repo.join(".lto").join("r1").join("events.jsonl")).unwrap();
+        assert!(events.contains("runner.finished"));
+        assert!(events.contains("runner.prompt"));
+    }
+
+    #[test]
+    fn job_file_scheduler_paths_record_agent_runs_with_explicit_run_id() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        write_ok_healthcheck(&h.repo);
+        write_fake_codex_runner(&h.repo);
+
+        let runner_job = write_inline_codex_job_file(&h.repo, "runner-job-file");
+        cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                run_id: Some("r1".into()),
+                task_id: None,
+                kind: "manual".into(),
+                command: None,
+                cwd: None,
+                timeout: 5,
+                touch: Vec::new(),
+                note: None,
+                status_on_fail: "blocked".into(),
+                runner: "codex".into(),
+                prompt: None,
+                prompt_file: None,
+                job_id: None,
+                tmux_target: None,
+                tmux_mode: None,
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: None,
+                tmux_bin: None,
+                job_file: Some(runner_job),
+            },
+        )
+        .unwrap();
+
+        let parallel_job = write_inline_codex_job_file(&h.repo, "parallel-job-file");
+        cmd_parallel(
+            &h.repo,
+            ParallelOptions {
+                run_id: Some("r1".into()),
+                task_ids: Vec::new(),
+                phase: None,
+                kind: "manual".into(),
+                command: None,
+                timeout: 5,
+                concurrency: 1,
+                job_file: Some(parallel_job),
+            },
+        )
+        .unwrap();
+
+        let pipeline_job = write_inline_codex_job_file(&h.repo, "pipeline-job-file");
+        cmd_pipeline(
+            &h.repo,
+            PipelineOptions {
+                run_id: Some("r1".into()),
+                task_ids: Vec::new(),
+                phase: None,
+                stages: Vec::new(),
+                kind: "manual".into(),
+                timeout: 5,
+                concurrency: 1,
+                continue_on_error: false,
+                job_file: Some(pipeline_job),
+            },
+        )
+        .unwrap();
+
+        let state = h.state();
+        let mut job_ids = util::iter_agent_runs(&state.agent_runs)
+            .into_iter()
+            .map(|result| result.job_id)
+            .collect::<Vec<_>>();
+        job_ids.sort();
+        assert_eq!(
+            job_ids,
+            vec!["parallel-job-file", "pipeline-job-file", "runner-job-file"]
+        );
     }
 
     #[test]
@@ -4350,6 +4687,10 @@ printf ']'
         assert_eq!(evidence["kind"], "worker");
         assert_eq!(evidence["carrier"], "tmux");
         assert_eq!(evidence["rc"], 7);
+        let agent_runs = util::iter_agent_runs(&state.agent_runs);
+        assert_eq!(agent_runs.len(), 1);
+        assert_eq!(agent_runs[0].runner, "tmux");
+        assert_eq!(agent_runs[0].status, JobStatus::Ok);
         assert!(
             task["last_update"]
                 .as_str()
@@ -4473,6 +4814,167 @@ printf ']'
         let digest = progress_digest(&ctx);
         let (progressed, reason) = has_progressed(&digest, &digest);
         assert!(!progressed, "{reason}");
+    }
+
+    fn write_autonomous_gate_run(
+        h: &Harness,
+        run_id: &str,
+        first_status: &str,
+        second_status: &str,
+        subjective: bool,
+    ) {
+        let mut state = base_state();
+        state.agent_runs = json!({
+            format!("{run_id}-a"): [{
+                "job_id": format!("{run_id}-a"),
+                "runner": "codex",
+                "model": "gpt-5",
+                "status": first_status,
+                "task_type": "implementation"
+            }],
+            format!("{run_id}-b"): [{
+                "job_id": format!("{run_id}-b"),
+                "runner": "codex",
+                "model": "gpt-5",
+                "status": second_status,
+                "task_type": "review"
+            }]
+        });
+        h.write_state_as(run_id, state);
+        for (job_id, task_id, status) in [
+            (format!("{run_id}-a"), "impl-task", first_status),
+            (format!("{run_id}-b"), "test-task", second_status),
+        ] {
+            crate::events::emit(
+                &h.repo,
+                run_id,
+                crate::events::EventRecord {
+                    event_type: "runner.finished".to_string(),
+                    actor_kind: "runner".to_string(),
+                    actor_id: Some("codex".to_string()),
+                    phase: Some("implementation".to_string()),
+                    task_id: Some(task_id.to_string()),
+                    object_id: Some(job_id),
+                    object_type: Some("runner_job".to_string()),
+                    fields: json!({
+                        "runner": "codex",
+                        "model": "gpt-5",
+                        "status": status,
+                        "elapsed_sec": 1.0,
+                    }),
+                    ..crate::events::EventRecord::default()
+                },
+            )
+            .unwrap();
+        }
+        if subjective {
+            crate::events::emit(
+                &h.repo,
+                run_id,
+                crate::events::EventRecord {
+                    event_type: "decision.voted".to_string(),
+                    actor_kind: "judge".to_string(),
+                    actor_id: Some("codex".to_string()),
+                    summary: "subjective vote".to_string(),
+                    ..crate::events::EventRecord::default()
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    fn write_gate_count_only_run(h: &Harness, run_id: &str) {
+        let mut state = base_state();
+        state.agent_runs = json!({
+            format!("{run_id}-a"): [{
+                "job_id": format!("{run_id}-a"),
+                "runner": "codex",
+                "status": "ok"
+            }],
+            format!("{run_id}-b"): [{
+                "job_id": format!("{run_id}-b"),
+                "runner": "codex",
+                "status": "ok"
+            }]
+        });
+        h.write_state_as(run_id, state);
+    }
+
+    #[test]
+    fn autonomous_gate_blocks_when_mining_data_is_missing() {
+        let h = Harness::new();
+        for index in 0..5 {
+            write_gate_count_only_run(&h, &format!("r{index}"));
+        }
+
+        let (ok, reason) = autonomous_gate(&h.repo);
+
+        assert!(!ok);
+        assert!(reason.contains("cross-run mining has no"));
+    }
+
+    #[test]
+    fn autonomous_gate_blocks_high_failure_rate_even_when_counts_pass() {
+        let h = Harness::new();
+        for index in 0..5 {
+            let status = if index < 3 { "failed" } else { "ok" };
+            write_autonomous_gate_run(&h, &format!("r{index}"), status, "ok", false);
+        }
+
+        let (ok, reason) = autonomous_gate(&h.repo);
+
+        assert!(!ok);
+        assert!(reason.contains("failure_rate=60.0%"), "{reason}");
+    }
+
+    #[test]
+    fn autonomous_gate_blocks_timeout_or_rate_limited_signal() {
+        let h = Harness::new();
+        for index in 0..5 {
+            let first = if index == 0 { "rate_limited" } else { "ok" };
+            let second = if index == 1 { "timeout" } else { "ok" };
+            write_autonomous_gate_run(&h, &format!("r{index}"), first, second, false);
+        }
+
+        let (ok, reason) = autonomous_gate(&h.repo);
+
+        assert!(!ok);
+        assert!(reason.contains("timeout="), "{reason}");
+        assert!(reason.contains("rate_limited="), "{reason}");
+    }
+
+    #[test]
+    fn autonomous_gate_blocks_when_only_one_run_has_mining_evidence() {
+        let h = Harness::new();
+        write_autonomous_gate_run(&h, "r0", "ok", "ok", false);
+        for index in 1..5 {
+            write_gate_count_only_run(&h, &format!("r{index}"));
+        }
+
+        let (ok, reason) = autonomous_gate(&h.repo);
+
+        assert!(!ok);
+        assert!(
+            reason.contains("mining evidence >=5 runs and >=10 dispatches"),
+            "{reason}"
+        );
+        assert!(reason.contains("current 1/2"), "{reason}");
+    }
+
+    #[test]
+    fn autonomous_gate_passes_with_counts_and_clean_objective_mining() {
+        let h = Harness::new();
+        for index in 0..5 {
+            write_autonomous_gate_run(&h, &format!("r{index}"), "ok", "ok", false);
+        }
+        let before = fs::read_to_string(h.repo.join(".lto").join("r0").join("state.json")).unwrap();
+
+        let (ok, reason) = autonomous_gate(&h.repo);
+
+        assert!(ok, "{reason}");
+        assert!(reason.contains("mining runs=5 dispatches=10"), "{reason}");
+        let after = fs::read_to_string(h.repo.join(".lto").join("r0").join("state.json")).unwrap();
+        assert_eq!(before, after, "autonomous_gate must stay read-only");
     }
 
     #[test]

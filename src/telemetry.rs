@@ -202,6 +202,7 @@ pub struct CrossRunMiningEntry {
     pub ok: usize,
     pub failed: usize,
     pub timeout: usize,
+    pub rate_limited: usize,
     pub skipped: usize,
     pub avg_elapsed_sec: Option<f64>,
     pub avg_retry: Option<f64>,
@@ -216,6 +217,7 @@ struct CrossRunSlot {
     ok_runs: BTreeSet<String>,
     failed_runs: BTreeSet<String>,
     timeout_runs: BTreeSet<String>,
+    rate_limited_runs: BTreeSet<String>,
     skipped_runs: BTreeSet<String>,
     elapsed_by_run: BTreeMap<String, f64>,
     retry_by_run: BTreeMap<String, u64>,
@@ -243,6 +245,7 @@ pub fn discover_run_ids(repo: &Path) -> anyhow::Result<Vec<String>> {
 pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
     let run_ids = discover_run_ids(repo)?;
     let mut audit_rounds_by_run = BTreeMap::<String, usize>::new();
+    let mut mined_run_ids = BTreeSet::<String>::new();
     let mut subjective_runs = BTreeSet::<String>::new();
     let mut slots = BTreeMap::<(String, String, String, String), CrossRunSlot>::new();
 
@@ -267,8 +270,12 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
         let model_hints = model_hints_for_run(&events);
         for event in events {
             match event_type(&event) {
-                "runner.finished" => record_runner_finished(&mut slots, run_id, &event),
+                "runner.finished" => {
+                    mined_run_ids.insert(run_id.clone());
+                    record_runner_finished(&mut slots, run_id, &event);
+                }
                 "agent.turn.completed" => {
+                    mined_run_ids.insert(run_id.clone());
                     record_agent_turn_completed(&mut slots, run_id, &event, &model_hints);
                 }
                 _ => {}
@@ -303,6 +310,7 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
                 ok: slot.ok_runs.len(),
                 failed,
                 timeout: slot.timeout_runs.len(),
+                rate_limited: slot.rate_limited_runs.len(),
                 skipped: slot.skipped_runs.len(),
                 avg_elapsed_sec: average_f64(slot.elapsed_by_run.values().copied()),
                 avg_retry: average_f64(slot.retry_by_run.values().map(|value| *value as f64)),
@@ -319,7 +327,7 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
         .collect();
 
     Ok(CrossRunMining {
-        run_count: run_ids.len(),
+        run_count: mined_run_ids.len(),
         entries,
     })
 }
@@ -339,6 +347,10 @@ fn record_runner_finished(
         }
         "timeout" => {
             slot.timeout_runs.insert(run_id.to_string());
+            slot.failed_runs.insert(run_id.to_string());
+        }
+        "rate_limited" => {
+            slot.rate_limited_runs.insert(run_id.to_string());
             slot.failed_runs.insert(run_id.to_string());
         }
         "skipped" => {
@@ -389,6 +401,10 @@ fn record_agent_turn_completed(
         }
         "timeout" => {
             slot.timeout_runs.insert(run_id.to_string());
+            slot.failed_runs.insert(run_id.to_string());
+        }
+        "rate_limited" => {
+            slot.rate_limited_runs.insert(run_id.to_string());
             slot.failed_runs.insert(run_id.to_string());
         }
         "failed" => {
@@ -1052,5 +1068,48 @@ mod tests {
         assert_eq!(entry.distinct_runs, 1);
         assert_eq!(entry.failed, 1);
         assert_eq!(entry.agent_turn_completed, 1);
+    }
+
+    #[test]
+    fn cross_run_mining_tracks_rate_limited_runner_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_dir = repo.join(".lto").join("r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("state.json"),
+            serde_json::to_string_pretty(&LtoState {
+                run_id: "r1".to_string(),
+                ..LtoState::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                phase: Some("implementation".to_string()),
+                fields: json!({
+                    "runner": "codex",
+                    "model": "gpt-5",
+                    "status": "rate_limited"
+                }),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let mining = cross_run_mining(repo).unwrap();
+        let entry = mining
+            .entries
+            .iter()
+            .find(|entry| entry.runner == "codex")
+            .unwrap();
+        assert_eq!(entry.rate_limited, 1);
+        assert_eq!(entry.failed, 1);
     }
 }

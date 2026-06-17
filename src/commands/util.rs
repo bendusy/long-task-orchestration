@@ -234,6 +234,22 @@ pub fn iter_agent_runs(agent_runs: &Value) -> Vec<AgentResult> {
     state::agent_results_from_agent_runs(agent_runs)
 }
 
+pub fn append_agent_results_to_state(
+    state: &mut LtoState,
+    task_key: Option<&str>,
+    results: &[AgentResult],
+) -> anyhow::Result<()> {
+    let agent_runs = json_object_mut(&mut state.agent_runs);
+    for result in results {
+        let key = task_key.unwrap_or(result.job_id.as_str()).to_string();
+        let entries = agent_runs
+            .entry(key)
+            .or_insert_with(|| Value::Array(Vec::new()));
+        json_array_mut(entries).push(serde_json::to_value(result)?);
+    }
+    Ok(())
+}
+
 pub fn json_u64(value: Option<&Value>) -> Option<u64> {
     match value? {
         Value::Number(n) => n.as_u64(),

@@ -543,6 +543,7 @@ mod tests {
                 ok: 1,
                 failed: 1,
                 timeout: 0,
+                rate_limited: 0,
                 skipped: 0,
                 avg_elapsed_sec: Some(12.0),
                 avg_retry: Some(0.5),

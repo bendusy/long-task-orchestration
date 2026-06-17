@@ -14,10 +14,37 @@ pub fn emit_runner_results(
     context: &str,
     results: &[AgentResult],
 ) {
+    let _ = emit_runner_results_inner(repo, run_id, phase, task_id, context, results);
+}
+
+pub fn emit_runner_results_checked(
+    repo: &Path,
+    run_id: &str,
+    phase: Option<&str>,
+    task_id: Option<&str>,
+    context: &str,
+    results: &[AgentResult],
+) -> anyhow::Result<()> {
+    if emit_runner_results_inner(repo, run_id, phase, task_id, context, results) {
+        Ok(())
+    } else {
+        anyhow::bail!("event emit failed for runner results in {context}")
+    }
+}
+
+fn emit_runner_results_inner(
+    repo: &Path,
+    run_id: &str,
+    phase: Option<&str>,
+    task_id: Option<&str>,
+    context: &str,
+    results: &[AgentResult],
+) -> bool {
+    let mut all_emitted = true;
     for result in results {
-        emit_runner_retries(repo, run_id, phase, task_id, context, result);
+        all_emitted &= emit_runner_retries(repo, run_id, phase, task_id, context, result);
         if result.status == JobStatus::Skipped && result.error.starts_with("runner unhealthy:") {
-            events::safe_emit(
+            all_emitted &= events::safe_emit(
                 repo,
                 run_id,
                 EventRecord {
@@ -37,9 +64,10 @@ pub fn emit_runner_results(
                     }),
                     ..EventRecord::default()
                 },
-            );
+            )
+            .is_some();
         }
-        events::safe_emit(
+        all_emitted &= events::safe_emit(
             repo,
             run_id,
             EventRecord {
@@ -73,8 +101,10 @@ pub fn emit_runner_results(
                 }),
                 ..EventRecord::default()
             },
-        );
+        )
+        .is_some();
     }
+    all_emitted
 }
 
 pub fn emit_runner_started_jobs(
@@ -163,12 +193,13 @@ fn emit_runner_retries(
     task_id: Option<&str>,
     context: &str,
     result: &AgentResult,
-) {
+) -> bool {
     let Some(attempts) = result.cost.get("retry_attempts").and_then(Value::as_array) else {
-        return;
+        return true;
     };
+    let mut all_emitted = true;
     for attempt in attempts {
-        events::safe_emit(
+        all_emitted &= events::safe_emit(
             repo,
             run_id,
             EventRecord {
@@ -195,8 +226,10 @@ fn emit_runner_retries(
                 }),
                 ..EventRecord::default()
             },
-        );
+        )
+        .is_some();
     }
+    all_emitted
 }
 
 pub fn emit_audit_dispatched(

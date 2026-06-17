@@ -91,6 +91,25 @@
   restoring the strict privacy gate after the audit found those fixtures were
   still reported as unclassified hits.
 
+### BUG-4 + Phase D autonomous evidence gate
+
+- Persist run-scoped scheduler-backed `AgentResult`s into `state.agent_runs`
+  after checked `runner.finished` event emission, covering runner prompt/job
+  file dispatch, parallel/pipeline job files, audit dispatch, LLM judge dispatch,
+  and autopilot tmux workers without changing the run-agnostic scheduler.
+- Kept plain `runner --command` as task evidence and left plugin eval-run in its
+  eval/report domain so business run `agent_runs` is not polluted.
+- Upgraded `autonomous_gate` to keep the existing real-run count gate and then
+  read `cross_run_mining` risk signals fail-closed: missing/insufficient mining,
+  timeout, rate-limit, high failure rate, or only subjective evidence now block
+  autonomous mode with a host-facing reason.
+- Added `rate_limited` to `CrossRunMiningEntry` so the gate can distinguish
+  throttling risk from generic failures while keeping recap mining read-only.
+- Tightened audit follow-ups so job-file dispatch honors explicit `--run-id`
+  even without embedded job metadata, mining run counts only include runs with
+  actual runner/turn evidence, and tmux autopilot worker events keep the current
+  phase for recap/mining classification.
+
 ### L3 dispatch-goal and L4 cross-run mining
 
 - Added `lto dispatch-goal` for tmux-backed goal dispatch to codex, pi, and agy,
