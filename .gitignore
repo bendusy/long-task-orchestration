@@ -27,6 +27,3 @@ dist/
 build/
 target/
 *.egg-info/
-
-# local-only plugins (work-domain material, never push)
-plugins/meeting-transcript/

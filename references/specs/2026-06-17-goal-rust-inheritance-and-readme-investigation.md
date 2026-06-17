@@ -27,7 +27,7 @@ LTO 经历 Python→Rust 全量重写(v0.5.0)+ 多轮加功能(tmux runner / O2 
 3. **30 个 Rust 模块**：`src/*.rs` + `src/commands/*.rs`。大头 cli.rs(67K)/ops.rs(156K)/scheduler.rs(70K)/tmux_runner.rs(53K)/decision.rs(47K)/plugin*.rs(74K)。
 4. **插件系统落点**：`src/plugin.rs`(validate/render-profile/static eval/mount/source-note)+ `src/plugin_eval_run.rs`(真 A/B eval-run)；命令在 `cli.rs:264` 起的 `plugin` 子命令组；设计文档 `references/plugin-boundary.md` + `plugin-real-eval-runner.md`。
 5. **预设工作流落点**：`references/workflow-playbook.md`（Playbooks 节:dev-workflow/review/... line 60 起）+ `dev-workflow-spec.md`。注意 LTO 哲学是「playbook 是调度先验,不是硬路由命令」——工作流是 host-agent 读的先验,不是 `lto workflow run X` 这种命令。报告要讲清这个定位。
-7. **有现成插件可跑示例（别从零造 fixture）**：`plugins/` 下有 7 个真插件——`meeting-transcript` / `dev-workflow` / `deep-agent-profiles` / `migration-refactor` / `claim-verify-research` / `adversarial-audit`（含 paths/schemas/sources/eval 完整结构,是讲插件生命周期的最佳实例）。Phase 3 的插件示例直接用这些跑通（`lto plugin validate plugins/adversarial-audit` 等），dogfood 验证。
+7. **有现成插件可跑示例（别从零造 fixture）**：`plugins/` 下有 5 个真插件——`dev-workflow` / `deep-agent-profiles` / `migration-refactor` / `claim-verify-research` / `adversarial-audit`（含 paths/schemas/sources/eval 完整结构,是讲插件生命周期的最佳实例）。Phase 3 的插件示例直接用这些跑通（`lto plugin validate plugins/adversarial-audit` 等），dogfood 验证。
 8. **预设工作流与插件的关系**：注意 `plugins/dev-workflow/` 既是插件又对应 workflow-playbook 的 dev-workflow——查清「插件如何为预设工作流提供 prompt/profile/eval」这层关系（Phase 3 和 4 的交汇点,讲清它俩怎么协作）。
 6. **架构哲学基准**：`references/control-loop-harness.md` + `protocol-and-language-strategy.md` + `engineering-map.md`（模块表）。评架构提升点要对照这些既定哲学（state 真源 / runner-audit-worktree 是 affordance / 不替 host 决策），别提违背哲学的「改进」。
 

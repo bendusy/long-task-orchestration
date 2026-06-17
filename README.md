@@ -96,13 +96,12 @@ optional sinks: am memory publish/resume, release docs, changelog
 
 插件是 data-only path plugin：它可以提供 source note、path/playbook JSON、runtime profile、prompt suffix、output schema 和 eval pack；不能执行任意代码、自动提升权限、替 host 选 workflow 或自动 promotion。边界见 [references/plugin-boundary.md](./references/plugin-boundary.md)，真实 A/B eval 设计见 [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md)。
 
-当前仓库有 6 个插件：
+当前仓库有 5 个插件：
 
 - `plugins/adversarial-audit`
 - `plugins/claim-verify-research`
 - `plugins/deep-agent-profiles`
 - `plugins/dev-workflow`
-- `plugins/meeting-transcript`
 - `plugins/migration-refactor`
 
 最小生命周期示例，以下命令已用 `plugins/adversarial-audit` 实跑验证：
@@ -126,6 +125,14 @@ $L plugin eval-run plugins/adversarial-audit \
 ```
 
 数据流是：validate 检查 manifest 和引用文件，render-profile 编译 profile prompt，eval 静态校验 eval pack，mount 只在 run 里写 provenance lock，eval-run 通过 scheduler 跑 baseline vs candidate 并输出 report。
+
+场景插件只在 host 明确选择后挂载，不会自动改 runner 权重或启动 workflow：
+
+```bash
+$L plugin mount plugins/adversarial-audit --run-id <run-id>       # review / feature-dev refute-first 审计
+$L plugin mount plugins/claim-verify-research --run-id <run-id>  # claim-verify / research 证据完整性核验
+$L plugin mount plugins/migration-refactor --run-id <run-id>     # migration 分批回归与语义等价审计
+```
 
 ## 预设工作流
 

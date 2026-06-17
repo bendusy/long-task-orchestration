@@ -78,6 +78,19 @@
   `collect-agent-run` emit `runner.finished.fields.runner/model`, matching the
   scheduler-backed event shape. Derived WARN lines now include the model name.
 
+### Phase F plugin triage
+
+- Removed the private-domain meeting transcript plugin material from open LTO
+  and removed its ignore rule so future domain plugins cannot silently bypass
+  normal `git status` and privacy scans.
+- Kept `adversarial-audit`, `claim-verify-research`, and `migration-refactor`
+  as explicit host-selected scenario plugins, documented their mount paths in
+  the workflow playbook, and added a regression test that validates, static
+  evals, and mounts each retained plugin.
+- Classified `src/tmux_runner.rs` redaction tests in `privacy_self_check.sh`,
+  restoring the strict privacy gate after the audit found those fixtures were
+  still reported as unclassified hits.
+
 ### L3 dispatch-goal and L4 cross-run mining
 
 - Added `lto dispatch-goal` for tmux-backed goal dispatch to codex, pi, and agy,

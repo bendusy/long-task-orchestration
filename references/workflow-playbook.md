@@ -83,6 +83,8 @@ run-state、task evidence 或等价 artifact：
 - `lto check --to implementation|closed`
 - `lto judge --phase <phase>`
 - 场景插件 `plugins/adversarial-audit`：refute-first prompt、codex/pi/agy 跨族 profile、union 合并收敛路径
+  - 挂载示例：`lto plugin mount plugins/adversarial-audit --run-id <run-id>`
+  - 静态验证：`lto plugin validate plugins/adversarial-audit --json`
 
 期望 artifact：
 
@@ -199,6 +201,8 @@ run-state、task evidence 或等价 artifact：
 - `lto audit --auto-dispatch` 做 adversarial review
 - `lto check --to closed --strict`
 - 场景插件 `plugins/migration-refactor`：最小样例先行 + 批间回归闸门路径、diff 审计 / 语义等价 profile
+  - 挂载示例：`lto plugin mount plugins/migration-refactor --run-id <run-id>`
+  - 静态验证：`lto plugin validate plugins/migration-refactor --json`
 
 期望 artifact：
 
@@ -235,6 +239,8 @@ run-state、task evidence 或等价 artifact：
 - 可用 `lto runner --kind manual` 登记核验证据。
 - 高风险时走 `audit --auto-dispatch` 做 source adversarial review。
 - 场景插件 `plugins/claim-verify-research`：claim 拆解 / 证据反驳 / completeness critic 三类 profile 与主路径。
+  - 挂载示例：`lto plugin mount plugins/claim-verify-research --run-id <run-id>`
+  - 静态验证：`lto plugin validate plugins/claim-verify-research --json`
 
 期望 artifact：
 
@@ -269,6 +275,8 @@ run-state、task evidence 或等价 artifact：
 - `lto runner --kind manual` 登记关键证据。
 - `audit --auto-dispatch` 用于 adversarial source critique。
 - 场景插件 `plugins/claim-verify-research` 同样适用本场景（fan-out 检索 + completeness critic）。
+  - 挂载示例：`lto plugin mount plugins/claim-verify-research --run-id <run-id>`
+  - 静态验证：`lto plugin validate plugins/claim-verify-research --json`
 
 期望 artifact：
 

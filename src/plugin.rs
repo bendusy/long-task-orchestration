@@ -835,6 +835,46 @@ mod tests {
     }
 
     #[test]
+    fn retained_scenario_plugins_validate_and_have_eval_packs() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let tmp = tempfile::tempdir().unwrap();
+        let lock = tmp.path().join("plugin-mounts.json");
+        for plugin_name in [
+            "adversarial-audit",
+            "claim-verify-research",
+            "migration-refactor",
+        ] {
+            let plugin = repo.join("plugins").join(plugin_name);
+            let validation = validate_plugin(&plugin).unwrap();
+            assert!(validation.ok, "{plugin_name}: {:?}", validation.errors);
+            let report = static_eval(&plugin, None).unwrap();
+            assert_eq!(report["ok"], true, "{plugin_name}: {report}");
+            assert!(
+                !report["evals"].as_array().unwrap().is_empty(),
+                "{plugin_name} should keep at least one eval pack"
+            );
+            let mount = mount_plugin(&plugin, &lock).unwrap();
+            assert_eq!(mount.plugin_id, plugin_name);
+        }
+        let lock_data: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(lock).unwrap()).unwrap();
+        let mounted = lock_data["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["plugin_id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            mounted,
+            vec![
+                "adversarial-audit",
+                "claim-verify-research",
+                "migration-refactor",
+            ]
+        );
+    }
+
+    #[test]
     fn render_profile_appends_prompt_suffix() {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let plugin = repo.join("plugins").join("deep-agent-profiles");

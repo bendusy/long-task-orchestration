@@ -11,7 +11,7 @@
 - 发现 3 个值得修正或另立 goal 的真实漂移：`autopilot --decide`、`audit --collect <reply-dir>`、`budget extend/start budget caps` 在部分活跃文档中被描述为当前命令，但当前 `lto-rs --help` 没有这些参数或子命令。
 - 本任务 dogfooding 发现并修复 1 个 LTO 自身 bug：`audit --auto-dispatch --discover-risks` 在健康检查 probe 失败时曾 fail-open 选择首个 auditor，现改为 fail-closed 返回 “no healthy heterogeneous discoverer”。验证：`cargo test --locked audit_dispatch` 通过。
 - 最终异构审计已在提升权限下跑通：`PROBE_TIMEOUT=30 scripts/delegate/runners/healthcheck.sh codex pi agy --json` 三家 OK；`cargo run --quiet -- audit --run-id 20260617-rust-inheritance-readme-investigation --auto-dispatch --discover-risks` 由 pi/agy 完成，HIGH/CRITICAL=0，留下 2 条 medium 文档/报告改进项并已处理。
-- 插件系统已经能生效：`validate -> render-profile -> eval -> mount -> eval-run` 全链路可跑。当前 `plugins/` 目录实证有 6 个插件，不是 goal 文档里写的 7 个。
+- 插件系统已经能生效：`validate -> render-profile -> eval -> mount -> eval-run` 全链路可跑。当前 `plugins/` 目录实证有 5 个插件；私有领域残留插件已从开源 LTO 删除。
 - 预设工作流是 host-agent playbook，不是 `lto workflow run X`。当前 playbook 覆盖 review、enterprise-audit、debug、migration、claim-verify、research、feature-dev、tmux-goal-loop、docs-sync、release、direction-review。
 
 ## A. Rust 功能继承审计
@@ -159,7 +159,7 @@ Rust 对主运行时的继承总体成立，但不是“无缺口”。当前应
 
 | 命令 | 作用 | 数据流 |
 |---|---|---|
-| `plugin list` | 发现 repo 内插件 | 扫 `plugins/*/plugin.json`。当前实证 6 个插件。 |
+| `plugin list` | 发现 repo 内插件 | 扫 `plugins/*/plugin.json`。当前实证 5 个插件。 |
 | `plugin validate <dir>` | 校验 manifest、引用文件、profile、eval pack | 读 plugin tree，不写。 |
 | `plugin render-profile <dir> <profile>` | 将 base prompt + profile suffix 渲染成普通 prompt | 读 profile/prompt/schema，写 output 和可选 meta。 |
 | `plugin eval <dir>` | 静态检查 eval pack | 读 eval pack，验证 case/profile/metrics 引用。 |

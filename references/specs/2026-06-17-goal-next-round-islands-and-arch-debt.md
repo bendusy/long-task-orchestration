@@ -28,7 +28,7 @@
 | ✅ C | 补 ⑦ **model 维度** 到 cross_run_mining（slot key 3→4 元组加 model）— 已落地并通过 R2 异构审计收敛 | 高（四层 loop 真缺口） |
 | ✅ A | 接线/删除 4 个函数孤岛（parse_agy_stdout / command_with_args / ledger_sequence / os_strs）— commit `45178a9` | 小（热身） |
 | ✅ B | agy runner 事件解析未接进生产流 — commit `45178a9` 删除 `runner_events` 整体孤岛，见本节裁决 | 中 |
-| F | 4 个未挂载插件去留裁决（含隐私扫描 meeting-transcript） | 中 |
+| ✅ F | 4 个未挂载插件去留裁决（含隐私扫描私域插件）— 已删除私域残留，保留三类场景插件并补 mount 路径 | 中 |
 | D | autonomous_gate 升级证据驱动（与 BUG-4 联动，守 fail-closed 红线） | 中 |
 | E | runner_plan 硬编码抽象 | 可选（并入权限批） |
 
@@ -167,15 +167,22 @@ R1 pi/agy 审计指出 split-slot 和 WARN 缺 model；修复后 R2 pi/agy 返�
 
 ## Phase F：4 个未挂载插件的去留裁决（中）
 
-**缺陷**（host 亲验坐实）：`adversarial-audit` / `claim-verify-research` / `meeting-transcript` / `migration-refactor` 四个插件 grep 全仓**零代码引用**（只有 README 提及 + 完整 manifest/profile/eval），从无 mount/eval-run 调用路径。对比 `deep-agent-profiles`/`dev-workflow` 有代码引用（不是孤岛）。
+**缺陷**（host 亲验坐实）：`adversarial-audit` / `claim-verify-research` / 一个私域 transcript 插件 / `migration-refactor` 四个插件 grep 全仓**零代码引用**（只有 README 提及 + 完整 manifest/profile/eval），从无 mount/eval-run 调用路径。对比 `deep-agent-profiles`/`dev-workflow` 有代码引用（不是孤岛）。
 
 **落点**：每个插件二选一——
 - **有真实工作流场景** → 在 workflow-playbook.md 写清触发信号 + 给一个 `plugin mount` 实跑示例（让它至少有一条文档化的使用路径），并在某个测试/smoke 里 validate。
 - **无场景/重复** → 从仓库删除（plugins/ 目录 + README 引用），别留装饰性插件冒充能力。
 
-**架构岔路 host 裁决**：`adversarial-audit` 大概率该留（对抗审计是 LTO 核心卖点），但要给它真实接线示例；`meeting-transcript` 在开源 LTO 里大概率是私有领域时代残留（**注意隐私边界——若插件内容含私有业务痕迹必须删，不只是不挂载**）。逐个判，commit message 说明每个的去留依据。
+**架构岔路 host 裁决**：`adversarial-audit` 大概率该留（对抗审计是 LTO 核心卖点），但要给它真实接线示例；私域 transcript 插件在开源 LTO 里大概率是私有领域时代残留（**注意隐私边界——若插件内容含私有业务痕迹必须删，不只是不挂载**）。逐个判，commit message 说明每个的去留依据。
 
-> ⚠️ **隐私红线**：处置 meeting-transcript 等插件时，扫描插件内容确保无私有业务领域痕迹，有则连内容一起删干净（去敏感内容的 diff 应全是删除行）。
+> ⚠️ **隐私红线**：处置私域插件时，扫描插件内容确保无私有业务领域痕迹，有则连内容一起删干净（去敏感内容的 diff 应全是删除行）。
+
+**当前裁决（2026-06-17）**：`adversarial-audit`、`claim-verify-research`、
+`migration-refactor` 保留为 host 主动选择的 data-only 场景插件；README 和
+`workflow-playbook.md` 已补对应触发场景、`plugin mount` 示例和 `plugin validate`
+静态验证入口，并用测试固定三者 validate / static eval / mount provenance。
+私域 transcript 插件判定为私有领域残留，已删除插件文件和 `.gitignore`
+忽略规则，避免未来私域材料绕过 `git status` / privacy scan 静默回流。
 
 ---
 

@@ -361,7 +361,7 @@ eval pack 与现有三插件同合同：
 
 ## 7. 验收标准（本 spec 自身的 done 定义）
 
-1. `lto plugin validate` 全绿（4 插件）+ 静态 eval 全绿；
+1. `lto plugin validate` 全绿（`dev-workflow` + retained W3 场景插件）+ 静态 eval 全绿；
 2. eval-run 实测：dev-workflow 4 case 全 `ok=true`、candidate
    `parse_ok=true`、零新增 `private_path_leak` / `permission_violation`；
    adversarial-audit 的 agy 负向 case 断言 scheduler 拒绝信息命中；
