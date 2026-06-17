@@ -43,10 +43,8 @@ pub fn pick_healthy_discoverer_with_runners_dir(
     if auditors.is_empty() {
         return None;
     }
-    match healthcheck_blocking(repo, runners_dir, auditors) {
-        Ok(health) => first_healthy(auditors, &health),
-        Err(_) => auditors.first().cloned(),
-    }
+    let health = healthcheck_blocking(repo, runners_dir, auditors).ok()?;
+    first_healthy(auditors, &health)
 }
 
 pub fn auto_dispatch_output_schema() -> Value {
@@ -221,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn discoverer_falls_through_all_unhealthy_and_probe_failure_paths() {
+    fn discoverer_fails_closed_for_all_unhealthy_and_probe_failure_paths() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
         let runners = tmp.path().join("runners");
@@ -249,7 +247,7 @@ mod tests {
         fs::remove_file(runners.join("healthcheck.sh")).unwrap();
         assert_eq!(
             pick_healthy_discoverer_with_runners_dir(&repo, &auditors, "claude", &runners),
-            Some("codex".to_string())
+            None
         );
     }
 
