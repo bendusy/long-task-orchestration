@@ -80,16 +80,6 @@ where
     git_output_args(repo, &args)
 }
 
-pub fn command_with_args<I, S>(program: &str, args: I) -> Command
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let mut cmd = Command::new(program);
-    cmd.args(args);
-    cmd
-}
-
 fn collect_args<I, S>(args: I) -> Vec<OsString>
 where
     I: IntoIterator<Item = S>,

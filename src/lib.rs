@@ -17,7 +17,6 @@ pub mod plugin;
 pub mod plugin_eval_run;
 pub mod process;
 pub mod redact;
-pub mod runner_events;
 pub mod scheduler;
 pub mod state;
 pub mod telemetry;

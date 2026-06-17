@@ -158,15 +158,17 @@ fn enforce_gates(
         let rounds = util::parse_ledger(&text)?;
         let verdict = util::evaluate_ledger(&rounds, false);
         if verdict != util::LedgerVerdict::Converged {
+            let sequence = util::ledger_sequence(&rounds);
             emit_closeout_gate_blocked(
                 repo,
                 &ctx.run_id,
                 "audit ledger not converged",
-                json!({"ledger_verdict": verdict.as_str()}),
+                json!({"ledger_verdict": verdict.as_str(), "ledger_sequence": sequence.clone()}),
             );
             anyhow::bail!(
-                "closeout refused: ledger verdict is {}, not CONVERGED (use --force to override)",
-                verdict.as_str()
+                "closeout refused: ledger verdict is {}, not CONVERGED ({}) (use --force to override)",
+                verdict.as_str(),
+                sequence
             );
         }
     }

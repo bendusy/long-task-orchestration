@@ -57,6 +57,14 @@
 
 ## Unreleased
 
+### Phase A island cleanup
+
+- Removed the dead `runner_events` parser module and its unused fixtures after
+  heterogeneous audit confirmed it had zero production callers.
+- Removed unused helper APIs (`command_with_args`, `os_strs`, `write_json`) and
+  wired `ledger_sequence` into `check`/`closeout` ledger gate messages so audit
+  non-convergence reports include the blocker sequence.
+
 ### L3 dispatch-goal and L4 cross-run mining
 
 - Added `lto dispatch-goal` for tmux-backed goal dispatch to codex, pi, and agy,

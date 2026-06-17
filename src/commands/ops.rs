@@ -43,6 +43,7 @@ pub(crate) struct CheckOutcome {
 struct LedgerCheck {
     has_rounds: bool,
     verdict: Option<util::LedgerVerdict>,
+    sequence: Option<String>,
     error: Option<String>,
 }
 
@@ -501,12 +502,16 @@ fn collect_ledger_check(
                 LedgerCheck {
                     has_rounds: false,
                     verdict: None,
+                    sequence: None,
                     error: None,
                 }
             } else {
+                let verdict = util::evaluate_ledger(&rounds, strict);
+                let sequence = util::ledger_sequence(&rounds);
                 LedgerCheck {
                     has_rounds: true,
-                    verdict: Some(util::evaluate_ledger(&rounds, strict)),
+                    verdict: Some(verdict),
+                    sequence: (!sequence.is_empty()).then_some(sequence),
                     error: None,
                 }
             }
@@ -514,6 +519,7 @@ fn collect_ledger_check(
         Err(err) => LedgerCheck {
             has_rounds: false,
             verdict: None,
+            sequence: None,
             error: Some(err.to_string()),
         },
     };
@@ -530,7 +536,12 @@ fn collect_ledger_check(
             .warnings
             .push("ledger exists but has no filled rounds".to_string()),
         (None, Some(verdict), true) if *verdict != util::LedgerVerdict::Converged => {
-            let msg = format!("ledger not converged: {}", verdict.as_str());
+            let msg = match status.sequence.as_deref() {
+                Some(sequence) => {
+                    format!("ledger not converged: {} ({sequence})", verdict.as_str())
+                }
+                None => format!("ledger not converged: {}", verdict.as_str()),
+            };
             if strict {
                 outcome.errors.push(msg);
             } else {

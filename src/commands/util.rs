@@ -6,7 +6,6 @@ use chrono::{DateTime, FixedOffset, Local, Utc};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -620,14 +619,6 @@ pub fn read_to_string_lossy(path: &Path) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&fs::read(path)?).into_owned())
 }
 
-pub fn write_json(path: &Path, value: &Value) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, serde_json::to_string_pretty(value)? + "\n")?;
-    Ok(())
-}
-
 pub fn append_to_object_array(root: &mut Value, key: &str, value: Value) {
     let object = json_object_mut(root);
     let array = object
@@ -792,10 +783,6 @@ pub fn git_add_plan_commands(tag: &str) -> Vec<String> {
         format!("git commit -m 'chore(release): {tag}'"),
         format!("git tag {tag}"),
     ]
-}
-
-pub fn os_strs<'a>(items: &'a [&'a str]) -> impl IntoIterator<Item = &'a OsStr> {
-    items.iter().map(|item| OsStr::new(*item))
 }
 
 #[cfg(test)]
