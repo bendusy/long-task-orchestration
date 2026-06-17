@@ -1,9 +1,46 @@
 # Goal: 接线孤岛模块 + 补齐四层 loop 反馈边 + 抽象债清理（下一轮）
 
-> 致 pi（本轮落地执行方 = pi；异构审计方 = codex / agy，不派 pi 自审）：沿用约束（LTO 自管 / 每 Phase 收口派 codex+agy 异构审计 / dogfooding / 红线不弱化 / commit 你写、release/tag/push 归 host）。
-> 这份按 Phase 切，**每个 Phase 独立可收口可 commit。做完一个 Phase 停下 commit，再开下一个，别一口气啃完所有 Phase**（长 thread 精度掉，pi deepseek thinking 尤其吃 context）。
-> **执行顺序建议**：先做高价值三家共识项 → BUG-7（state/events 双写不一致）→ BUG-2（events O(N) I/O）→ Phase C（② model 维度）；再做孤岛/其余 bug；抽象债（Phase E runner_plan）可选最后。
-> **每 Phase 收口必跑红线**：`cargo fmt --all --check` + `cargo clippy --locked --all-targets -- -D warnings` + `cargo test --locked` + `python3 scripts/check_docs_consistency.py` + `python3 scripts/check_python_rust_ownership.py`；然后派 codex/agy 异构审本 Phase diff（你是落地方，审计要异构，别自审）。host 会在每个 Phase commit 后亲验，不信自述。
+> 致 codex（本轮落地执行方 = codex；异构审计方 = pi / agy，不派 codex 自审）：沿用约束（LTO 自管 / 每 Phase 收口派 pi+agy 异构审计 / dogfooding / 红线不弱化 / commit 你写、release/tag/push 归 host）。
+> 这份按 Phase 切，**每个 Phase 独立可收口可 commit。做完一个 Phase 停下 commit，再开下一个，别一口气啃完所有 Phase**（长 thread 精度掉）。
+> **每 Phase 收口必跑红线**：`cargo fmt --all --check` + `cargo clippy --locked --all-targets -- -D warnings` + `cargo test --locked` + `python3 scripts/check_docs_consistency.py` + `python3 scripts/check_python_rust_ownership.py`；然后派 pi/agy 异构审本 Phase diff（你是落地方，审计要异构，别自审）。host 会在每个 Phase commit 后亲验，不信自述。
+
+## 📋 进度看板（截至 v0.6.0，2026-06-17）
+
+**✅ 已完成（上一轮，已随 v0.6.0 发布）**：
+- BUG-7 state/events 双写不一致（commit `76b1022`，host 亲验 + pi/agy 异构审通过）
+- BUG-2 events O(N)→O(1) counter 文件（`ec303a5` + 审计返工 `160c45a`，host 端到端亲验）
+- L3 dispatch-goal 完成事件 + L4 recap --mine（v0.6.0 主体）
+
+**🔴 待做 BUG（本轮优先级从上到下）**：
+| # | 问题 | 严重度 | 落地前必做 |
+|---|---|---|---|
+| BUG-4 | 派工结果不进 `state.agent_runs` → autonomous_gate 失真（与 Phase D 同一问题两面） | 高 | host 先 grep 亲验是否真没回填 |
+| BUG-1 | scheduler 管道写端泄漏 → 超时任务挂死 | 中 | await 加 `tokio::time::timeout` |
+| BUG-5 | `.events.lock` 孤立锁 → run 永久卡死 | 低概率高后果 | 加 stale 锁检测（pid+时间戳），不回退 ⑫ fail-closed |
+| BUG-3 | worktree 异常早退泄漏 persistent worktree | 待定 | host 先亲验真伪再改 |
+| BUG-8 | 错误静默吞没（heartbeat 文件泄漏确定修；其余确认真才改） | 中/低 | 逐条核 |
+| BUG-2 残留 | 半写合法数字前缀 / count() 非纯读 | 非阻断 | 顺手硬化，不专门返工 |
+
+**🟡 待做 Phase**：
+| Phase | 内容 | 价值 |
+|---|---|---|
+| C | 补 ⑦ **model 维度** 到 cross_run_mining（slot key 3→4 元组加 model） | 高（四层 loop 真缺口） |
+| A | 接线/删除 4 个函数孤岛（parse_agy_stdout / command_with_args / ledger_sequence / os_strs） | 小（热身） |
+| B | agy runner 事件解析未接进生产流 | 中 |
+| F | 4 个未挂载插件去留裁决（含隐私扫描 meeting-transcript） | 中 |
+| D | autonomous_gate 升级证据驱动（与 BUG-4 联动，守 fail-closed 红线） | 中 |
+| E | runner_plan 硬编码抽象 | 可选（并入权限批） |
+
+**🔵 架构债（同族，未来一个"权限批"一起做，本轮不单独动）**：权限模型四家不通约 + 派工 sh/CLI 权限决策收进 Rust + Phase E runner_plan 抽象。另：`lto release` plan 不含 Cargo.toml（发版工具增强项，目前 `scripts/release_preflight.sh` 兜住）。
+
+**▶ 本轮建议执行顺序**：
+1. **BUG-4 + Phase D**（同一问题两面，一起做）——高价值，gate 失真影响 autonomous
+2. **Phase C**（model 维度）——L4 越用越聪明的核心
+3. **BUG-1 + BUG-5 + BUG-8**（scheduler/events 健壮性，一批）
+4. **Phase A / B / F**（孤岛清理）
+5. 架构债批（权限模型，最后，可单独立 GOAL）
+
+> 每完成一项，在本看板对应行标 ✅ + commit hash。发版走 `references/release-workflow.md` + `scripts/release_preflight.sh`（host 做，你不 release/tag）。
 
 ## 为什么做（第一性）
 
