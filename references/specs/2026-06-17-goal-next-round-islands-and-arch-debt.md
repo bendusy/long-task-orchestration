@@ -20,6 +20,7 @@
 | BUG-3 | worktree 异常早退泄漏 persistent worktree | 待定 | host 先亲验真伪再改 |
 | BUG-8 | 错误静默吞没（heartbeat 文件泄漏确定修；其余确认真才改） | 中/低 | 逐条核 |
 | BUG-2 残留 | 半写合法数字前缀 / count() 非纯读 | 非阻断 | 顺手硬化，不专门返工 |
+| BUG-9 | `collect-agent-run --status` 枚举 UX 差：`--help` 不列合法值、错误信息 `invalid job status: "returned"` 不提示合法值 → 每个用 LTO 的 agent 都会撞（实测一个跑诊断 run 的 agent 用直觉词 "returned" 被拒，自己 fallback 去掉 --status 才过）。合法值是 `pending/running/ok/failed/timeout/rate_limited/skipped`（`agent_job.rs:89`） | 中（UX，高频踩） | 三处一起修：① `--help` 用 clap `value_parser`/`possible_values` 列出枚举 ② 错误信息附上合法值列表 ③ 考虑给 "returned"→"ok" 之类近义词容错或在错误里建议。改前确认 clap 版本支持 enum value_parser |
 
 **🟡 待做 Phase**：
 | Phase | 内容 | 价值 |
