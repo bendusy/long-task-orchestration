@@ -182,6 +182,8 @@ pub enum Commands {
         run_id: Option<String>,
         #[arg(long)]
         artifacts: bool,
+        #[arg(long)]
+        mine: bool,
     },
     #[command(about = "Inspect budget usage")]
     Budget {
@@ -907,8 +909,19 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             )?;
             println!("{}", run_dir.display());
         }
-        Commands::Recap { run_id, artifacts } => {
-            recap::cmd_recap(&args.repo, recap::RecapOptions { run_id, artifacts })?;
+        Commands::Recap {
+            run_id,
+            artifacts,
+            mine,
+        } => {
+            recap::cmd_recap(
+                &args.repo,
+                recap::RecapOptions {
+                    run_id,
+                    artifacts,
+                    mine,
+                },
+            )?;
         }
         Commands::Resume { run_id } => {
             resume::cmd_resume(&args.repo, resume::ResumeOptions { run_id })?;

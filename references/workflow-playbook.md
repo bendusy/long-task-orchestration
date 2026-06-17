@@ -309,6 +309,9 @@ run-state、task evidence 或等价 artifact：
 - specify 阶段挂 `plugins/dev-workflow`（spec co-design 审可复用
   `plugins/adversarial-audit` 的 refuter profile）。
 - `lto runner` 落实现证据；`lto audit --auto-dispatch` 做 impl-audit。
+- 长目标要交给 codex/pi/agy 在 tmux 中自驱时，用 `lto dispatch-goal`
+  派 goal；完成通知写入对应 run 的 `events.jsonl` 中的
+  `agent.turn.completed`，不写单独的 turns 日志。
 - worktree_exec 在 dispatch 阶段隔离写入（specify 全程 read-only，
   spec 收口后才开 worktree）。
 - `lto judge` / `lto closeout`。

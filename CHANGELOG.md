@@ -1,6 +1,48 @@
 # Changelog
 
+## Implement references/specs/2026-06-17-goal-L3-dispatch-L4-mining-unified.md
+
+- **Run ID**: `20260617-034103-implement-references-specs-2026-06-17-go-213bfa75`
+- **Closed**: 2026-06-17T05:49:56+00:00
+- **Summary**: Implemented L3 dispatch-goal completion events and L4 read-only cross-run mining over events.jsonl; fixed audit blockers; redlines, docs, audit ledger, and release build passed.
+
+### Tasks
+
+- **L3**: L3 dispatch-goal and agent.turn.completed event notification (done)
+  - [manual] architecture_alignment: L3 belongs in existing tmux_runner/runner dispatch surfa
+  - [manual] first_principles: L3 is the sensor layer for L4; if turn completion is written t
+  - [manual] L3 implemented: KNOWN_EVENT_TYPES includes agent.turn.completed; dispatch-goal r
+- **L4**: L4 cross-run mining and readonly recap --mine brief (done)
+  - [manual] simplification_dedupe: L4 must lift telemetry.rs runner_metrics/by_runner-style
+  - [manual] L4 implemented: telemetry::cross_run_mining discovers .lto runs, reads events.js
+- **DOC**: Backlog README SKILL workflow-playbook documentation alignment (done)
+  - [manual] Docs aligned: COMMANDS documents recap --mine; INSTALL distinguishes agy -i manu
+- **VERIFY**: Phase gates dogfood audit and split commits (done)
+  - [manual] value_measurement: baseline is current CLI lacking dispatch-goal and recap --min
+  - [manual] Verification so far passed: cargo fmt --all --check; cargo clippy --locked --all
+  - [manual] Final verification passed after R1 audit fixes: cargo fmt --all --check; cargo c
+
+**Next**: Host owns release/tag/push; local implementation is ready after split commits and post-commit strict check.
+
+
 ## Unreleased
+
+### L3 dispatch-goal and L4 cross-run mining
+
+- Added `lto dispatch-goal` for tmux-backed goal dispatch to codex, pi, and agy,
+  reusing the Rust tmux carrier instead of adding a second tmux layer. pi and
+  agy run through exiting shell wrappers so pane-exit completion can be emitted.
+- Added `agent.turn.completed` to the events whitelist and a hook-facing
+  `agent-turn-completed` emitter. Completion notifications now go to
+  `.lto/<run>/events.jsonl`; no `turns.jsonl` stream is written.
+- Codex dispatch installs an idempotent Stop hook with backup/uninstall support
+  and updates its own LTO marker when the target repo changes. agy dispatch
+  uses `agy --print` so the shell wrapper can emit completion on process exit;
+  interactive `agy -i` remains a manual TUI mode.
+- Moved `recap --mine` onto Rust `telemetry::cross_run_mining`: it scans run
+  events across `.lto/*`, groups by runner/task/date, counts
+  `agent.turn.completed`, and prints a read-only brief without changing config,
+  routing, or runner priority.
 
 ### Hardening from heterogeneous audit findings (backlog ⑫)
 

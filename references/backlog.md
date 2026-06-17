@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|
 | ① | `events.jsonl` / `telemetry.json` 被动事件流 | ★★★ 最高 | **P0** | ✅ 已实现 | **地基**：解锁 ②③ |
 | ② | `DEFERRED_V0` llm_judge 质量评分 + 假阳率 | ★★ 高 | P1 | ✅ 已实现 | judge 异构判读 + frozen hash，单独成层不进 promote |
-| ⑥ | **跨 run 数据挖掘 → 进化**（按 runner模型×status×时间 聚合，挖真实有效性喂回 host） | ★★★ 最高 | **P0-next** | ⬜ **Rust 未实现**（假阳性纠正 2026-06-17） | L4 hill-climbing 真空白；详见正文「实现状态」节 |
+| ⑥ | **跨 run 数据挖掘 → 进化**（按 runner模型×status×时间 聚合，挖真实有效性喂回 host） | ★★★ 最高 | **P0-next** | ✅ **已实现** (2026-06-17) | L4 hill-climbing 已通过 `recap --mine` 实现只读聚合与建议 |
 | ⑦ | **`AgentResult` 落 `model` 字段**（让 ⑥ 区分同 runner 不同 model） | ★★ 高 | **P1** | ✅ 已实现 | scheduler 单点回填 job.model；⑥ 挖掘出 model 分布；向后兼容 |
 | ③ | `autopilot --autonomous` 机械闸门+机械执行（不 spawn 决策 agent） | ★ 中 | P2 | ✅ 已实现 | 证据闸门读⑥；codex 审 2BLOCKER+3HIGH 修；历史 `--decide` 未接到当前 CLI |
 | ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | ✅ 已实现 | am 0.7.0 AmCliSink 落地真跑；am 可选，无 am 优雅降级 |
@@ -78,7 +78,7 @@
 - **为何 P0-next**：这是 `protocol-and-language-strategy.md`「越用越聪明」的真正落点，比 ②③ 更接近终极目标。但**必须 ① 先攒够真实日志**才有数据可挖——所以紧随 ①。
 - **关键复用**：`interventions.py` 已有 `aggregate_across_runs` / `recurring_friction` / `render_cross_run_advisory`——**跨 run 挖掘摩擦的成熟模式已存在**。⑥ 是把同样模式套到 events.jsonl + ② 的 judge 结果上，新增维度：**按 runner 模型分组**（哪个模型在哪类任务有效），不只是按 category。
 - **缺口锚点**：`events.py` 当前**只有单 run 读取，零跨 run 聚合**（已核实）。
-- **⚠️ 实现状态（2026-06-17 假阳性纠正，host 亲验）**：总览表一度标「✅ 已实现」是**错的**。证据：① 本节正文「关键复用/缺口锚点」引的全是 **Python 名字**（`interventions.py` / `aggregate_across_runs` / `recurring_friction` / `render_cross_run_advisory` / `events.py`）——这些随 Python fallback 在 v0.5.0 退役了；② Rust 侧实证：`recap` 只有 `--run-id`/`--artifacts`，**无 `--mine`**；`recap.rs` 的 `by_runner` 只是**单 run token 用量聚合**（`token_summary`），不是「runner 模型 × 任务 × 时间」的跨 run 有效性挖掘；`telemetry.rs` 是单 run 派生信号，无跨 run 聚合。**结论：L4 hill-climbing 在 Rust 是真空白，⑥ 待重新实现。**
+- **⚠️ 实现状态（2026-06-17 已实现）**：现已全面打通。通过 `lto recap --mine` 跨 run 扫描所有 `.lto/*/events.jsonl`，按 `(runner × task_type × 时间窗)` 聚合派工次数、失败率、耗时、retry、审计收敛轮次等，只读出 tuning brief (客观测量/主观非测量)。这标志着 L4 hill-climbing 成功落地。
 - **Rust 重做方向（业界对标，2026-06-17）**：参考 `Nimrobo/superdense`（L4 产品化）的数据模型——session → enrichers 派生信号（run cost / errors / tool counts / first-intent / fingerprint / plan-mode / session-kind / subagent-summary）→ curation → reward snapshot；`next` 可学其 `nextAction{stage, command, why}` 机制（stage 化 + actionable 计数），但 **stage 要换成 LTO 自己领域**（挖 runner 有效性 → 识别反复翻车路径 → 出 tuning brief），不照搬 superdense 的 outcome stage。详见 am `2026-06-17-技术-从LTO架构承接loop启发的演进判断`。
 - **铁律**：挖掘出的是**证据和派生信号**，不是命令——LTO 出 brief，host 决定调优，绝不自动 route/promote/晋升（沿用 control-loop 不变量）。judge 的主观分参与挖掘时仍标「主观非测量」。这正是 LTO L4 与 LangChain L4「自动改写 harness」的分歧线（LTO 守人在环，站 superdense「goal 永不自动改」一侧）。
 

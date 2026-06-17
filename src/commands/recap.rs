@@ -9,9 +9,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct RecapOptions {
     pub run_id: Option<String>,
     pub artifacts: bool,
+    pub mine: bool,
 }
 
 pub fn cmd_recap(repo: &Path, options: RecapOptions) -> anyhow::Result<()> {
+    if options.mine {
+        return recap_mine(repo);
+    }
     let ctx = util::load_run(repo, options.run_id.as_deref())?;
     println!(
         "{}",
@@ -368,6 +372,96 @@ fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
+pub fn recap_mine(repo: &Path) -> anyhow::Result<()> {
+    let mining = crate::telemetry::cross_run_mining(repo)?;
+    println!("{}", render_mining_brief(&mining));
+    Ok(())
+}
+
+fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
+    let mut lines = vec![
+        "=== LTO Cross-Run Tuning Brief ===".to_string(),
+        "只读分析：不写配置、不改 runner 优先级、不自动 route/promote。".to_string(),
+        format!("runs_scanned: {}", mining.run_count),
+        String::new(),
+    ];
+    if mining.entries.is_empty() {
+        lines.push("未发现可挖掘的 runner.finished 或 agent.turn.completed 事件。".to_string());
+        return lines.join("\n");
+    }
+    lines.push("| Runner | 任务类型 | 时间窗 | distinct runs | 失败率 | 平均耗时 | 平均 retry | 平均 audit 轮次 | turn.completed | 评估类型 |".to_string());
+    lines.push(
+        "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |".to_string(),
+    );
+    for entry in &mining.entries {
+        lines.push(format!(
+            "| {} | {} | {} | {} | {:.1}% | {} | {} | {} | {} | {} |",
+            entry.runner,
+            entry.task_type,
+            entry.time_window,
+            entry.distinct_runs,
+            failure_rate(entry) * 100.0,
+            format_opt_seconds(entry.avg_elapsed_sec),
+            format_opt_float(entry.avg_retry),
+            format_opt_float(entry.avg_audit_rounds),
+            entry.agent_turn_completed,
+            if entry.subjective_non_measurement {
+                "主观非测量"
+            } else {
+                "客观测量"
+            }
+        ));
+    }
+    lines.push(String::new());
+    lines.push("=== 派生信号 ===".to_string());
+    let mut emitted = false;
+    for entry in &mining.entries {
+        let rate = failure_rate(entry);
+        if rate >= 0.3 && entry.distinct_runs >= 3 {
+            emitted = true;
+            lines.push(format!(
+                "WARN {} 在 {} 类任务 failure_rate={:.1}% over {} distinct runs。",
+                entry.runner,
+                entry.task_type,
+                rate * 100.0,
+                entry.distinct_runs
+            ));
+        }
+        if entry.avg_audit_rounds.unwrap_or(0.0) >= 3.0 {
+            emitted = true;
+            lines.push(format!(
+                "WARN {} 关联 runs 平均 audit 收敛轮次 {:.1}。",
+                entry.runner,
+                entry.avg_audit_rounds.unwrap_or(0.0)
+            ));
+        }
+    }
+    if !emitted {
+        lines.push("未发现达到阈值的高失败率或审计反复翻车信号。".to_string());
+    }
+    lines.join("\n")
+}
+
+fn failure_rate(entry: &crate::telemetry::CrossRunMiningEntry) -> f64 {
+    if entry.distinct_runs == 0 {
+        0.0
+    } else {
+        entry.failed as f64 / entry.distinct_runs as f64
+    }
+}
+
+fn format_opt_seconds(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.1}s"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_opt_float(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.1}"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +524,34 @@ mod tests {
 
         state.agent_runs = json!({"j3": [{"job_id": "j3", "runner": "agy", "status": "ok"}]});
         assert!(token_summary(&state).contains("未计量"));
+    }
+
+    #[test]
+    fn render_mining_brief_is_readonly_and_includes_completed_counts() {
+        let brief = render_mining_brief(&crate::telemetry::CrossRunMining {
+            run_count: 2,
+            entries: vec![crate::telemetry::CrossRunMiningEntry {
+                runner: "pi".to_string(),
+                task_type: "implementation".to_string(),
+                time_window: "2026-06-17".to_string(),
+                dispatches: 2,
+                ok: 1,
+                failed: 1,
+                timeout: 0,
+                skipped: 0,
+                avg_elapsed_sec: Some(12.0),
+                avg_retry: Some(0.5),
+                avg_audit_rounds: Some(1.0),
+                agent_turn_completed: 2,
+                distinct_runs: 2,
+                subjective_non_measurement: false,
+            }],
+        });
+
+        assert!(brief.contains("只读分析：不写配置、不改 runner 优先级、不自动 route/promote。"));
+        assert!(brief.contains(
+            "| pi | implementation | 2026-06-17 | 2 | 50.0% | 12.0s | 0.5 | 1.0 | 2 | 客观测量 |"
+        ));
     }
 
     #[test]

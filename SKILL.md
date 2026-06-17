@@ -218,6 +218,7 @@ $LTO start --goal "提升检索召回" \
 $LTO resume        # 给接手的 AI 拉上下文
 $LTO memory resume # 可选：先查 ANIMEM/memory-flow，失败则降级本地
 $LTO recap         # 给人看的回顾（含「花了多少 token」「当前在跑哪些 job」）
+$LTO recap --mine  # 跨 run 聚合挖掘（按 runner 模型 × 任务 × 时间统计派工、失败率、耗时与收敛轮次，出只读 tuning brief）
 
 # 看 job 实时进度（每个派工的输出边跑边写，卡住时主 agent 能直接看）
 tail -f .lto/<run-id>/live/<job-id>.log

@@ -103,7 +103,7 @@ LTO 依赖的是**接口**，不是具体实现。每个插槽都有两档：不
 
 - codex 当宿主：默认沙箱会挡子 runner 写文件，triad 派工全 FAIL；需 `--dangerously-bypass-approvals-and-sandbox` 才可用，仅受控本机场景适用。更优解是给子 runner 专用可写 roots/HOME，最小放权，而非全盘 bypass。
 - pi / agy 当宿主：无需放开沙箱，默认可派工。
-- 任何宿主：pi/DeepSeek 审 16KB 内容耗时可达 170-200s，timeout 要给足 240s+；agy 交互式启动需带初始 prompt（`agy -i "..."`，不带会立即退出）。
+- 任何宿主：pi/DeepSeek 审 16KB 内容耗时可达 170-200s，timeout 要给足 240s+；agy 交互式启动需带初始 prompt（`agy -i "..."`，不带会立即退出）。`lto dispatch-goal --runner pi|agy` 为了拿到可靠的进程退出完成信号，使用 `--print` wrapper 而不是长期交互式 TUI。
 
 ---
 

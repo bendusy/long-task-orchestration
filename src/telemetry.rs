@@ -3,6 +3,7 @@ use crate::redact::redact_text;
 use crate::state::{self, LtoState};
 use chrono::{DateTime, FixedOffset};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -126,7 +127,7 @@ struct RunnerRollup {
 }
 
 fn runner_metrics(events: &[Value]) -> Vec<Value> {
-    let mut by_runner = std::collections::BTreeMap::<String, RunnerRollup>::new();
+    let mut by_runner = BTreeMap::<String, RunnerRollup>::new();
     for event in events
         .iter()
         .filter(|event| event.get("type").and_then(Value::as_str) == Some("runner.finished"))
@@ -183,6 +184,296 @@ fn runner_metrics(events: &[Value]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CrossRunMining {
+    pub run_count: usize,
+    pub entries: Vec<CrossRunMiningEntry>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CrossRunMiningEntry {
+    pub runner: String,
+    pub task_type: String,
+    pub time_window: String,
+    pub dispatches: usize,
+    pub ok: usize,
+    pub failed: usize,
+    pub timeout: usize,
+    pub skipped: usize,
+    pub avg_elapsed_sec: Option<f64>,
+    pub avg_retry: Option<f64>,
+    pub avg_audit_rounds: Option<f64>,
+    pub agent_turn_completed: usize,
+    pub distinct_runs: usize,
+    pub subjective_non_measurement: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CrossRunSlot {
+    ok_runs: BTreeSet<String>,
+    failed_runs: BTreeSet<String>,
+    timeout_runs: BTreeSet<String>,
+    skipped_runs: BTreeSet<String>,
+    elapsed_by_run: BTreeMap<String, f64>,
+    retry_by_run: BTreeMap<String, u64>,
+    completed_runs: BTreeSet<String>,
+    distinct_runs: BTreeSet<String>,
+    subjective_runs: BTreeSet<String>,
+}
+
+pub fn discover_run_ids(repo: &Path) -> anyhow::Result<Vec<String>> {
+    let lto = repo.join(".lto");
+    if !lto.exists() {
+        return Ok(Vec::new());
+    }
+    let mut runs = Vec::new();
+    for entry in fs::read_dir(lto)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() && entry.path().join("state.json").exists() {
+            runs.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    runs.sort();
+    Ok(runs)
+}
+
+pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
+    let run_ids = discover_run_ids(repo)?;
+    let mut audit_rounds_by_run = BTreeMap::<String, usize>::new();
+    let mut subjective_runs = BTreeSet::<String>::new();
+    let mut slots = BTreeMap::<(String, String, String), CrossRunSlot>::new();
+
+    for run_id in &run_ids {
+        let events = match events::read(repo, run_id) {
+            Ok(events) => events,
+            Err(_) => continue,
+        };
+        let audit_rounds = events
+            .iter()
+            .filter(|event| event_type(event) == "audit.converged")
+            .count();
+        audit_rounds_by_run.insert(run_id.clone(), audit_rounds);
+
+        if events
+            .iter()
+            .any(|event| matches!(event_type(event), "decision.voted" | "judge.skipped"))
+        {
+            subjective_runs.insert(run_id.clone());
+        }
+
+        for event in events {
+            match event_type(&event) {
+                "runner.finished" => record_runner_finished(&mut slots, run_id, &event),
+                "agent.turn.completed" => record_agent_turn_completed(&mut slots, run_id, &event),
+                _ => {}
+            }
+        }
+    }
+
+    for slot in slots.values_mut() {
+        for run_id in &slot.distinct_runs {
+            if subjective_runs.contains(run_id) {
+                slot.subjective_runs.insert(run_id.clone());
+            }
+        }
+    }
+
+    let entries = slots
+        .into_iter()
+        .map(|((runner, task_type, time_window), slot)| {
+            let dispatches = slot.distinct_runs.len();
+            let failed = slot.failed_runs.len();
+            let total_audit_rounds = slot
+                .distinct_runs
+                .iter()
+                .map(|run_id| audit_rounds_by_run.get(run_id).copied().unwrap_or(0))
+                .sum::<usize>();
+            CrossRunMiningEntry {
+                runner,
+                task_type,
+                time_window,
+                dispatches,
+                ok: slot.ok_runs.len(),
+                failed,
+                timeout: slot.timeout_runs.len(),
+                skipped: slot.skipped_runs.len(),
+                avg_elapsed_sec: average_f64(slot.elapsed_by_run.values().copied()),
+                avg_retry: average_f64(slot.retry_by_run.values().map(|value| *value as f64)),
+                avg_audit_rounds: if dispatches == 0 {
+                    None
+                } else {
+                    Some(total_audit_rounds as f64 / dispatches as f64)
+                },
+                agent_turn_completed: slot.completed_runs.len(),
+                distinct_runs: dispatches,
+                subjective_non_measurement: !slot.subjective_runs.is_empty(),
+            }
+        })
+        .collect();
+
+    Ok(CrossRunMining {
+        run_count: run_ids.len(),
+        entries,
+    })
+}
+
+fn record_runner_finished(
+    slots: &mut BTreeMap<(String, String, String), CrossRunSlot>,
+    run_id: &str,
+    event: &Value,
+) {
+    let runner = runner_from_event(event);
+    let key = mining_key(event, &runner);
+    let slot = slots.entry(key).or_default();
+    slot.distinct_runs.insert(run_id.to_string());
+    match runner_status(event).as_str() {
+        "ok" => {
+            slot.ok_runs.insert(run_id.to_string());
+        }
+        "timeout" => {
+            slot.timeout_runs.insert(run_id.to_string());
+            slot.failed_runs.insert(run_id.to_string());
+        }
+        "skipped" => {
+            slot.skipped_runs.insert(run_id.to_string());
+        }
+        _ => {
+            slot.failed_runs.insert(run_id.to_string());
+        }
+    }
+    if let Some(elapsed) = event
+        .get("fields")
+        .and_then(|fields| fields.get("elapsed_sec"))
+        .and_then(Value::as_f64)
+    {
+        slot.elapsed_by_run
+            .entry(run_id.to_string())
+            .or_insert(elapsed);
+    }
+    if let Some(retries) = event
+        .get("fields")
+        .and_then(|fields| fields.get("retry_count"))
+        .and_then(Value::as_u64)
+    {
+        slot.retry_by_run
+            .entry(run_id.to_string())
+            .or_insert(retries);
+    }
+}
+
+fn record_agent_turn_completed(
+    slots: &mut BTreeMap<(String, String, String), CrossRunSlot>,
+    run_id: &str,
+    event: &Value,
+) {
+    let runner = runner_from_event(event);
+    let key = mining_key(event, &runner);
+    let slot = slots.entry(key).or_default();
+    slot.completed_runs.insert(run_id.to_string());
+    slot.distinct_runs.insert(run_id.to_string());
+    match runner_status(event).as_str() {
+        "ok" => {
+            slot.ok_runs.insert(run_id.to_string());
+        }
+        "timeout" => {
+            slot.timeout_runs.insert(run_id.to_string());
+            slot.failed_runs.insert(run_id.to_string());
+        }
+        "failed" => {
+            slot.failed_runs.insert(run_id.to_string());
+        }
+        _ => {}
+    }
+    if let Some(elapsed) = event
+        .get("fields")
+        .and_then(|fields| fields.get("elapsed_sec"))
+        .and_then(Value::as_f64)
+    {
+        slot.elapsed_by_run
+            .entry(run_id.to_string())
+            .or_insert(elapsed);
+    }
+}
+
+fn runner_from_event(event: &Value) -> String {
+    event
+        .get("fields")
+        .and_then(|fields| fields.get("runner"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            event
+                .get("actor")
+                .and_then(|actor| actor.get("id"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn runner_status(event: &Value) -> String {
+    let fields = event.get("fields").unwrap_or(&Value::Null);
+    fields
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| match fields.get("rc").and_then(Value::as_i64) {
+            Some(0) => "ok".to_string(),
+            Some(124) => "timeout".to_string(),
+            Some(_) => "failed".to_string(),
+            None => "unknown".to_string(),
+        })
+}
+
+fn mining_key(event: &Value, runner: &str) -> (String, String, String) {
+    (
+        runner.to_string(),
+        task_type(
+            event.get("task_id").and_then(Value::as_str),
+            event.get("phase").and_then(Value::as_str),
+        ),
+        time_window(event.get("at").and_then(Value::as_str)),
+    )
+}
+
+fn task_type(task_id: Option<&str>, phase: Option<&str>) -> String {
+    let name = task_id.unwrap_or(phase.unwrap_or("unknown")).to_lowercase();
+    if name.contains("audit") {
+        "audit".to_string()
+    } else if name.contains("verify") || name.contains("test") {
+        "verify".to_string()
+    } else if name.contains("doc") || name.contains("readme") {
+        "doc".to_string()
+    } else if name.contains("impl") || name.contains("coding") || name.starts_with('l') {
+        "implementation".to_string()
+    } else {
+        "other".to_string()
+    }
+}
+
+fn time_window(at: Option<&str>) -> String {
+    at.and_then(|value| value.get(0..10))
+        .unwrap_or("all")
+        .to_string()
+}
+
+fn event_type(event: &Value) -> &str {
+    event.get("type").and_then(Value::as_str).unwrap_or("")
+}
+
+fn average_f64(values: impl Iterator<Item = f64>) -> Option<f64> {
+    let mut count = 0usize;
+    let mut sum = 0.0;
+    for value in values {
+        count += 1;
+        sum += value;
+    }
+    if count == 0 {
+        None
+    } else {
+        Some(sum / count as f64)
+    }
 }
 
 fn audit_metrics(events: &[Value]) -> Value {
@@ -378,5 +669,129 @@ mod tests {
         assert_eq!(value["audit_metrics"]["audit_rounds"], 1);
         assert_eq!(value["audit_metrics"]["findings"]["by_severity"]["high"], 1);
         assert_eq!(value["event_log"]["event_count"], 4);
+    }
+
+    #[test]
+    fn cross_run_mining_groups_by_runner_task_and_distinct_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        for run_id in ["r1", "r2"] {
+            let run_dir = repo.join(".lto").join(run_id);
+            fs::create_dir_all(&run_dir).unwrap();
+            fs::write(
+                run_dir.join("state.json"),
+                serde_json::to_string_pretty(&LtoState {
+                    run_id: run_id.to_string(),
+                    ..LtoState::default()
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "status": "ok", "elapsed_sec": 10.0}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "status": "failed", "elapsed_sec": 99.0}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        emit(
+            repo,
+            "r2",
+            EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "status": "failed", "retry_count": 1}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        emit(
+            repo,
+            "r2",
+            EventRecord {
+                event_type: "agent.turn.completed".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("codex".to_string()),
+                task_id: Some("L3".to_string()),
+                fields: json!({"runner": "codex", "rc": 0}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let mining = cross_run_mining(repo).unwrap();
+        let entry = mining
+            .entries
+            .iter()
+            .find(|entry| entry.runner == "codex" && entry.task_type == "implementation")
+            .unwrap();
+        assert_eq!(entry.distinct_runs, 2);
+        assert_eq!(entry.failed, 2);
+        assert_eq!(entry.ok, 2);
+        assert_eq!(entry.agent_turn_completed, 1);
+        assert_eq!(entry.avg_retry, Some(1.0));
+    }
+
+    #[test]
+    fn cross_run_mining_marks_completed_nonzero_rc_as_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_dir = repo.join(".lto").join("r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("state.json"),
+            serde_json::to_string_pretty(&LtoState {
+                run_id: "r1".to_string(),
+                ..LtoState::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "agent.turn.completed".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some("pi".to_string()),
+                phase: Some("implementation".to_string()),
+                fields: json!({"runner": "pi", "rc": 1}),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let mining = cross_run_mining(repo).unwrap();
+        let entry = mining
+            .entries
+            .iter()
+            .find(|entry| entry.runner == "pi")
+            .unwrap();
+        assert_eq!(entry.task_type, "implementation");
+        assert_eq!(entry.distinct_runs, 1);
+        assert_eq!(entry.failed, 1);
+        assert_eq!(entry.agent_turn_completed, 1);
     }
 }

@@ -30,7 +30,7 @@ aliases do not appear in the public help table below.
 | `audit` | Prepare audit dispatch facts and auditor selection. | None | `--run-id`, `--auto-dispatch`, `--discover-risks`, `--allow-same-family` |
 | `next` | Print deterministic next-step facts and route suggestion. | None | `--run-id`, `--json` |
 | `autopilot` | Print supervised route facts and optionally auto-exec task commands through sandbox or tmux workers. | None | `--run-id`, `--supervised`, `--auto-exec`, `--autonomous`, `--timeout`, `--worker-runner`, `--target`, `--tmux-bin`, `--ready-timeout` |
-| `recap` | Render a human recap of goal, why, progress, remaining work, tokens, and live jobs. | None | `--run-id`, `--artifacts` |
+| `recap` | Render a human recap of goal, why, progress, remaining work, tokens, live jobs, or read-only cross-run mining. | None | `--run-id`, `--artifacts`, `--mine` |
 | `budget` | Check budget status. | `check --run-id` | `--tokens` |
 | `release` | Print a host-owned release plan. | `--date` | `--part`, `--dry-run` |
 | `task` | Add/update tasks or show/set the current run phase. | Subcommand: `add`, `update`, or `phase` | `task add --run-id --task-id --title --phase --command`; `task update --run-id --task-id --status --phase --note --touch`; `task phase --run-id --set` |
