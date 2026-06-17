@@ -96,6 +96,27 @@ pub enum JobStatus {
     Skipped,
 }
 
+pub const JOB_STATUS_VALUES: [&str; 7] = [
+    "pending",
+    "running",
+    "ok",
+    "failed",
+    "timeout",
+    "rate_limited",
+    "skipped",
+];
+
+pub const JOB_STATUS_INPUT_VALUES: [&str; 8] = [
+    "pending",
+    "running",
+    "ok",
+    "failed",
+    "timeout",
+    "rate_limited",
+    "skipped",
+    "returned",
+];
+
 impl JobStatus {
     pub fn as_str(self) -> &'static str {
         match self {

@@ -1499,6 +1499,8 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
             "ok".to_string()
         }
     });
+    let parsed_status = util::parse_status(&status)?;
+    let canonical_status = parsed_status.as_str();
     let mut cost = BTreeMap::new();
     for key in ["tokens", "tokens_in", "tokens_out"] {
         if let Some(value) = meta.get(key).and_then(Value::as_u64) {
@@ -1512,7 +1514,7 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
         job_id: options.task_id.clone(),
         runner: options.runner.clone(),
         model: options.model,
-        status: util::parse_status(&status)?,
+        status: parsed_status,
         exit_code: None,
         findings: Vec::new(),
         reply_text,
@@ -1523,7 +1525,7 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
                 .unwrap_or_else(|_| reply_path.display().to_string()),
         ],
         attempts: 1,
-        error: if status == "ok" {
+        error: if parsed_status == JobStatus::Ok {
             String::new()
         } else {
             options
@@ -1568,11 +1570,11 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
             task_id: Some(options.task_id.clone()),
             object_id: Some(options.task_id.clone()),
             object_type: Some("task".to_string()),
-            summary: format!("collected {} status={status}", options.runner),
+            summary: format!("collected {} status={canonical_status}", options.runner),
             fields: json!({
                 "runner": options.runner.clone(),
                 "model": result.model.clone(),
-                "status": status.clone(),
+                "status": canonical_status,
                 "tokens": meta.get("tokens").cloned().unwrap_or(Value::Null),
                 "elapsed_sec": options.elapsed_sec,
             }),
@@ -1588,7 +1590,7 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
     util::save_run(&ctx)?;
     let _ = crate::telemetry::save(repo, &ctx.run_id);
     println!(
-        "collected {} run for task {}: status={status}",
+        "collected {} run for task {}: status={canonical_status}",
         options.runner, options.task_id
     );
     Ok(())
@@ -5312,6 +5314,44 @@ sys.exit(0)
             .unwrap();
         assert_eq!(finished["fields"]["runner"], json!("codex"));
         assert_eq!(finished["fields"]["model"], json!("gpt-5"));
+    }
+
+    #[test]
+    fn collect_agent_run_accepts_returned_status_alias() {
+        let h = Harness::new();
+        h.write_state(LtoState {
+            tasks: json!([
+                {"id": "T1", "status": "pending", "commands_run": [], "evidence": [], "blockers": []}
+            ]),
+            ..base_state()
+        });
+        fs::write(h.repo.join("reply.txt"), "collected output\n").unwrap();
+
+        cmd_collect_agent_run(
+            &h.repo,
+            CollectAgentRunOptions {
+                run_id: Some("r1".into()),
+                task_id: "T1".into(),
+                runner: "codex".into(),
+                reply: PathBuf::from("reply.txt"),
+                meta: None,
+                model: None,
+                status: Some("returned".into()),
+                elapsed_sec: None,
+                note: None,
+            },
+        )
+        .unwrap();
+
+        let state = h.state();
+        let agent_runs = util::iter_agent_runs(&state.agent_runs);
+        assert_eq!(agent_runs.len(), 1);
+        assert_eq!(agent_runs[0].status, JobStatus::Ok);
+        assert!(agent_runs[0].error.is_empty());
+        let events =
+            fs::read_to_string(h.repo.join(".lto").join("r1").join("events.jsonl")).unwrap();
+        assert!(events.contains("\"status\":\"ok\""));
+        assert!(!events.contains("\"status\":\"returned\""));
     }
 
     #[test]

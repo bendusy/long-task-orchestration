@@ -129,6 +129,17 @@
   read as UTF-8 after short retries, instead of silently returning an empty
   success payload.
 
+### BUG-3 + BUG-9 remaining hardening
+
+- Added a scheduler-owned persistent worktree cleanup guard so write-task setup
+  failures after worktree creation, including runner spawn failures, prune the
+  temporary worktree instead of leaving `.lto/worktrees/<run>/<job>` behind.
+- Improved `collect-agent-run --status` UX: help now lists legal values, clap
+  rejects invalid values with possible-value suggestions, and `returned` is
+  accepted as a compatibility alias that normalizes to `ok` in state/events.
+- Recorded the Phase E `runner_plan` abstraction as deferred to the future
+  permission/runner profile batch rather than doing a partial refactor now.
+
 ### L3 dispatch-goal and L4 cross-run mining
 
 - Added `lto dispatch-goal` for tmux-backed goal dispatch to codex, pi, and agy,

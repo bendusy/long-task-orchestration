@@ -253,7 +253,7 @@ pub enum Commands {
         meta: Option<PathBuf>,
         #[arg(long)]
         model: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(crate::agent_job::JOB_STATUS_INPUT_VALUES))]
         status: Option<String>,
         #[arg(long)]
         elapsed_sec: Option<f64>,
@@ -2087,6 +2087,40 @@ mod tests {
     fn audit_flags_are_registered() {
         Args::try_parse_from(["lto-rs", "audit", "--auto-dispatch"]).unwrap();
         Args::try_parse_from(["lto-rs", "audit", "--discover-risks"]).unwrap();
+    }
+
+    #[test]
+    fn collect_agent_run_status_values_are_registered() {
+        Args::try_parse_from([
+            "lto-rs",
+            "collect-agent-run",
+            "--task-id",
+            "T1",
+            "--runner",
+            "codex",
+            "--reply",
+            "reply.md",
+            "--status",
+            "returned",
+        ])
+        .unwrap();
+        let err = Args::try_parse_from([
+            "lto-rs",
+            "collect-agent-run",
+            "--task-id",
+            "T1",
+            "--runner",
+            "codex",
+            "--reply",
+            "reply.md",
+            "--status",
+            "returnedd",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("possible values"));
+        assert!(err.contains("rate_limited"));
+        assert!(err.contains("returned"));
     }
 
     #[test]

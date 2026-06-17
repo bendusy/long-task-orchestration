@@ -17,10 +17,10 @@
 | ✅ BUG-4 | 派工结果不进 `state.agent_runs` → autonomous_gate 失真（与 Phase D 同一问题两面）— 已落地 run-scoped scheduler 回填 | 高 | host 先 grep 亲验是否真没回填 |
 | ✅ BUG-1 | scheduler 管道写端泄漏 → 超时任务挂死 — 已加 bounded drain / bounded kill wait | 中 | await 加 `tokio::time::timeout` |
 | ✅ BUG-5 | `.events.lock` 孤立锁 → run 永久卡死 — 已加 pid/owner/time stale recovery + hard-link reclaim，保留 live-lock fail-closed | 低概率高后果 | 加 stale 锁检测（pid+时间戳），不回退 ⑫ fail-closed |
-| BUG-3 | worktree 异常早退泄漏 persistent worktree | 待定 | host 先亲验真伪再改 |
+| ✅ BUG-3 | worktree 异常早退泄漏 persistent worktree — 已坐实并加 scheduler cleanup guard | 中 | host 先亲验真伪再改 |
 | ✅ BUG-8 | 错误静默吞没（heartbeat 文件泄漏确定修；其余确认真才改）— 已修 heartbeat 泄漏、stderr/stdout drain error 记录、tmux sentinel read fail-closed；reply 半截归因驳回 | 中/低 | 逐条核 |
 | BUG-2 残留 | 半写合法数字前缀 / count() 非纯读 | 非阻断 | 顺手硬化，不专门返工 |
-| BUG-9 | `collect-agent-run --status` 枚举 UX 差：`--help` 不列合法值、错误信息 `invalid job status: "returned"` 不提示合法值 → 每个用 LTO 的 agent 都会撞（实测一个跑诊断 run 的 agent 用直觉词 "returned" 被拒，自己 fallback 去掉 --status 才过）。合法值是 `pending/running/ok/failed/timeout/rate_limited/skipped`（`agent_job.rs:89`） | 中（UX，高频踩） | 三处一起修：① `--help` 用 clap `value_parser`/`possible_values` 列出枚举 ② 错误信息附上合法值列表 ③ 考虑给 "returned"→"ok" 之类近义词容错或在错误里建议。改前确认 clap 版本支持 enum value_parser |
+| ✅ BUG-9 | `collect-agent-run --status` 枚举 UX 差 — 已列 possible values，非法值给相似值提示，`returned` 兼容归一为 `ok` | 中（UX，高频踩） | 三处一起修：① `--help` 用 clap `value_parser`/`possible_values` 列出枚举 ② 错误信息附上合法值列表 ③ 考虑给 "returned"→"ok" 之类近义词容错或在错误里建议。改前确认 clap 版本支持 enum value_parser |
 
 **🟡 待做 Phase**：
 | Phase | 内容 | 价值 |
@@ -30,7 +30,7 @@
 | ✅ B | agy runner 事件解析未接进生产流 — commit `45178a9` 删除 `runner_events` 整体孤岛，见本节裁决 | 中 |
 | ✅ F | 4 个未挂载插件去留裁决（含隐私扫描私域插件）— 已删除私域残留，保留三类场景插件并补 mount 路径 | 中 |
 | ✅ D | autonomous_gate 升级证据驱动（与 BUG-4 联动，守 fail-closed 红线）— gate 现在保留计数门并追加 cross_run_mining 风险门 | 中 |
-| E | runner_plan 硬编码抽象 | 可选（并入权限批） |
+| ✅ E | runner_plan 硬编码抽象 — 裁决并入未来权限/runner profile 批，不做半截抽象 | 可选（并入权限批） |
 
 **🔵 架构债（同族，未来一个"权限批"一起做，本轮不单独动）**：权限模型四家不通约 + 派工 sh/CLI 权限决策收进 Rust + Phase E runner_plan 抽象。另：`lto release` plan 不含 Cargo.toml（发版工具增强项，目前 `scripts/release_preflight.sh` 兜住）。
 
@@ -64,6 +64,7 @@ Claude 子代理（同族）漏掉这些，跨族 codex/agy 独立审 + host 亲
   - **✅ 已完成（pi 落地 `ec303a5` + 审计返工 `160c45a`，host 端到端亲验 + codex/agy 两轮异构审）**：改用 `.events.count` 计数文件 O(1) 读写，HARD_STOP/WARN 读 counter，首访 fallback 迁移老 run，counter 写在 event append 前（crash 只产生无害 gap）。**异构审揪出 2 个引入型 bug 已返工修掉**：① counter 损坏静默归零→丢事件（`events.rs:194` 原 `unwrap_or(0)`）→ 改自愈（删损坏文件 + 回退 count_file_events）；② count() 无锁→改纯读。host 端到端亲验：造 `GARBAGE` 损坏 counter 实测自愈（counter 从 4 续到 5 非从 1，重复 event_id=0）+ test 200+1 全绿。
   - **⬜ 已知改进项（codex 第二轮揪，host 校准为非阻断，记录不返工）**：① **半写留合法数字前缀**：`fs::write` 半写若截成合法小数字（`1234`→`1`）parse 成功不触发自愈→理论仍可能重复 event_id。极罕见（小文件 write 多为单 syscall），作硬化项不阻断。② **count() 非严格纯读**：损坏路径 `fs::remove_file`（`events.rs:204`）是写副作用，与 docstring "Pure read" 不符——改 docstring 或把删文件挪出 count 路径，小事。两点边际收益递减，不搞第三轮返工（auditor 会越钻越深，区分阻断 bug vs 理论边界）。
 - **BUG-3 worktree 异常早退泄漏持久 worktree（codex，待 host 深核）**：codex 报 scheduler worktree 路径异常早退会泄漏 persistent worktree。**codex 落地前 host 先亲验**：grep `worktree.rs` 的 `WorktreeHandle`/`Drop`/`prune`，确认早退路径真不清理才修。
+  - **✅ 已完成（2026-06-17）**：host + read-only explorer 坐实为“部分属实”：`add_persistent_worktree` 成功后、进入 `finalize_write_task` 前的 live-log/spawn 早退路径会泄漏，因为 `WorktreeHandle` 不是 RAII guard。scheduler 已加 `WorktreeCleanupGuard`，默认 Drop prune，只有 merge-review handoff 显式 disarm；回归 `write_task_spawn_failure_prunes_persistent_worktree` 构造 runner 路径存在但 spawn 失败，断言 `.lto/worktrees/<run>/<job>` 不残留。保留有意 handoff 路径：成功写入或测试失败但有 diff 仍 `keep=true` 并产出 `merge_review`。
 - **BUG-4 派工结果只进 events/telemetry 不进 state.agent_runs（codex，高价值，与 ③ 联动）**：codex 报 scheduler 派工结果只 emit 到 events/telemetry，**不写 `state.agent_runs`**。而 `autonomous_gate`（③）和预算闸门**正是数 `state.agent_runs`**——意味着跑了很多 agent 但 gate 看不到，gate 判断失真。**这条与 Phase D（③ autonomous_gate）是同一问题的两面**：gate 不准既因为它只计数不读 ⑥，也因为它数的 `agent_runs` 根本没被 scheduler 回填。**host 亲验**：grep scheduler 结果回收处有无 `state.agent_runs` 写入；若真没有，这比"gate 读 ⑥"更根本——先让派工结果如实落 state，gate 才有真数据可数。
   - **✅ 已完成（2026-06-17）**：不改 run-agnostic `Scheduler`，在 caller 层为 run-scoped scheduler dispatch 回填 `state.agent_runs`。覆盖 `runner --prompt/--job-file`、`run parallel/pipeline --job-file`、`audit --auto-dispatch`、`audit --discover-risks`、`judge --execute` 和 autopilot tmux worker；普通 `runner --command` 仍作为 task evidence，不污染 agent runs；`plugin eval-run` 仍作为 eval/report 域，不写业务 run agent_runs。runner result events 改为 checked emit，event 写失败时不保存 state，延续 BUG-7 的 fail-closed 方向。
 - **BUG-5 .events.lock 孤立锁导致 run 永久卡死（agy，host 亲验部分坐实，低概率高后果）**：`.events.lock` 是磁盘实体文件锁（`events.rs:185` O_EXCL 创建 / `:173` Drop 删除），**无 stale 锁检测**。若 LTO 进程被 `kill -9`/OOM/掉电/panic，`EventsLockGuard::Drop` 不执行 → 锁残留 → resume 时所有 emit 卡自旋 + 5s 超时 fail-closed → **该 run 永久卡死在事件写入无法恢复**。这是 ⑫ fail-closed 加固的真实副作用（防了脏写但没处理孤立锁）。触发需进程异常死亡且恰好持锁，概率低但后果是 run 不可恢复。**修**：加 stale 锁检测——锁文件写入持有者 pid + 时间戳，acquire 时若持有者进程已死或锁超龄（如 > timeout 的若干倍）则强夺清理。**红线**：不准回退 ⑫ 的 fail-closed（`events.rs:211` 拒绝无锁脏写要保留），stale 检测是叠加不是替换。
@@ -85,6 +86,8 @@ Claude 子代理（同族）漏掉这些，跨族 codex/agy 独立审 + host 亲
   - **⚠️ 已知可接受残留（异构审一致裁定，不返工）**：反向不一致（emit 成功后 `save_state` 失败 → event 多 state 少）仍在，因 `state.rs::save_state` 是直接 `fs::write` 无事务、events.jsonl append-only 无跨文件 ACID。agy 论证：state 是真源 events 是投影，投影多一条悬挂事件**偏安全**（resume/重试可幂等去重），要在 append-only 上回滚是引入海量复杂度，当前折中合理。**未来若上 ACID/WAL 再处理**。可选小增强：补反向测试用例（emit 成功 save 失败）。
 - **BUG-8 多处错误静默吞没（pi 挖，host 部分亲验，中/低危）**：`scheduler.rs:455` `stdout_task.await...unwrap_or_default()` 吞 drain_pipe panic/IO 错误；heartbeat 文件 `{job_id}.hb.jsonl`（`scheduler.rs:307-312`）创建后无清理逻辑、`.lto/<run>/live/` 缓慢积累（坐实，低危）；timeout 后 `read_to_string(reply_path)...unwrap_or_default()` 把半截 reply 当空（低概率）。**host 亲验校准**：pi 称 stdout_text 错误吞没会致"rate-limit 误判"——**证伪**：`scheduler.rs:724` rate-limit 检测用的是 `stderr`/`reply_text` 不是 stdout_text，归因有误，严重度降级。pi 报的 `tmux_runner.rs:509` sentinel 读吞错行号漂移（实际是 ready_patterns 检测），**待重新定位验证再决定修不修**。**修方向**：heartbeat 文件在 job 收口时清理（确定要修）；其余错误吞没改为至少 log，不静默（确认真才改）。
   - **✅ 已完成（2026-06-17）**：heartbeat task 停止后删除本 job `.hb.jsonl`，保留 `.log` 作为 durable live artifact；stdout/stderr drain join 错误不再 `unwrap_or_default` 静默吞掉，而是进入 `AgentResult.cost`；tmux sentinel 文件存在但 UTF-8 读取短重试后仍失败时返回 `TmuxRunnerError::Io`，不再退成空成功；empty sentinel 依赖 pane capture 时不再吞掉 capture 错误。审计期间另修 runner 适配层：`pi` lean audit 不再把 raw JSON thinking stream 写爆 live log，`agy` auth timeout 不再 rc=0 假成功。**驳回/不扩项**：stdout 吞错不会影响 rate-limit（只看 stderr/reply）；有效 UTF-8 半截 reply 不会被 `read_to_string` 清空；tmux timeout/fire capture 的 `unwrap_or_default` 只影响错误上下文或 fire-and-forget 设计，本批不改。
+- **BUG-9 collect-agent-run 状态枚举 UX（host 实测坐实，中危/高频 UX）**：`collect-agent-run --status` 原 `--help` 不列合法值，非法直觉词 `returned` 报 `invalid job status` 且不提示合法值，导致 agent 容易 fallback 去掉 status。
+  - **✅ 已完成（2026-06-17）**：`JobStatus` 暴露合法值，`collect-agent-run --status` 接入 clap possible values；非法值由 clap 给出 possible values 与相似值提示；`returned` 作为兼容 alias 接受但写入 state/events/stdout 时规范化为 `ok`，避免 telemetry slot 污染。回归覆盖 CLI parse/invalid-value 文案和 `collect_agent_run_accepts_returned_status_alias`。
 
 > **三方共识（codex+agy+pi 独立都确认 + host 亲验）**：① runner_events 全模块死代码、② cross_run_mining 无 model 维度、③ autonomous_gate 只计数不读挖掘、**state/events 双写不一致（BUG-7，三家都报）**。高共识强信任，下面 Phase 照做。
 > **本轮异构审实操教训（写给 codex/host）**：跨 runtime 派 agent 走 tmux 真实 session（headless 闷死看不见卡点）；任务太大是超时真因（缩粒度 > 加 timeout）；pi 复杂任务慢见 BUG-6（短期审计优先 codex+agy 快 runner，pi 修好 thinking 前不做关键路径阻塞）。
@@ -175,6 +178,8 @@ R1 pi/agy 审计指出 split-slot 和 WARN 缺 model；修复后 R2 pi/agy 返�
 **落点**：抽出 `GoalRunnerProfile { launch, prompt_template, ready_patterns, confirm_patterns, needs_probe, hook_provider, completion_event }`，dispatch_goal 变通用驱动，新 runner 通过 profile 注册而非散弹改代码。
 
 **架构岔路 host 裁决**：本 Phase **可选**——若 codex 评估「短期不会加第四家 dispatch runner，抽象收益 < 重构风险」→ 记录为「已识别，暂不做，加 runner 时再抽」也合法（YAGNI）。但**插件孤岛（4 个未挂载插件）必须本轮处置**，见 Phase F。
+
+**当前裁决（2026-06-17）**：Phase E 不单独实现，正式并入未来“权限/runner profile 批”。理由：`dispatch-goal` 当前只有 codex/pi/agy 三家，runner launch/prompt/ready/hook 差异与“权限模型四家不通约、sh/CLI 权限决策收进 Rust”是同族问题；单独抽 `GoalRunnerProfile` 会先固化不完整权限语义，收益小于重构风险。下一次新增第四家 dispatch runner 或收敛权限模型时，再一起抽 profile，避免半截抽象。
 
 ## Phase F：4 个未挂载插件的去留裁决（中）
 

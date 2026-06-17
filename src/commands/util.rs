@@ -192,12 +192,15 @@ pub fn parse_status(value: &str) -> anyhow::Result<JobStatus> {
     match value {
         "pending" => Ok(JobStatus::Pending),
         "running" => Ok(JobStatus::Running),
-        "ok" => Ok(JobStatus::Ok),
+        "ok" | "returned" => Ok(JobStatus::Ok),
         "failed" => Ok(JobStatus::Failed),
         "timeout" => Ok(JobStatus::Timeout),
         "rate_limited" => Ok(JobStatus::RateLimited),
         "skipped" => Ok(JobStatus::Skipped),
-        other => anyhow::bail!("invalid job status: {other:?}"),
+        other => anyhow::bail!(
+            "invalid job status: {other:?}; expected one of: {}",
+            crate::agent_job::JOB_STATUS_INPUT_VALUES.join(", ")
+        ),
     }
 }
 

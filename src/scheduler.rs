@@ -97,6 +97,36 @@ pub struct Scheduler {
     pub config: SchedulerConfig,
 }
 
+struct WorktreeCleanupGuard {
+    repo: PathBuf,
+    handle: Option<WorktreeHandle>,
+}
+
+impl WorktreeCleanupGuard {
+    fn new(repo: &Path, handle: WorktreeHandle) -> Self {
+        Self {
+            repo: repo.to_path_buf(),
+            handle: Some(handle),
+        }
+    }
+
+    fn handle(&self) -> &WorktreeHandle {
+        self.handle.as_ref().expect("worktree guard handle present")
+    }
+
+    fn disarm(mut self) -> WorktreeHandle {
+        self.handle.take().expect("worktree guard handle present")
+    }
+}
+
+impl Drop for WorktreeCleanupGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = worktree::prune_worktree(&self.repo, &handle);
+        }
+    }
+}
+
 const RATE_LIMIT_MARKERS: &[&str] = &[
     "429",
     "too many requests",
@@ -368,7 +398,7 @@ impl Scheduler {
 
         let write_worktree = if job_needs_worktree(job) {
             match worktree::add_persistent_worktree(&self.repo, run_id, &job.job_id) {
-                Ok(handle) => Some(handle),
+                Ok(handle) => Some(WorktreeCleanupGuard::new(&self.repo, handle)),
                 Err(err) => {
                     return failure_result(
                         job,
@@ -383,7 +413,7 @@ impl Scheduler {
         };
         let command_dir = write_worktree
             .as_ref()
-            .map(|handle| handle.path.as_path())
+            .map(|guard| guard.handle().path.as_path())
             .unwrap_or(self.repo.as_path());
         let reply_path = attempt_dir.path().join("reply.txt");
         let timeout_arg = job.budget.timeout_sec.to_string();
@@ -499,8 +529,8 @@ impl Scheduler {
                 .insert("stderr_drain_error".to_string(), json!(err));
         }
         result.permissions = permission_snapshot(&job.permission_policy);
-        if let Some(handle) = write_worktree {
-            result = self.finalize_write_task(job, result, handle);
+        if let Some(guard) = write_worktree {
+            result = self.finalize_write_task(job, result, guard.disarm());
         }
         result
     }
@@ -2059,6 +2089,29 @@ print(json.dumps(data))
         assert_eq!(result[0].status, JobStatus::Failed);
         assert!(result[0].error.contains("no worktree changes"));
         assert!(result[0].merge_review.is_none());
+    }
+
+    #[tokio::test]
+    async fn write_task_spawn_failure_prunes_persistent_worktree() {
+        let harness = Harness::new();
+        init_git_repo(&harness.repo);
+        let runner_path = harness.runners_dir.join("codex.sh");
+        std_fs::remove_file(&runner_path).unwrap();
+        std_fs::create_dir(&runner_path).unwrap();
+        let job = write_job(&harness, "spawn_fail_write");
+        let leaked_path = harness
+            .repo
+            .join(".lto/worktrees/rust-scheduler/spawn_fail_write");
+
+        let result = harness.scheduler().submit(vec![job]).await.unwrap();
+
+        assert_eq!(result[0].status, JobStatus::Failed);
+        assert!(result[0].error.contains("spawn:"));
+        assert!(
+            !leaked_path.exists(),
+            "spawn failure must prune scheduler-created persistent worktree at {}",
+            leaked_path.display()
+        );
     }
 
     #[tokio::test]
