@@ -1530,8 +1530,13 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
         }),
     );
     task["last_update"] = json!(util::iso_now());
-    util::save_run(&ctx)?;
-    crate::events::safe_emit(
+    // Emit event BEFORE saving state. If safe_emit fails (events.lock timeout,
+    // hard-stop reached, disk full, etc.), bail before state is written. This
+    // prevents permanent divergence between state.agent_runs (read by
+    // autonomous_gate) and events.jsonl (read by cross_run_mining).
+    // safe_emit remains fail-closed (⑫) — the caller now reacts instead of
+    // silently ignoring the failure.
+    let emitted = crate::events::safe_emit(
         repo,
         &ctx.run_id,
         crate::events::EventRecord {
@@ -1551,6 +1556,13 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
             ..crate::events::EventRecord::default()
         },
     );
+    if emitted.is_none() {
+        anyhow::bail!(
+            "event emit failed for runner.finished (task {}); state not saved to keep state/events consistent",
+            options.task_id
+        );
+    }
+    util::save_run(&ctx)?;
     let _ = crate::telemetry::save(repo, &ctx.run_id);
     println!(
         "collected {} run for task {}: status={status}",
@@ -4746,6 +4758,56 @@ sys.exit(0)
             "git {:?}: {}",
             args,
             String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn collect_agent_run_bails_when_events_emit_fails_preventing_state_events_divergence() {
+        // BUG-7: When safe_emit fails (e.g. hard-stop reached), the command
+        // must bail BEFORE saving state. Otherwise state.agent_runs and
+        // events.jsonl diverge permanently: autonomous_gate (reads state)
+        // and cross_run_mining (reads events) report different run counts.
+        let h = Harness::new();
+        h.write_state(LtoState {
+            tasks: json!([
+                {"id": "T1", "status": "pending", "commands_run": [], "evidence": [], "blockers": []}
+            ]),
+            ..base_state()
+        });
+        // Create a reply file so read_to_string_lossy won't fail.
+        fs::write(h.repo.join("reply.txt"), "collected output\n").unwrap();
+        // Fill events.jsonl to HARD_STOP_AT to trigger safe_emit hard-stop.
+        let events_dir = h.repo.join(".lto").join("r1");
+        let mut lines = String::new();
+        for i in 0..crate::events::HARD_STOP_AT {
+            lines.push_str(&format!("{{\"event_id\":{i}}}\n"));
+        }
+        fs::write(events_dir.join("events.jsonl"), &lines).unwrap();
+        let err = cmd_collect_agent_run(
+            &h.repo,
+            CollectAgentRunOptions {
+                run_id: Some("r1".into()),
+                task_id: "T1".into(),
+                runner: "codex".into(),
+                reply: PathBuf::from("reply.txt"),
+                meta: None,
+                model: Some("gpt-5".into()),
+                status: Some("ok".into()),
+                elapsed_sec: Some(12.0),
+                note: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("event emit failed"),
+            "expected 'event emit failed' in error, got: {err}"
+        );
+        // State must NOT have the agent run — save_run was never called.
+        let state = h.state();
+        assert!(
+            state.agent_runs.get("T1").is_none(),
+            "agent_runs should be empty for T1 (state not saved), got: {:?}",
+            state.agent_runs
         );
     }
 }
