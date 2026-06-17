@@ -26,8 +26,8 @@
 | Phase | 内容 | 价值 |
 |---|---|---|
 | C | 补 ⑦ **model 维度** 到 cross_run_mining（slot key 3→4 元组加 model） | 高（四层 loop 真缺口） |
-| A | 接线/删除 4 个函数孤岛（parse_agy_stdout / command_with_args / ledger_sequence / os_strs） | 小（热身） |
-| B | agy runner 事件解析未接进生产流 | 中 |
+| ✅ A | 接线/删除 4 个函数孤岛（parse_agy_stdout / command_with_args / ledger_sequence / os_strs）— commit `45178a9` | 小（热身） |
+| ✅ B | agy runner 事件解析未接进生产流 — commit `45178a9` 删除 `runner_events` 整体孤岛，见本节裁决 | 中 |
 | F | 4 个未挂载插件去留裁决（含隐私扫描 meeting-transcript） | 中 |
 | D | autonomous_gate 升级证据驱动（与 BUG-4 联动，守 fail-closed 红线） | 中 |
 | E | runner_plan 硬编码抽象 | 可选（并入权限批） |
@@ -100,7 +100,7 @@ host 亲验坐实（grep 全仓定义数 > 使用数，扣除测试）：
 
 | 孤岛 | file:line | 亲验结论 | 处置 |
 |---|---|---|---|
-| `parse_agy_stdout` | `src/runner_events.rs:64` | pi/codex/claude 三家 parser 有测试调用，**唯独 agy 零调用（连测试都没有）**；且整个 runner_events 模块无生产调用 | 见下 Phase B（agy 解析孤岛是更大问题的一角，本 Phase 先补 agy 的测试对齐其他三家，或随 B 一起接线） |
+| `parse_agy_stdout` | `src/runner_events.rs:64`（已随 commit `45178a9` 删除） | pi/codex/claude 三家 parser 有测试调用，**唯独 agy 零调用（连测试都没有）**；且整个 runner_events 模块无生产调用 | 已按 Phase B 删除分支收口：删除整个 `runner_events` 模块和 fixtures，不再补 parser 测试或生产接线 |
 | `command_with_args` | `src/process.rs:83` | 泛型 helper 零外部调用 | 判断：有无未来调用方？无则删 |
 | `ledger_sequence` | `src/commands/util.rs:693` | 格式化函数逻辑完整但零调用 | 判断：ledger 渲染是否该用它？该用则接线，否则删 |
 | `os_strs` | `src/commands/util.rs:797` | &str→OsStr 预留转换器零接入 | YAGNI 倾向删 |
@@ -109,16 +109,18 @@ host 亲验坐实（grep 全仓定义数 > 使用数，扣除测试）：
 
 ## Phase B：agy runner 事件解析未接进生产流（中）
 
-**缺陷**：`src/runner_events.rs` 的四个 parser（pi/codex/claude/agy）**整个模块无任何生产调用**（grep `runner_events::` 只有定义，零 caller）。这意味着 runner stdout 的结构化解析能力写了但没接进 scheduler/agent_exec 的事件 emit 流——runner 完成事件可能丢了 stdout 里的结构化信号（token 用量/turn 边界等）。
+**当前裁决（2026-06-17，commit `45178a9`）**：Phase B 按下面的“冗余孤岛，整体删除”分支收口。Phase A 的异构审计先证实 `src/runner_events.rs`、四个 parser 和 `fixtures/runner/*` 全部只有自测调用、无生产 caller；随后 commit `45178a9` 删除整个模块、移除 `pub mod runner_events`，并删除 fixtures。当前生产路径不是 parser 模块，而是 `scheduler.rs` 调 runner 脚本、读取 `reply.txt`、合并 sidecar meta 到 `AgentResult.cost`，再由 `event_emit.rs` 投影 redacted runner 事件。仓库没有 `src/agent_exec.rs`。因此不再为 agy 单独补 parser 接线；若未来确有结构化 runner stdout 需求，应重新以 `AgentResult`/sidecar/event schema 为入口立新设计，不复活这份无 caller 模块。
 
-**落点**：
+**原缺陷（已关闭）**：`src/runner_events.rs` 的四个 parser（pi/codex/claude/agy）**整个模块无任何生产调用**（grep `runner_events::` 只有定义，零 caller）。这意味着 runner stdout 的结构化解析能力写了但没接进 scheduler/agent_exec 的事件 emit 流——runner 完成事件可能丢了 stdout 里的结构化信号（token 用量/turn 边界等）。当前裁决是删除冗余模块而不是接线。
+
+**原落点（历史记录，勿作为待办执行）**：
 - 盘清 scheduler.rs / agent_exec.rs 现在如何从 runner 回收结果（`grep -n "stdout\|reply\|AgentResult" src/scheduler.rs src/agent_exec.rs`）。
 - 判断 runner_events 的 parser 该接到哪个回收点，让四家 runner 的 stdout 都过对应 parser → 结构化字段进 AgentResult/events。
 - agy 补齐：让 `parse_agy_stdout` 与其他三家对等（有生产调用 + 测试覆盖）。
 
-**架构岔路 host 裁决**：若发现 runner_events 是「设计了但当时没接、现在 AgentResult 已用别的方式拿到等价信息」→ 那是冗余孤岛，**删模块**别硬接；若 AgentResult 确实缺这些结构化字段 → 接线。codex 先 grep 实证哪种情况，在 commit message 说明判断依据。
+**架构岔路 host 裁决（已采用）**：若发现 runner_events 是「设计了但当时没接、现在 AgentResult 已用别的方式拿到等价信息」→ 那是冗余孤岛，**删模块**别硬接；若 AgentResult 确实缺这些结构化字段 → 接线。codex 已按前者处理：生产路径使用 `scheduler.rs` 的 `reply.txt` + sidecar meta → `AgentResult` → `event_emit.rs`，仓库没有 `src/agent_exec.rs`。
 
-**完成判据**：runner_events 模块要么有生产调用（grep caller > 0，四家对等），要么整体删除；`cargo test` 全绿。
+**完成判据（已满足）**：runner_events 模块要么有生产调用（grep caller > 0，四家对等），要么整体删除；`cargo test` 全绿。当前状态是整体删除，`cargo test --locked --all-targets` 通过。
 
 ## Phase C：补齐 ⑦ model 维度到 cross_run_mining（中，四层 loop 真缺口）
 

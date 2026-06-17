@@ -60,7 +60,9 @@
 ### Phase A island cleanup
 
 - Removed the dead `runner_events` parser module and its unused fixtures after
-  heterogeneous audit confirmed it had zero production callers.
+  heterogeneous audit confirmed it had zero production callers. This also closes
+  the Phase B runner-event parser island by the spec's "delete redundant module"
+  branch rather than adding a production integration for dead code.
 - Removed unused helper APIs (`command_with_args`, `os_strs`, `write_json`) and
   wired `ledger_sequence` into `check`/`closeout` ledger gate messages so audit
   non-convergence reports include the blocker sequence.
