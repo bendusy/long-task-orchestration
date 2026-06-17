@@ -179,19 +179,32 @@ fn events_counter_path(events_path: &Path) -> PathBuf {
         .join(".events.count")
 }
 
-/// Read the current event count from the counter file.
-/// On first access for a run (no counter file yet), falls back to counting
-/// events.jsonl lines and writes the counter file so subsequent reads are O(1).
-/// Caller must hold the events lock.
+/// Read the current event count.
+/// If the counter file exists (and is valid), returns its value — O(1).
+/// If the counter file is absent, falls back to counting events.jsonl
+/// lines — O(N), one-time until the next emit persists the counter.
+/// If the counter file exists but is corrupted, deletes it and falls back
+/// to counting events.jsonl (self-healing).
+/// Pure read — never writes the counter file. Callers that need to
+/// persist a new count must call write_event_counter under the lock.
 fn read_event_counter(events_path: &Path) -> anyhow::Result<usize> {
     let counter_path = events_counter_path(events_path);
     if !counter_path.exists() {
-        let count = count_file_events(events_path)?;
-        fs::write(&counter_path, count.to_string())?;
-        return Ok(count);
+        return count_file_events(events_path);
     }
     let text = fs::read_to_string(&counter_path)?;
-    Ok(text.trim().parse::<usize>().unwrap_or(0))
+    match text.trim().parse::<usize>() {
+        Ok(count) => Ok(count),
+        Err(_) => {
+            // Counter file corrupted (empty, non-numeric, half-written).
+            // Delete it so the next read falls back to counting events.jsonl.
+            // Do NOT silently return 0 — that would cause event_id=1 on the
+            // next emit, duplicating existing event IDs and triggering the
+            // read() dedup path to silently discard events.
+            let _ = fs::remove_file(&counter_path);
+            count_file_events(events_path)
+        }
+    }
 }
 
 /// Persist the current event count to the counter file.
@@ -583,5 +596,125 @@ mod tests {
             .collect::<Vec<_>>();
         ids.sort_unstable();
         assert_eq!(ids, (1..=64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn corrupted_counter_file_self_heals_and_does_not_produce_duplicate_event_ids() {
+        // If .events.count contains garbage (empty, non-numeric, half-written),
+        // read_event_counter must delete it and re-count events.jsonl — never
+        // return 0, which would cause event_id=1 duplicate and silent data loss
+        // via read() dedup.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let ev_path = events_path(repo, "r1");
+        fs::create_dir_all(ev_path.parent().unwrap()).unwrap();
+
+        // Write 5 events first (creates counter=5 via emit).
+        for i in 1..=5 {
+            emit(
+                repo,
+                "r1",
+                EventRecord {
+                    event_type: "artifact.registered".to_string(),
+                    actor_kind: "lto".to_string(),
+                    summary: format!("pre {i}"),
+                    ..EventRecord::default()
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            fs::read_to_string(events_counter_path(&ev_path))
+                .unwrap()
+                .trim(),
+            "5"
+        );
+
+        // Corrupt the counter file.
+        fs::write(events_counter_path(&ev_path), "garbage\n").unwrap();
+
+        // Next emit must self-heal: delete corrupted counter, count events.jsonl,
+        // use event_id=6 (not 1!).
+        let event = emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "after corruption".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            event["event_id"], 6,
+            "must continue from 6, not restart at 1"
+        );
+        // Counter file must be recreated with correct value.
+        assert_eq!(
+            fs::read_to_string(events_counter_path(&ev_path))
+                .unwrap()
+                .trim(),
+            "6"
+        );
+        // read() must see all 6 events, no duplicates.
+        let all = read(repo, "r1").unwrap();
+        assert_eq!(all.len(), 6);
+        let ids: Vec<u64> = all
+            .iter()
+            .map(|e| e["event_id"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ids, (1..=6).collect::<Vec<_>>());
+
+        // Also test empty counter file.
+        fs::write(events_counter_path(&ev_path), "").unwrap();
+        let event2 = emit(
+            repo,
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "after empty counter".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(event2["event_id"], 7);
+    }
+
+    #[test]
+    fn count_function_is_pure_read_no_lock_required() {
+        // count() calls read_event_counter which is a pure read (no write
+        // side-effects). It must work correctly without acquiring the events
+        // lock, even when no counter file exists yet.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let ev_path = events_path(repo, "r1");
+        fs::create_dir_all(ev_path.parent().unwrap()).unwrap();
+
+        // No counter file, no events file → count is 0.
+        assert_eq!(count(repo, "r1").unwrap(), 0);
+        // Counter file must NOT have been created (pure read, no side-effect).
+        assert!(
+            !events_counter_path(&ev_path).exists(),
+            "count() must not create counter file"
+        );
+
+        // Write some events, then emit (which creates the counter).
+        for i in 1..=3 {
+            emit(
+                repo,
+                "r1",
+                EventRecord {
+                    event_type: "artifact.registered".to_string(),
+                    actor_kind: "lto".to_string(),
+                    summary: format!("event {i}"),
+                    ..EventRecord::default()
+                },
+            )
+            .unwrap();
+        }
+        // count() reads counter file (O(1)), no lock needed.
+        assert_eq!(count(repo, "r1").unwrap(), 3);
     }
 }
