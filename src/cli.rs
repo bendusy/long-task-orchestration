@@ -1390,6 +1390,12 @@ fn dispatch_risk_discovery(
     let runners_dir = repo.join("scripts").join("delegate").join("runners");
     let mut job = audit_dispatch::build_risk_discovery_job(&brief_path, &discoverer, host);
     job.meta.insert("run_id".to_string(), json!(run_id));
+    // Session reuse (backlog ⑪ 治本): same stable per-(run, auditor) session id as
+    // auto-dispatch, so a discoverer reused across rounds warms the prompt cache.
+    job.env.insert(
+        "LTO_SESSION_ID".to_string(),
+        audit_dispatch::audit_session_id(run_id, &discoverer),
+    );
     let jobs = vec![job];
     crate::event_emit::emit_runner_started_jobs(
         repo,

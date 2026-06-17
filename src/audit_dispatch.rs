@@ -80,6 +80,16 @@ pub fn submit_auto_dispatch(
     let mut jobs = build_auto_dispatch_jobs(brief_path, auditors, host);
     for job in &mut jobs {
         job.meta.insert("run_id".to_string(), json!(run_id));
+        // Session reuse (backlog ⑪ 治本): a stable per-(run, auditor) session id
+        // lets the SAME auditor across audit rounds resume its persistent session
+        // and hit the prompt cache (host-verified: pi resume → cacheRead>0, input
+        // does not bloat). runner.sh only honors it if the CLI supports clean
+        // session reuse (pi does; codex resume bloats input so pi.sh is the only
+        // translator today). Backward compatible: unset = today's ephemeral behavior.
+        job.env.insert(
+            "LTO_SESSION_ID".to_string(),
+            audit_session_id(run_id, &job.runner),
+        );
     }
     crate::event_emit::emit_runner_started_jobs(
         repo,
@@ -108,6 +118,12 @@ pub fn submit_auto_dispatch(
 
 pub fn build_risk_discovery_job(brief_path: &Path, discoverer: &str, host: &str) -> AgentJob {
     audit_job(discoverer, brief_path, host, risk_discovery_output_schema())
+}
+
+/// Stable session id for an auditor within a run, so repeated audit rounds reuse
+/// the same persistent session and warm the prompt cache (backlog ⑪ 治本).
+pub fn audit_session_id(run_id: &str, auditor: &str) -> String {
+    format!("lto-{run_id}-audit-{auditor}")
 }
 
 fn audit_job(runner: &str, brief_path: &Path, host: &str, output_schema: Value) -> AgentJob {
@@ -269,8 +285,33 @@ mod tests {
         assert_eq!(jobs[1].parent_pattern, Pattern::Adversarial);
         // backlog ⑪: audit jobs carry LTO_LEAN_CONTEXT so runner.sh skips the
         // heavy skill/context cold-load (~40k→~400 tokens on pi).
-        assert_eq!(jobs[0].env.get("LTO_LEAN_CONTEXT").map(String::as_str), Some("1"));
-        assert_eq!(jobs[1].env.get("LTO_LEAN_CONTEXT").map(String::as_str), Some("1"));
+        assert_eq!(
+            jobs[0].env.get("LTO_LEAN_CONTEXT").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            jobs[1].env.get("LTO_LEAN_CONTEXT").map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn audit_session_id_is_stable_per_run_and_auditor() {
+        // backlog ⑪ 治本: same (run, auditor) → same id (warm cache across rounds);
+        // different auditor or run → different id (no cross-contamination).
+        assert_eq!(audit_session_id("run-1", "pi"), "lto-run-1-audit-pi");
+        assert_eq!(
+            audit_session_id("run-1", "pi"),
+            audit_session_id("run-1", "pi")
+        );
+        assert_ne!(
+            audit_session_id("run-1", "pi"),
+            audit_session_id("run-1", "codex")
+        );
+        assert_ne!(
+            audit_session_id("run-1", "pi"),
+            audit_session_id("run-2", "pi")
+        );
     }
 
     fn write_healthcheck(runners: &Path, payload: &str) {

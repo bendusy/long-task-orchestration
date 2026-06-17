@@ -13,6 +13,19 @@
 - The flag is orthogonal to the read-only permission allowlist; read-only audit
   jobs apply both. Development dispatch (autopilot workers) does not set it.
 
+### pi session reuse for warm prompt cache across audit rounds (backlog ⑪ 治本)
+
+- Audit and risk-discovery jobs now carry a stable per-(run, auditor) session id
+  (`lto-<run_id>-audit-<auditor>`) on the dispatched job env (`LTO_SESSION_ID`).
+  pi's runner translates it to `pi -p --session-id <id>`, so the same auditor
+  reused across audit rounds resumes its persistent session and hits the provider
+  prompt cache (host-verified: a fresh process resuming the same session gets
+  cacheRead>0 and pi's fresh input stays small — it does not bloat across turns).
+- Backward compatible: when `LTO_SESSION_ID` is unset, no `--session-id` is passed
+  and behavior is unchanged. Only pi's runner honors it — codex resume bloats
+  input tokens across turns and agy does not run read-only audits, so neither
+  gets session reuse (cross-runner investigation via official docs + live tests).
+
 ## v0.5.0 — 2026-06-16
 
 ### Host verification tmux loop playbook

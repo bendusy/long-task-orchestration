@@ -40,6 +40,19 @@ if [[ "${LTO_LEAN_CONTEXT:-0}" == "1" ]]; then
   LEAN_ARGV=(--no-skills --no-context-files --no-extensions)
 fi
 
+# Session reuse (backlog ⑪ 治本): when LTO sets LTO_SESSION_ID, pass --session-id
+# so repeated dispatch with the SAME id (e.g. same auditor across audit rounds)
+# resumes the persistent JSONL session and hits the provider prompt cache.
+# Host-verified (pi 0.79.3): a fresh process resuming the same --session-id gets
+# cacheRead>0 on the prior context while fresh input stays tiny (Turn2 input≈223,
+# cacheRead≈2816) — pi's input does NOT bloat across turns (unlike codex resume).
+# BACKWARD COMPATIBLE: when LTO_SESSION_ID is unset/empty, no --session-id is
+# passed and behavior is identical to before (pi auto-creates an ephemeral one).
+SESSION_ARGV=()
+if [[ -n "${LTO_SESSION_ID:-}" ]]; then
+  SESSION_ARGV=(--session-id "${LTO_SESSION_ID}")
+fi
+
 # pipefail off so the tee in the pipe can't mask pi's rc; PIPESTATUS[0] keeps it.
 # stdout via tee: stored in RAW_FILE (for reply/token parse) AND streamed to this
 # process's stdout so LTO scheduler's Popen captures it into the live log.
@@ -48,6 +61,7 @@ timeout "${TIMEOUT_SEC}s" pi -p --mode json \
   --provider deepseek --model deepseek-v4-pro \
   ${PERM_ARGV[@]+"${PERM_ARGV[@]}"} \
   ${LEAN_ARGV[@]+"${LEAN_ARGV[@]}"} \
+  ${SESSION_ARGV[@]+"${SESSION_ARGV[@]}"} \
   "$(cat "$PROMPT_FILE")" 2>/dev/null | tee "$RAW_FILE"
 rc=${PIPESTATUS[0]}
 set -o pipefail

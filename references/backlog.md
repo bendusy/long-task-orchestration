@@ -126,12 +126,14 @@
   - **agy.sh**：本就拒绝 read-only job（无 read-only 档），不在 audit/judge 派工路径上，忽略 lean。
   - 单元测试 `audit_dispatch::jobs_use_scheduler_contract_and_readonly_intent_policy` 断言两 job 都带 `LTO_LEAN_CONTEXT=1`；开发派工（autopilot worker / ops.rs）**不设**（写码可能需 skill 上下文）。
   - 关键判断：lean context（省 token）与 read-only（权限）**正交**——审计 read-only 时两者都加。
-- **治本（2026-06-17 评估结论：不走 tmux，留给 pi RPC 独立 goal）**：评估 audit→tmux 常驻调度后**判定代价高、不强行接**：
-  - audit findings 回收靠 `audit.rs::parse_findings_text` **严格 JSON 解析**（`CRITICAL!!!` 这类脏数据被拒，见测试 audit.rs:187）。需要干净 JSON 文本。
-  - tmux runner 回收的是 `reply_text = summary.capture`（capture-pane **终端文本**，含 TUI/ANSI/提示符）。从中可靠提取严格 JSON 要加脆弱清洗层，远不如 headless `reply.txt` 干净——净负。
-  - **更优治本路径 = pi `--mode rpc`**（JSONL over stdio 持久协议，结构化干净回收 + session 复用，context 只载一次）。这是独立 goal（`pi RPC 常驻 runner`），不塞进 ⑪ 避免摊大。
-  - 治标已拿主要收益（pi 17× / claude 7.5×），治本不阻塞——audit 走常驻调度作为后续 RPC goal 推进。
-- **不破坏**：异构性不变（仍跨族 failover）；只是去掉每次冷启重载的浪费。
+- **治本（✅ 已实现 2026-06-17：pi session 复用，headless 就够）**：warm prompt cache 是省 token 真机制（同 session 重发 context 走 cacheRead ~10% 价）。实现：
+  - LTO 给 audit/risk-discovery job 设稳定 per-(run, auditor) session-id `lto-<run_id>-audit-<auditor>`（`audit_dispatch::audit_session_id` 纯函数 + `submit_auto_dispatch` / `cli.rs::dispatch_risk_discovery` 注入 `job.env["LTO_SESSION_ID"]`）。
+  - pi.sh 读 `LTO_SESSION_ID` → `pi -p --session-id <id>`。**向后兼容**：env 未设时不传 `--session-id`，行为同旧（bash -x 实测验证 A 无 session-id / B 有）。
+  - **host 实测铁证**：新进程 resume 同 `--session-id` 命中 cache——`pi -p --session-id` cacheRead=1408，记住跨进程 fact；RPC 续接 cacheRead=2816 input 仅 223。**pi input 不膨胀**。
+  - 同 auditor 跨 audit 轮（每轮独立 `lto audit` 进程）复用同 session → 第二轮起 context 走 cacheRead。risk discovery 与 auto-dispatch 用同一 session-id 函数，跨两阶段也 warm。
+- **RPC 常驻 runner 已证伪（不做）**：一度设想 `pi --mode rpc` 常驻进程批内复用，**实测证伪**——① audit 异构派工，同次 submit 无多个 pi job（批内复用前提不成立）；② warm cache 真实命中是跨轮（跨 submit），而 **headless `pi -p --session-id` 跨进程就命中 cache**，根本不需要 RPC 常驻进程那套工程（进程池/并发接缝/协议处理）。详见 `references/specs/2026-06-17-goal-pi-rpc-resident-runner.md`（已标 ⛔ 证伪）。
+- **跨 runner 调查结论（DeepWiki+官方+实测 2026-06-17）**：pi=session 复用最干净（input 不膨胀，audit 主力）；codex=resume 命中 cache 但 **input 累积膨胀**（33K→67K，长会话变贵）故**不加** session 复用；agy=本就拒 read-only 不审计，session 复用无意义。所以 session 复用只在 pi.sh 落地。
+- **不破坏**：异构性不变（仍跨族 failover）；只是去掉每次冷启重载的浪费 + warm cache 跨轮。
 - **撤回的错误方向**：原 ⑪ 写「给 audit 加 runner 优先级绕开 pi」是**治标且方向错**——pi 慢是调度方式（冷启重载）不是 pi 本身,绕开它没解决根因（agy/claude headless 同样冷启）。先修调度效率，不是排序。
 
 ## ⑫ 存量 security/并发关切（异构 auditor 挖出，2026-06-17，待 host 决策是否立 goal）
