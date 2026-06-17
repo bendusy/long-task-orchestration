@@ -21,6 +21,7 @@ pub const KNOWN_EVENT_TYPES: &[&str] = &[
     "runner.finished",
     "runner.retry",
     "runner.healthcheck",
+    "agent.turn.completed",
     "artifact.registered",
     "audit.dispatched",
     "audit.finding",

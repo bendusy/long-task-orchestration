@@ -19,6 +19,7 @@ pub const COMMANDS: &[&str] = &[
     "resume",
     "preflight",
     "runner",
+    "dispatch-goal",
     "judge",
     "hook",
     "self-test",
@@ -33,6 +34,7 @@ pub const COMMANDS: &[&str] = &[
     "collect-agent-run",
     "runs",
     "memory",
+    "agent-turn-completed",
     "plugin",
 ];
 
@@ -112,6 +114,8 @@ pub enum Commands {
     },
     #[command(about = "Run or dispatch one scheduler-backed task")]
     Runner(Box<RunnerCommand>),
+    #[command(about = "Dispatch a goal file to codex, pi, or agy through tmux")]
+    DispatchGoal(DispatchGoalCommand),
     #[command(about = "Record or run an evidence-based judgment")]
     Judge(JudgeCommand),
     #[command(about = "Run an opt-in boundary hook")]
@@ -261,6 +265,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: MemoryCommand,
     },
+    #[command(hide = true, about = "Emit an agent turn completion event from a hook")]
+    AgentTurnCompleted(AgentTurnCompletedCommand),
     #[command(about = "Manage data-only plugins and eval packs")]
     Plugin {
         #[command(subcommand)]
@@ -367,6 +373,54 @@ pub struct RunnerCommand {
     ready_timeout: Option<u64>,
     #[arg(long = "tmux-bin")]
     tmux_bin: Option<String>,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct DispatchGoalCommand {
+    #[arg(long)]
+    run_id: Option<String>,
+    #[arg(long, value_parser = ["codex", "pi", "agy"])]
+    runner: String,
+    #[arg(long)]
+    goal: PathBuf,
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long = "new-window")]
+    new_window: bool,
+    #[arg(long = "window-name")]
+    window_name: Option<String>,
+    #[arg(long)]
+    cwd: Option<PathBuf>,
+    #[arg(long = "tmux-session")]
+    tmux_session: Option<String>,
+    #[arg(long = "tmux-bin")]
+    tmux_bin: Option<String>,
+    #[arg(long = "ready-timeout")]
+    ready_timeout: Option<u64>,
+    #[arg(long = "no-install-hooks")]
+    no_install_hooks: bool,
+    #[arg(long = "uninstall-hooks")]
+    uninstall_hooks: bool,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct AgentTurnCompletedCommand {
+    #[arg(long)]
+    run_id: Option<String>,
+    #[arg(long, default_value = "codex")]
+    runner: String,
+    #[arg(long = "payload-file")]
+    payload_file: Option<PathBuf>,
+    #[arg(long)]
+    cwd: Option<PathBuf>,
+    #[arg(long = "session-id")]
+    session_id: Option<String>,
+    #[arg(long)]
+    summary: Option<String>,
+    #[arg(long)]
+    rc: Option<i32>,
+    #[arg(long, default_value = "hook")]
+    source: String,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -917,6 +971,25 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 },
             )?;
         }
+        Commands::DispatchGoal(cmd) => {
+            crate::dispatch_goal::cmd_dispatch_goal(
+                &args.repo,
+                crate::dispatch_goal::DispatchGoalOptions {
+                    run_id: cmd.run_id,
+                    runner: cmd.runner,
+                    goal: cmd.goal,
+                    target: cmd.target,
+                    new_window: cmd.new_window,
+                    window_name: cmd.window_name,
+                    cwd: cmd.cwd,
+                    tmux_session: cmd.tmux_session,
+                    tmux_bin: cmd.tmux_bin,
+                    ready_timeout_sec: cmd.ready_timeout,
+                    no_install_hooks: cmd.no_install_hooks,
+                    uninstall_hooks: cmd.uninstall_hooks,
+                },
+            )?;
+        }
         Commands::Judge(cmd) => {
             ops::cmd_judge(
                 &args.repo,
@@ -1193,6 +1266,21 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 },
             };
             ops::cmd_memory(&args.repo, action)?;
+        }
+        Commands::AgentTurnCompleted(cmd) => {
+            crate::agent_turn::cmd_agent_turn_completed(
+                &args.repo,
+                crate::agent_turn::AgentTurnOptions {
+                    run_id: cmd.run_id,
+                    runner: cmd.runner,
+                    payload_file: cmd.payload_file,
+                    cwd: cmd.cwd,
+                    session_id: cmd.session_id,
+                    summary: cmd.summary,
+                    rc: cmd.rc,
+                    source: cmd.source,
+                },
+            )?;
         }
     }
     Ok(())
@@ -1951,7 +2039,7 @@ mod tests {
     #[test]
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
-        assert_eq!(COMMANDS.len(), 21);
+        assert_eq!(COMMANDS.len(), 23);
     }
 
     #[test]
@@ -2278,8 +2366,8 @@ mod tests {
         let doc =
             std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("COMMANDS.md"))
                 .unwrap();
-        assert!(doc.contains("Command count: 22."));
-        assert!(doc.contains("21 Rust-owned business"));
+        assert!(doc.contains("Command count: 24."));
+        assert!(doc.contains("23 Rust-owned business"));
         assert!(doc.contains("clap built-in `help`"));
         for command in COMMANDS {
             assert!(

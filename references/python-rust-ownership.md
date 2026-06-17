@@ -15,7 +15,7 @@ added, add it to this manifest and expose it through the Rust CLI.
 
 ## Visible Top-Level Commands
 
-All 21 visible top-level business commands are Rust-owned. `lto-rs --help`
+All 22 visible top-level business commands are Rust-owned. `lto-rs --help`
 additionally shows clap's built-in `help` pseudo-command; it is not listed here.
 
 | Command | Owner | Python Role |
@@ -41,6 +41,7 @@ additionally shows clap's built-in `help` pseudo-command; it is not listed here.
 | `runs` | Rust core | removed |
 | `memory` | Rust core | removed |
 | `plugin` | Rust core | removed |
+| `dispatch-goal` | Rust core | removed |
 
 ## Hidden Compatibility Commands
 
@@ -56,6 +57,7 @@ a second implementation path.
 | `phase` | `task phase` | Rust core | removed |
 | `parallel` | `run parallel` | Rust core | removed |
 | `pipeline` | `run pipeline` | Rust core | removed |
+| `agent-turn-completed` | `agent-turn-completed` | Rust core | removed |
 
 ## Preserved Python Helpers
 

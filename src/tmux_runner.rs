@@ -276,6 +276,93 @@ pub async fn capture_pane(
     .await
 }
 
+pub async fn prepare_dispatch_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerError> {
+    prepare_target(config).await
+}
+
+pub async fn wait_for_dispatch_ready(
+    config: &TmuxRunnerConfig,
+    target: &str,
+) -> Result<(), TmuxRunnerError> {
+    wait_until_ready(config, target).await
+}
+
+pub async fn send_dispatch_text(
+    config: &TmuxRunnerConfig,
+    target: &str,
+    text: &str,
+) -> Result<(), TmuxRunnerError> {
+    send_text(config, target, text).await
+}
+
+pub async fn confirm_tui_input(
+    config: &TmuxRunnerConfig,
+    target: &str,
+    probe: &str,
+) -> Result<String, TmuxRunnerError> {
+    tmux_status(
+        &config.tmux_bin,
+        &[
+            "send-keys".to_string(),
+            "-l".to_string(),
+            "-t".to_string(),
+            target.to_string(),
+            probe.to_string(),
+        ],
+    )
+    .await?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let capture = loop {
+        sleep(Duration::from_millis(150)).await;
+        let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
+        if capture.contains(probe) {
+            break capture;
+        }
+        if Instant::now() >= deadline {
+            return Err(TmuxRunnerError::Config(format!(
+                "probe did not appear in target {target}; prompt may not be in the TUI input box"
+            )));
+        }
+    };
+    tmux_status(
+        &config.tmux_bin,
+        &[
+            "send-keys".to_string(),
+            "-t".to_string(),
+            target.to_string(),
+            "C-u".to_string(),
+        ],
+    )
+    .await?;
+    Ok(capture)
+}
+
+pub async fn wait_for_capture_patterns(
+    config: &TmuxRunnerConfig,
+    target: &str,
+    patterns: &[String],
+) -> Result<String, TmuxRunnerError> {
+    let deadline = Instant::now() + config.ready_timeout;
+    loop {
+        let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
+        if patterns.is_empty()
+            || patterns
+                .iter()
+                .any(|pattern| contains_case_insensitive(&capture, pattern))
+        {
+            return Ok(capture);
+        }
+        if Instant::now() >= deadline {
+            return Err(TmuxRunnerError::Timeout(format!(
+                "tmux target {target} did not show dispatch confirmation within {}s; last capture: {}",
+                config.ready_timeout.as_secs(),
+                one_line_tail(&capture, 500)
+            )));
+        }
+        sleep(config.poll_interval).await;
+    }
+}
+
 async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerError> {
     if config.new_session {
         let session = config.session.as_ref().ok_or_else(|| {
@@ -411,7 +498,10 @@ async fn wait_until_ready(config: &TmuxRunnerConfig, target: &str) -> Result<(),
     let mut skipped = BTreeSet::new();
     loop {
         let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
-        apply_skip_prompts(config, target, &capture, &mut skipped).await?;
+        if apply_skip_prompts(config, target, &capture, &mut skipped).await? {
+            sleep(config.poll_interval).await;
+            continue;
+        }
         if config
             .ready_patterns
             .iter()
@@ -439,7 +529,11 @@ async fn wait_for_stable_capture(
     let mut skipped = BTreeSet::new();
     loop {
         let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
-        apply_skip_prompts(config, target, &capture, &mut skipped).await?;
+        if apply_skip_prompts(config, target, &capture, &mut skipped).await? {
+            previous = None;
+            sleep(config.poll_interval).await;
+            continue;
+        }
         let normalized = capture.trim().to_string();
         if !normalized.is_empty() && previous.as_ref() == Some(&normalized) {
             return Ok(());
@@ -461,7 +555,8 @@ async fn apply_skip_prompts(
     target: &str,
     capture: &str,
     skipped: &mut BTreeSet<String>,
-) -> Result<(), TmuxRunnerError> {
+) -> Result<bool, TmuxRunnerError> {
+    let mut applied = false;
     for skip in &config.skip_prompts {
         if contains_case_insensitive(capture, &skip.pattern) && skipped.insert(skip.pattern.clone())
         {
@@ -475,9 +570,10 @@ async fn apply_skip_prompts(
                 ],
             )
             .await?;
+            applied = true;
         }
     }
-    Ok(())
+    Ok(applied)
 }
 
 async fn run_signal(
@@ -522,7 +618,7 @@ async fn run_signal(
             }
             _ = sleep(snapshot_every) => {
                 let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
-                apply_skip_prompts(config, target, &capture, &mut skipped).await?;
+                let _ = apply_skip_prompts(config, target, &capture, &mut skipped).await?;
                 let _ = append_live_snapshot(live_log_path, "running", target, &capture).await;
             }
         }
@@ -590,7 +686,7 @@ async fn run_sentinel(
         }
         if Instant::now() >= next_snapshot {
             let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
-            apply_skip_prompts(config, target, &capture, &mut skipped).await?;
+            let _ = apply_skip_prompts(config, target, &capture, &mut skipped).await?;
             let _ = append_live_snapshot(live_log_path, "running", target, &capture).await;
             next_snapshot = Instant::now() + snapshot_every;
         }

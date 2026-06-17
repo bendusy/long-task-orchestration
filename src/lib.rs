@@ -1,4 +1,5 @@
 pub mod agent_job;
+pub mod agent_turn;
 pub mod audit;
 pub mod audit_dispatch;
 pub mod budget;
@@ -6,6 +7,7 @@ pub mod cli;
 pub mod commands;
 pub mod decision;
 pub mod dispatch;
+pub mod dispatch_goal;
 pub mod effect;
 pub mod event_emit;
 pub mod events;
