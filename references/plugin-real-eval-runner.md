@@ -83,85 +83,56 @@ plugin eval pack
   -> human promotion decision
 ```
 
-### Sub-LTO-run compiler
+### Run-scoped eval compiler
 
-Preferred v1 implementation: `plugin eval-run --execute` creates a child LTO run with a parent pointer:
+Current implementation: `plugin eval-run` compiles eval-pack cases into
+baseline/candidate jobs and writes a run-scoped report. It does not expose the
+earlier design parameters `--execute`, `--plan-only`, `--runner`,
+`--candidate-profile`, `--baseline-profile`, `--budget-usd`, or `--timeout`.
 
 ```text
-.lto/<child-run-id>/
-  state.json
-  artifacts.json
-  plugin-eval/
-    eval-plan.json
-    evidence/
-    jobs.json
-    metrics.json
-    report.json
-    promotion-note.md
+.lto/<run-id>/plugin-eval-*.json
 ```
 
-Why child run:
+Current rationale:
 
-- no duplicate evidence lifecycle;
-- `runner`, `judge`, `next`, `recap`, and `closeout` already work;
-- failures remain resumable;
-- audit trail stays standard;
-- plugin eval cannot bypass normal gates.
-
-If child-run creation is too invasive, v1 may start as a run-scoped directory under the active run, but artifact schemas must match child-run future shape.
+- no plugin code execution;
+- baseline/candidate definitions come from data-only eval packs;
+- scheduler/permission policy still gates runner execution;
+- reports can be persisted or written with `--no-persist` for dry dogfooding;
+- promotion remains human-gated outside `eval-run`.
 
 ## 4. CLI contract
 
-Default is plan-only. Execution is explicit.
+Current CLI:
 
 ```bash
 lto plugin eval-run <plugin_dir> \
   --eval-id <eval-id> \
-  --case-id <case-id> \
-  --candidate-profile <profile-id> \
-  --baseline-profile <profile-id|none> \
-  --runner codex \
-  --sample-size 5 \
-  --seed 20260604 \
-  --plan-only \
+  --case <case-id> \
+  --run-id <run-id> \
+  --max-concurrency 1 \
+  --output .lto/<run-id>/plugin-eval-run.json \
   --json
 ```
 
-Execution:
+Dogfood without persisting into the run:
 
 ```bash
 lto plugin eval-run <plugin_dir> \
-  --eval-id <eval-id> \
-  --candidate-profile <profile-id> \
-  --baseline-profile <profile-id|none> \
-  --runner codex \
-  --execute \
-  --budget-usd 2 \
-  --timeout 20m \
-  --max-concurrency 1
-```
-
-Parallel pilot is opt-in and constrained:
-
-```bash
-lto plugin eval-run <plugin_dir> \
-  --eval-id batch-audit-v1 \
-  --candidate-profile codex-audit-readonly-v1 \
-  --baseline-profile none \
-  --runner codex \
-  --execute \
-  --pattern fan-out \
-  --max-concurrency 3 \
-  --budget-usd 5
+  --case <case-id> \
+  --run-id <run-id> \
+  --no-persist \
+  --json
 ```
 
 Required behavior:
 
-- `--plan-only` never calls a model;
-- `--execute` fails without runner health snapshot;
-- budget and timeout are hard stops;
-- `--pattern fan-out` requires every selected case to declare `parallelizable=true`;
-- plugin cannot select a runner by itself unless host passes `--runner` or an approved routing policy.
+- `--case` limits execution to one eval-pack case;
+- `--max-concurrency` bounds parallel case execution;
+- `--runners-dir` can point at an alternate runner protocol directory for tests;
+- `--no-persist` avoids writing run artifacts, useful for negative-path verification;
+- plugin cannot execute arbitrary code or bypass normal scheduler/permission policy.
 
 ## 5. Eval pack schema v1
 
@@ -445,12 +416,14 @@ Parallel/swarm extra gates:
 
 ## 11. Implementation phases
 
-### Phase A — schema + plan-only
+### Phase A — schema + planning surface
 
 - Add schema validation for eval-run packs.
-- Implement `plugin eval-run --plan-only`.
-- Resolve cases and emit an execution plan.
-- No runner calls.
+- Current Rust CLI validates eval packs through `plugin eval` and executes through
+  `plugin eval-run`; a separate `--plan-only` flag was an earlier design idea,
+  not an exposed command.
+- Future planning output should reuse the current eval-pack resolver instead of
+  adding a second schema path.
 
 ### Phase B — evidence freezer
 

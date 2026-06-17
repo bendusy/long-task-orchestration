@@ -79,7 +79,7 @@ run-state、task evidence 或等价 artifact：
 
 - `lto audit --auto-dispatch`
 - `lto audit --discover-risks`
-- `lto audit --collect <reply-dir>`
+- `lto collect-agent-run --task-id <id> --runner <runner> --reply <reply.md>` for manually produced replies
 - `lto check --to implementation|closed`
 - `lto judge --phase <phase>`
 - 场景插件 `plugins/adversarial-audit`：refute-first prompt、codex/pi/agy 跨族 profile、union 合并收敛路径
@@ -125,7 +125,7 @@ run-state、task evidence 或等价 artifact：
   `paths/enterprise-audit-gate.json` 做 scope triage。
 - 用 `profiles/enterprise-layer-auditor-v1.json` 给 codex/pi/agy/claude 等
   非同族 runner 派读-only layer audit；高风险默认至少 3 个 distinct families。
-- `lto audit --collect <reply-dir>` / audit ledger 做 union 收口；host 逐条核
+- `collect-agent-run` / artifact evidence / audit ledger 做 union 收口；host 逐条核
   path:line 或命令输出。
 - 有方向争议时转 `direction-review`；有实现 blocker 时回到 `review` /
   `migration` / `feature-dev` 对应修复循环。

@@ -56,9 +56,9 @@ Before closeout, release, or long handoff, record four closure evidence lines:
 
 Packaging before the last edit is not release evidence; rebuild from the final state.
 
-Optional **budget caps** (all default unlimited → zero break for runs that omit
-them): `--max-turns N` / `--max-tokens N` / `--deadline ISO8601`. See the Budget
-section below for the graded-brake semantics.
+Budget readouts are currently exposed through `lto budget check`. Historical
+notes described `start --max-turns/--max-tokens/--deadline` and `budget extend`,
+but those flags/subcommands are not part of the current Rust CLI.
 
 When the target repo is not current directory, pass `--repo` before the command:
 
@@ -307,17 +307,17 @@ repo-relative paths.
 $L audit --auto-dispatch        # auto-dispatch heterogeneous auditors (≠ host family) + collect
 $L audit --discover-risks       # spawn agent to find unregistered risk points (source=risk-agent)
 $L audit                        # write brief + print dispatch instructions (manual)
-$L audit --collect <reply-dir>  # collect replies → heterogeneity check + blocker count + converge
+$L collect-agent-run --task-id T1 --runner codex --reply reply-codex.md
 ```
 
 Auditors emit structured JSON findings (severity is a field, not a regex scan).
-`--collect` rejects same-family auditors (use `--allow-same-family` to override).
+Current Rust CLI has no `audit --collect <dir>`; manually produced runner replies
+must be registered with `collect-agent-run` or as explicit artifacts/evidence.
 
 ## Next (fact router — zero LLM)
 
 ```bash
 $L next            # print decision brief (escalate) or unambiguous cmd suggestion
-$L next --exec     # execute unambiguous routes (closeout/judge/resume); escalate → print only
 $L next --json     # facts + route as JSON
 ```
 
@@ -347,7 +347,8 @@ as a **mechanical evidence gate + mechanical execution** — it never spawns a d
 agent and never reflects (LTO emits facts; the host reflects). It reads cross-run
 mining to gate on accumulated real dispatch data (falls back to supervised when
 insufficient), then mechanically runs safe substeps; escalate/dangerous/push/network
-stay with the human. Mutually exclusive with `--decide`.
+stay with the human. Historical `--decide` flags are not exposed by the current
+Rust CLI.
 
 ## Recap (human-facing review)
 
@@ -364,24 +365,24 @@ Artifact paths are opt-in to keep the default human recap low-noise.
 
 ```bash
 $L budget check                        # per-dimension used/limit/status
-$L budget extend --max-tokens 2000000  # raise a cap (human action)
 ```
 
-Run-level budget caps are an **optional contract** set at `start`
-(`--max-turns` / `--max-tokens` / `--deadline`); all default unlimited, so runs
-that omit them behave exactly as before. Enforcement is **graded**:
+Current budget support is a readout/check surface. Earlier design notes described
+run-level budget caps set at `start` (`--max-turns` / `--max-tokens` /
+`--deadline`) and a `budget extend` unlock command, but those are not in the
+current Rust CLI. If restored, the intended enforcement model remains graded:
 
 - **Soft warning** at `warn_ratio` (default 0.8): a `⚠️ budget: …` fact line
   appears in `next`'s Decision Brief and `recap`. Zero block — it is a fact, not
   a recommendation; matching it to your decision stays the host's job.
 - **Hard brake** at 100%: `autopilot` runs a budget gate before every
   auto-advance. Any dimension over limit → fail-closed `NEEDS_CONFIRM`, no
-  auto-exec. Unlock only by explicit `lto budget extend` or re-`start`.
+  auto-exec. Unlock mechanics need a future CLI design because `budget extend`
+  is not currently implemented.
 
 `turns_used` counts **autopilot auto-advance calls only** — human manual ops
 (`runner`/`audit`/`next`) never consume a turn; the contract constrains
-automation, not the human. `budget extend` cannot shrink a cap below the
-already-used amount (anti self-lock). Measurement lives in `budget.py`
+automation, not the human. Measurement lives in `src/budget.rs`
 (pure: token total + current time injected by the caller); autopilot executes
 the brake — measurement and enforcement stay separated, like `next` (facts) vs
 `autopilot` (action).

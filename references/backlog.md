@@ -12,7 +12,7 @@
 | ② | `DEFERRED_V0` llm_judge 质量评分 + 假阳率 | ★★ 高 | P1 | ✅ 已实现 | judge 异构判读 + frozen hash，单独成层不进 promote |
 | ⑥ | **跨 run 数据挖掘 → 进化**（按 runner模型×status×时间 聚合，挖真实有效性喂回 host） | ★★★ 最高 | **P0-next** | ✅ 已实现 | **① 的下游闭环**：双源(agent_runs+events)合一 brief；distinct-run 闸门；codex 审 6 条修 |
 | ⑦ | **`AgentResult` 落 `model` 字段**（让 ⑥ 区分同 runner 不同 model） | ★★ 高 | **P1** | ✅ 已实现 | scheduler 单点回填 job.model；⑥ 挖掘出 model 分布；向后兼容 |
-| ③ | `autopilot --autonomous` 机械闸门+机械执行（不 spawn 决策 agent） | ★ 中 | P2 | ✅ 已实现 | 证据闸门读⑥；codex 审 2BLOCKER+3HIGH 修；与 --decide 互斥 |
+| ③ | `autopilot --autonomous` 机械闸门+机械执行（不 spawn 决策 agent） | ★ 中 | P2 | ✅ 已实现 | 证据闸门读⑥；codex 审 2BLOCKER+3HIGH 修；历史 `--decide` 未接到当前 CLI |
 | ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | ✅ 已实现 | am 0.7.0 AmCliSink 落地真跑；am 可选，无 am 优雅降级 |
 | ⑤ | `AgentJobKind.TOURNAMENT` / `LOOP` 枚举 | ☆ 低 | **P3 不做** | YAGNI | 无真实触发场景，保持占位 |
 | ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
@@ -51,7 +51,7 @@
 
 ## ③ autopilot --autonomous（P2，被 ① 解锁）
 
-- **是什么**：机械证据闸门（`_autonomous_gate`）+ 机械执行 safe 子步骤，**绝不 spawn 决策 agent**（与 `--decide` 互斥，运行时强制清掉）；反思/决策永远归宿主 LLM（当前 `--supervised` / `--auto-exec` / `--decide` 已实现）。
+- **是什么**：机械证据闸门（`_autonomous_gate`）+ 机械执行 safe 子步骤，**绝不 spawn 决策 agent**；反思/决策永远归宿主 LLM。当前 CLI 暴露 `--supervised` / `--auto-exec` / `--autonomous`；`src/decision.rs` 有 decision engine，但历史 `--decide` 未接到 CLI。
 - **为何延后**：spec 明说「先攒 supervised 真实 escalate 数据再决定值不值」——而数据正来自 ①。在 ① 落地、攒够真实 escalate 样本前做它=赌。
 - **锚点**：`src/commands/ops.rs` 的 autonomous gate / autopilot 分支、`SKILL.md` autopilot 档位说明。
 

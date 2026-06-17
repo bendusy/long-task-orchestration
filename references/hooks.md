@@ -59,7 +59,7 @@ artifact memory publish 是可选增强，不是核心 hook：
 - 当前第一片不自动安装 publish hook；
 - `lto memory export --dry-run` 纯本地，可随时跑；
 - `lto memory publish` 只有用户显式执行才连接 memory-flow/ANIMEM；
-- 未来如在 `closeout` / `audit --collect` / `runner` 后触发 publish，失败也只能记录
+- 未来如在 `closeout` / `audit` / `collect-agent-run` / `runner` 后触发 publish，失败也只能记录
   warning 或 retry artifact，不能阻断本地 `.lto` 状态写入；
 - `lto resume` 和 `lto memory resume` 都必须保持只读，不触发 publish。
 

@@ -64,15 +64,15 @@
 | `audit_ledger_check.py self-test` | 离线自检四档收敛 | — | `LEDGERCHECK SELFTEST OK`；rc 0/1 | `python3 scripts/audit_ledger_check.py self-test` |
 | `lto run parallel` | 并发批量跑多 task 的 shell 校验命令 | `--phase\|--task-ids [--concurrency] [--command]` | evidence + state.json | `lto run parallel --phase impl --concurrency 4` |
 | `lto run pipeline` | 每 task 串行过多 stage（item 并发） | `--stages "..." [--phase] [--concurrency]` | evidence + state.json | `lto run pipeline --stages "lint {task_id}" "test {task_id}"` |
-| `lto audit` | 对抗审计编排+收口判收敛 | `[--auto-dispatch\|--discover-risks\|--collect <dir>]` | 审计简报 + audit-ledger.md | `lto audit --auto-dispatch` |
-| `lto next` | 事实简报器（零 LLM，不接管路径选择） | `[--exec] [--json]` | 决策简报 / argv 命令 | `lto next` |
-| `lto autopilot` | 受约束推进 harness | `--supervised [--auto-exec] [--decide [--decide-kind] [--decide-budget]]` / `--autonomous`（机械证据闸门+机械执行，不 spawn 决策 agent，与 --decide 互斥）| 决策简报 / 沙箱执行 + evidence / 三方收敛 brief / 闸门简报 | `lto autopilot --supervised --decide` |
+| `lto audit` | 对抗审计编排+风险发现 | `[--auto-dispatch\|--discover-risks\|--allow-same-family]` | 审计简报 + audit-ledger/risk evidence | `lto audit --auto-dispatch` |
+| `lto next` | 事实简报器（零 LLM，不接管路径选择） | `[--json]` | 决策简报 / route facts | `lto next` |
+| `lto autopilot` | 受约束推进 harness | `--supervised [--auto-exec]` / `--autonomous`（机械证据闸门+机械执行，不 spawn 决策 agent）| 决策简报 / 沙箱执行 + evidence / 闸门简报 | `lto autopilot --supervised --auto-exec` |
 | `lto recap` | 面向人类的回顾视图 | `[--run-id]` | 人话回顾（六问） | `lto recap` |
 | `check_docs_consistency.py` | 文档/命令面一致性 gate | — | `DOCS CONSISTENCY OK`；rc 0/1 | `python3 scripts/check_docs_consistency.py` |
 | `scripts/install.sh` | 安装 skill 软链，并生成/检查全局 `lto` wrapper | `[--check] [target]` + `LTO_BIN_DIR` | skill links + sentinel-managed wrapper；冲突 rc 2 | `bash scripts/install.sh --check` |
 
 **harness primitive 底层模块**（不直接走 CLI，是 host agent 可组合的能力）：
-`src/agent_job.rs`（AgentJob/AgentResult 数据合同）/ `src/scheduler.rs`（并发+退出码三元判定+退避+healthcheck）/ `src/worktree.rs`（autopilot 沙箱）/ `src/dispatch.rs`（推进/派工 affordance）/ `src/decision.rs`（双轨收敛引擎：direction 投票 / review union 合并，被 `autopilot --decide` 调用 spawn 三方）。
+`src/agent_job.rs`（AgentJob/AgentResult 数据合同）/ `src/scheduler.rs`（并发+退出码三元判定+退避+healthcheck）/ `src/worktree.rs`（autopilot 沙箱）/ `src/dispatch.rs`（推进/派工 affordance）/ `src/decision.rs`（双轨收敛引擎：direction 投票 / review union 合并；当前未接到 `autopilot` CLI）。
 
 host agent 在 CLI 命令之外高频用到的模块：`src/audit_dispatch.rs`（readonly_intent_policy / 异构 auditor 选择）/ `src/state.rs`（所有命令的状态层）/ `src/llm_judge.rs`（judge 底层）/ `src/commands/util.rs`（artifact 真源 helper）/ `src/events.rs`+`src/telemetry.rs`（Phase 1 事件层）/ `src/budget.rs`（run 级预算契约纯计量层，autopilot 调它硬刹车、next/recap 调它软警告）。
 

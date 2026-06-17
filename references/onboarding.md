@@ -30,7 +30,7 @@ LTO 文档里反复出现这些词。第一次见不用全记，卡住了回这�
 | **closeout（收尾）** | 任务闭环：写 handoff、生成 CHANGELOG。有未审风险会被 closeout 闸门拦住。 |
 | **闸门（gate）** | 关键路口的硬检查（commit/deploy/closeout 前）。没过就停，可能回吐给人。 |
 | **worktree 沙箱** | 一份独立的 git worktree 副本。autopilot 自动执行的命令都在这里跑——`rm -rf` 再狠也只炸可弃副本，主工作树毫发无损。 |
-| **autopilot 档** | 自动化的梯度：`--supervised`（只出建议）→ `--auto-exec`（沙箱跑 safe 子步骤）→ `--decide`（派三方收敛）→ `--autonomous`（攒够证据后机械推进）。越往后放权越多，但每升一级都要更多证据。 |
+| **autopilot 档** | 自动化的梯度：`--supervised`（只出建议）→ `--auto-exec`（沙箱跑 safe 子步骤）→ `--autonomous`（攒够证据后机械推进）。历史设计里的 `--decide` 未接到当前 Rust CLI。 |
 | **resume vs recap** | `resume` 给 **AI** 拉上下文（git head / task 状态）；`recap` 给 **人** 看的人话回顾（当初要做啥、做到哪、还剩啥）。 |
 | **`.lto/` 目录** | 本项目所有 LTO run 的落盘地。**am（animem）没装时，它就是这个项目的本地记忆层**——每个 run 一个子目录，记着目标/阶段/任务/证据/handoff。`lto runs` 列出全部。 |
 
@@ -137,23 +137,22 @@ lto --repo <目标仓库> <子命令> [参数]
 LTO 现在不只是"告诉你做什么"，它把长任务拆成可组合 primitive。你先读状态和 playbook，再决定下一段组合：
 
 - **agent fan-out**：`audit --auto-dispatch` 自动派 codex/pi/agy 三家异构审计方，并发跑、自动收口。底层 scheduler 处理并发上限、429 退避、healthcheck 剔除挂的 runner。
-  - **它审哪些 task（触发条件，2026-06-10 补：实测有人撞"no high-risk tasks found"）**：`--auto-dispatch` 只挑被判定为**高风险**的 task。判定是**关键词匹配**——task 的 `title` 或 `touched_files` 命中以下任一关键词即算高风险：持久化/迁移/schema/migration、权限/认证/鉴权/auth、并发/concurren/锁/lock、外部接口/api、支付/payment、安全/security/加密/crypt、删除/delete、回滚/rollback。
-  - **没有高风险 task 时怎么办**：① 想审某个不含关键词的 task，用 `audit --auto-dispatch --task-id T1 T2` 强制指定；② 想让系统主动找你漏登记的风险，用 `audit --discover-risks` 派 agent 生成 `risk_points`（这些会被 closeout 闸门拦）；③ 研究/探索型 task 通常**不需要** auto-dispatch——它是给改 auth/payment/schema 这类高风险代码用的，纯研究跳过它很正常，不是 bug。
-- **对抗审计闭环**：审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词），`--collect` 校验异构（审者 ≠ 宿主家族）+ 抽 blocker 计数 + 判 ledger 收敛趋势。
+  - **它审哪些 task（触发条件，2026-06-10 补：实测有人撞"no high-risk tasks found"）**：`--auto-dispatch` 按当前 run 的风险线索生成 brief 并派工；当前 Rust CLI 没有 `audit --task-id` 强制指定参数。想让系统主动找漏登记风险，用 `audit --discover-risks` 派 agent 生成 `risk_points`（这些会被 closeout 闸门拦）。
+- **对抗审计闭环**：审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词）。当前 Rust CLI 没有历史文档里的 `audit --collect <dir>`；外部手动派工回复用 `collect-agent-run` 登记。
 - **手动派工的登记桥（`collect-agent-run`）**：如果你不走 `audit --auto-dispatch` 而是手动用 `delegate.sh -a codex -p prompt.md -o reply.md` 派工，产物默认**不进** state（两条平行路径，见 `agent-runs-decoupling-diagnosis.md`）。派完工跑 `lto collect-agent-run --task-id T1 --runner codex --reply reply.md` 把它登记进 `agent_runs`——它会自动读同名 `reply.md.meta.json` token sidecar，于是 recap / closeout / cross-run-mining 都能看见这次派工的 token 与产物。agy 无 sidecar 会诚实标 unmetered。它不 spawn 进程，只登记已发生的事实。
 - **risk 对抗生成**：`--discover-risks` 派独立 agent 主动找你漏登记的风险点（source=risk-agent），对抗"自报完整性"。未审风险会被 closeout 闸门拦。
-- **事实简报（`lto next`）**：读状态 → 给宿主 LLM（就是你）一份富决策简报（目标 + task + 真实失败信息），让你推理下一段该 fan-out / adversarial / linear / 停下来问人。它自己零 LLM、零 key，只整理事实——**判断由你做**。无歧义时（如全 done 该 closeout）直接给可执行命令，`lto next --exec` 可跑；模糊时只出简报不替你猜。
+- **事实简报（`lto next`）**：读状态 → 给宿主 LLM（就是你）一份富决策简报（目标 + task + 真实失败信息），让你推理下一段该 fan-out / adversarial / linear / 停下来问人。它自己零 LLM、零 key，只整理事实——**判断由你做**。当前 `next` 只输出简报或 JSON，不执行命令。
 - **playbook 调度先验**：`workflow-playbook.md` 把 `review/debug/migration/claim-verify/research` 写成 host agent 的调度先验：触发信号、可用 primitive、artifact、停止条件和反模式。它不是 CLI preset。
 
 这是带护栏的 harness：路径你运行时选，但跑在可恢复可审计的 6 阶段 + state.json + git 边界轨道上。
 
 ## 自驱动：`lto autopilot`（受约束的自动推进）
 
-`lto autopilot` 让 LTO 读状态 → 给 brief / 执行安全子步骤 / 必要时组织异构讨论。它是受约束 harness，不是替 host agent 接管 planner。三档：
+`lto autopilot` 让 LTO 读状态 → 给 brief / 执行安全子步骤。它是受约束 harness，不是替 host agent 接管 planner。当前 CLI 三档：
 
 - **`--supervised`（默认）**：出富决策简报 + 路由建议，escalate（多 blocked / 方案分歧 / 高风险）回吐你这个宿主 LLM 推理。集成 stall 检测（同失败指纹反复 = 停滞，提示别空转）。
 - **`--supervised --auto-exec`（opt-in）**：对 pending task 的 **safe/reversible** 命令，在 **worktree 沙箱**里自动跑 + 落证据。
-- **`--decide`（opt-in，已实现）**：escalate 时 **opt-in** spawn 三方异构 agent 跑双轨收敛（direction 投票 / review union 合并），出一份收敛 brief 给你读——**决策权仍归你这个宿主**，工具只整理三方结论不替你拍板。配 `--decide-kind`（direction|review|both，默认从状态推断）选收敛轨、`--decide-budget` 给 token 预算上限（默认 50000；传 0 强制 needs_human 不 spawn）。`--autonomous`（机械证据闸门 + 机械执行，已实现）**不 spawn 决策 agent、不替你反思**——读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够诚实退回 supervised），过闸后机械推进 safe 子步骤；与 `--decide` 互斥（autonomous 绝不派决策 agent）。反思永远归你这个宿主。
+- **`--autonomous`（机械证据闸门 + 机械执行）**：不 spawn 决策 agent、不替你反思；读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够诚实退回 supervised），过闸后机械推进 safe 子步骤。反思永远归你这个宿主。`src/decision.rs` 仍有双轨收敛引擎，但历史文档里的 `autopilot --decide` / `--decide-kind` / `--decide-budget` 未接到当前 CLI。
 
 安全是硬底线（autopilot 自动执行的命令全经 `worktree_exec` 沙箱）：
 - 每条自动执行的命令在**独立 git worktree 副本**里跑——`rm -rf` 再狠也只炸可弃的 worktree，主工作树/系统/家目录毫发无损。
@@ -210,7 +209,8 @@ $L runner --task-id T1 --kind test --command "pytest tests/test_auth.py -x" --no
 
 # 4. 高风险？派异构对抗审计（需 agent-delegate）
 $L audit --auto-dispatch        # 自动派 ≠ 你这家的审计方
-#   没装 agent-delegate：$L audit  然后按提示手动派，再 $L audit --collect <reply-dir>
+#   手动派工后的 reply 用 collect-agent-run 登记。
+$L collect-agent-run --task-id T1 --runner codex --reply reply-codex.md
 
 # 5. 开始写代码前，先看 entry evidence（不自动批准，仍要人拍板）
 $L check --to implementation

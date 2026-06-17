@@ -113,12 +113,13 @@ $LTO audit --discover-risks
 
 # 半自动（想手动控制）：
 $LTO audit                                           # 写简报 + 打印派工指令
-#    （想强制审某些 task：--task-id T1 T2）
-$LTO audit --collect .lto/<run-id>/audit/replies     # 派完收口
+# 已产出的外部 runner 回复用 collect-agent-run 登记到 state；
+# 当前 Rust CLI 没有历史文档中的 audit --collect <dir>。
+$LTO collect-agent-run --task-id T1 --runner codex --reply .lto/<run-id>/audit/replies/reply-codex.md
 ```
 
-> 审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词）；`--collect`
-> 校验异构（审者家族 ≠ host）+ 抽 blocker 计数 + 判 ledger 收敛趋势。
+> 审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词）；
+> auto-dispatch/risk-discovery 负责异构派工，已有回复用 `collect-agent-run` 登记证据。
 
 **手动派工**（直接用自带 runner）：
 ```bash
@@ -127,7 +128,8 @@ $AD/codex.sh  方案.md 回复-codex.md  300 &
 $AD/agy.sh    方案.md 回复-agy.md    300 &
 $AD/claude.sh 方案.md 回复-claude.md 300 &
 wait  # 等它们都跑完
-# 回复存一个目录、文件名带 runtime，再 $LTO audit --collect <dir>
+# 每份回复逐个登记，文件名/metadata 保留 runner 来源。
+$LTO collect-agent-run --task-id T1 --runner agy --reply 回复-agy.md
 ```
 
 **拿到结果后做什么**：
@@ -208,9 +210,8 @@ $LTO start --goal "提升检索召回" \
   --constraint "wall clock <= 4h; paid API <= $50" \
   --instrument "python3 eval/search_recall.py --hidden" \
   --entropy-check "on stall, change hypothesis and log overfit reflection"
-#   预算契约（全可选，缺省无限）：--max-turns / --max-tokens / --deadline
-#   超 80% next/recap 软警告，超 100% autopilot 硬刹车（NEEDS_CONFIRM）。
-#   解除靠 `lto budget extend`。turn 只数 autopilot 自动推进，人手动操作不计。
+# 当前 start 只接收目标/约束/测量/熵检查；max-turns/max-tokens/deadline
+# 预算 cap 和 budget extend 不是当前 Rust CLI 命令面。
 
 # 续接（上次 compact 之后，或新 session 恢复）
 $LTO resume        # 给接手的 AI 拉上下文
@@ -229,11 +230,10 @@ $LTO next                        # 出事实简报+无歧义命令建议（零 L
 # 自驱推进（受约束 harness，不接管 planner）
 $LTO autopilot --supervised   # 出 brief 回吐你判断
 #   --auto-exec：safe/reversible 子步骤在 worktree 沙箱自动跑（dangerous 停下等确认）
-#   --decide：escalate 时派三方异构 agent 讨论收敛（opt-in 烧 token，决策权仍归你）
+#   --autonomous：机械证据闸门 + 机械执行；不 spawn 决策 agent
 
-# 预算（可选；查用量 / 人显式抬上限解除刹车）
+# 预算（当前只读查询）
 $LTO budget check                       # 各维度 used/limit/status
-$LTO budget extend --max-tokens 2000000 # 抬上限（不能收紧到已用量以下，防自锁）
 
 # 完成
 $LTO closeout --summary "做了什么，验证了什么"      # 默认写 CHANGELOG.md
@@ -261,9 +261,9 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 > 旧说明、旧 run/兼容残留如何处理）、clean_worktree（打包前仓库 clean 或剩余 dirt
 > 已命名并获准）、rebuild_package（最终状态重新编译/打包的命令和结果）。
 >
-> **autopilot 档位**：`--supervised`（出 brief，默认）、`--auto-exec`（worktree 沙箱跑 safe 子步骤）、`--decide`（escalate 时 opt-in 派三方异构 agent 收敛，决策权仍归你）、`--autonomous`（机械证据闸门 + 机械执行）均已实现。**autonomous 不 spawn 决策 agent、不替你反思**——它只做两件机械的事：读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够诚实退回 supervised），过闸后在 worktree 沙箱机械推进 safe 子步骤。escalate / dangerous / git push（含 `git -C . push` 等变体）/ 网络副作用一律停人类，反思永远归你。与 `--decide` 互斥（autonomous 不派决策 agent）。
+> **autopilot 档位**：当前 Rust CLI 暴露 `--supervised`（出 brief，默认）、`--auto-exec`（worktree 沙箱跑 safe 子步骤）和 `--autonomous`（机械证据闸门 + 机械执行）。`src/decision.rs` 保留 decision engine，但历史文档里的 `autopilot --decide` / `--decide-kind` / `--decide-budget` 未接到当前 CLI；需要另立 goal 恢复或正式移除。**autonomous 不 spawn 决策 agent、不替你反思**——它只做两件机械的事：读跨 run 挖掘事实判证据闸门（攒够真实派工才解锁，不够诚实退回 supervised），过闸后在 worktree 沙箱机械推进 safe 子步骤。escalate / dangerous / git push（含 `git -C . push` 等变体）/ 网络副作用一律停人类，反思永远归你。
 >
-> **budget 刹车**：若 `start` 设了 `--max-turns/--max-tokens/--deadline`，每次 autopilot 推进先过 budget gate——任一维度超 100% 即 fail-closed `NEEDS_CONFIRM`（turn 只数 autopilot 调用，人手动操作不计），解除靠 `lto budget extend` 或重 start。缺省无限 → 老 run 零影响。软警告（80%）只在 next/recap 事实层出现，不阻断。
+> **budget 刹车**：当前 CLI 暴露 `lto budget check`，用于读取 token/预算事实；`start --max-turns/--max-tokens/--deadline` 和 `budget extend` 不在当前 Rust CLI 命令面。若要恢复 cap/extend，需要另立实现 goal 并同步 CLI/tests/docs。
 
 ## 什么情况下不要用 LTO
 

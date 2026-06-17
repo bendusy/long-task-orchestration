@@ -1,133 +1,162 @@
-# LTO：长任务 harness
+# LTO: 长任务 harness
 
-> 做一个大功能要几十轮对话，做着做着就忘了目标、跳过验证、自己审自己还说没问题。
-> **LTO 给主 agent（你这个 AI）一条带护栏的跑道**：状态存得下、进度恢复得了、产出有异构 AI 帮你审、危险操作进沙箱、关键路口能踩刹车。
+LTO 是给主 agent 用的本地 CLI：它不替 agent 规划路线，不替 agent 写代码，而是把长任务的状态、证据、审计、runner 派工、沙箱、resume/recap 和 closeout 闸门落到 `.lto/`。适合几十轮会话、跨天交付、需要异构审计和可恢复证据的工作。
 
 ## 30 秒看懂
 
-**它是什么**：一个 CLI 工具，给跑长任务的 AI agent 当「外置记忆 + 质检 + 刹车」。
+| 问题 | LTO 的回答 |
+|---|---|
+| LTO 是什么 | 外置记忆 + 质检 + 刹车。主 agent 仍是 planner，LTO 负责让过程可恢复、可审计、可验证。 |
+| 真源在哪里 | `.lto/<run-id>/state.json`、artifacts、runner logs、audit ledger。am 只是可选投影，本地 `.lto/` 永远是项目真源。 |
+| 怎么防跑偏 | start 写目标和交付契约，task 记录拆分，runner 写证据，next/resume/recap 拉回上下文，closeout 前检查红线。 |
+| 怎么防自审 | `audit --auto-dispatch` 和 `audit --discover-risks` 派异构 runner 挑问题；runner 不健康时 fail-closed。 |
+| 什么时候不用 | 小 bug、一行改动、普通 review、单次部署，不该套 LTO。 |
 
-**它不是什么**：不替你写代码，也不替你选路径。**你仍然是 planner**，LTO 只让你的每一步可恢复、可审计、可安全自动推进。
-
-**它解决的三个老毛病**（任何 agent 单 context 跑长任务都会犯）：
-
-| 老毛病 | 现象 | LTO 的防线 |
-|---|---|---|
-| **偷懒** | 50 项做了 20 项就宣布完成 | 没审完不让收尾（closeout 闸门） |
-| **自我偏袒** | 自己审自己，永远判「没问题」 | 强制派**不同厂商**的 AI 来审（异构审计） |
-| **跑偏** | 几十轮后忘了最初要干嘛 | 状态落盘 + 一句话拉回目标（resume/recap） |
-
-> 名词卡住了？所有术语（harness / 异构 / runner / phase / artifact / closeout / autopilot 档 …）在 **[references/onboarding.md](./references/onboarding.md)** 开头有一张速查表。
+术语细节见 [references/onboarding.md](./references/onboarding.md)，完整命令面见 [COMMANDS.md](./COMMANDS.md)。
 
 ## 最小可跑路径
 
-照着这 5 步就能跑通一个完整长任务。`L` 是 CLI 入口的简写。
-
-> 先认两个词：**task** 是「要做什么」的定义，**runner** 是「执行它一次」的动作——一个 task 可以 run 多次（失败重试、换参数）。每次 run 的结果落进状态，后面 `next` / `audit` / `closeout` 都读这些结果。
-
-
-
 ```bash
-L="cargo run --quiet --"         # Rust v2 当前接管线
-# 装过 install.sh 且已 cargo build --release --bin lto-rs 后，也可用：
+L="cargo run --quiet --"
+# 安装 wrapper 后也可以用：
 # L="lto"
 
-# ① 开工：记下目标、为什么做、做完的标准（recap 会用到）
-$L start --goal "重构登录模块" --why "线上空指针崩溃" --done-when "测试全绿+review过"
+# 1. 开工：目标、原因、完成标准
+$L start --goal "重构登录模块" --why "线上空指针崩溃" --done-when "测试全绿+审计收敛"
 
-# /goal 型长交付：把交付契约写进 core state，而不是只靠自然语言目标
+# /goal 型长交付：交付契约进 Rust core state
 $L start --goal "提升检索召回" \
   --target "hidden eval recall >= 95%" \
   --constraint "wall clock <= 4h; paid API <= $50" \
   --instrument "python3 eval/search_recall.py --hidden" \
-  --entropy-check "on stall, try a non-keyword-list hypothesis and log overfit reflection"
+  --entropy-check "on stall, change hypothesis and log overfit reflection"
 
-# ② 加一个任务，然后执行它（task 要先建，runner 不会自动建）
-$L task add --task-id T1 --title "给 login 加判空" --command "pytest tests/ -x"
-$L runner  --task-id T1 --kind test
+# 2. 建 task，再执行并落证据
+$L task add --task-id T1 --title "给 login 加判空" --command "pytest tests/test_auth.py -x"
+$L runner --task-id T1 --kind test --command "pytest tests/test_auth.py -x" --note "验证空指针修复"
 
-# ③ 迷路了就问：现在该干什么？
-$L next        # 它读状态，给你一份「下一步」事实简报（它只摆事实，你来决定）
+# 3. 迷路时看事实简报
+$L next
+$L resume
+$L recap
 
-# ④ 让不同厂商的 AI 帮你审（自动派 codex/pi/agy 三家）
+# 4. 高风险时异构审计
 $L audit --auto-dispatch
+$L audit --discover-risks
 
-# ⑤ 收尾（有没审完的风险会被拦住）
-$L closeout --summary "登录重构完成，空指针已修，异构审计已收敛"
+# 5. 收尾前硬检查，再 closeout
+$L check --to closed --strict
+$L closeout --summary "登录重构完成，测试和异构审计已收敛"
 ```
 
-**跨天回来接着干**：`$L resume`（给 AI 拉上下文）或 `$L recap`（给人看人话回顾）。
+`audit` 当前命令面是 `--auto-dispatch`、`--discover-risks`、`--allow-same-family`。历史文档里出现过的 `audit --collect <dir>` 不是当前 Rust CLI 命令；已有回复应通过当前 `runner`/`collect-agent-run`/artifact 机制登记。
 
-> 想看全部 21 个可见业务命令和参数摘要，先看 **[COMMANDS.md](./COMMANDS.md)**；`lto-rs --help` 会额外显示 clap 内置 `help`，所以 help 行数是 22。想看先后关系、autopilot 自动化怎么用，去 **[onboarding.md](./references/onboarding.md)**，那是给 agent 读的完整手册。
+## 架构全貌
 
-## v0.5.0 新增（2026-06-16）
+```text
+host agent = planner
+  |
+  v
+lto-rs CLI primitives
+  |-- state/task/phase/check/closeout
+  |-- runner/scheduler/tmux/worktree sandbox
+  |-- audit/judge/heterogeneous runner selection
+  |-- plugin data packs and eval-run
+  |-- events/telemetry/budget readouts
+  |
+  v
+.lto/<run-id> = local source of truth
+  |-- state.json / run-state.md / artifacts.json
+  |-- live logs / replies / audit ledger / handoff
+  v
+optional sinks: am memory publish/resume, release docs, changelog
+```
 
-这一版的主题是 **Rust 全量接管 + repo 自带 tmux 派工底座**——LTO 不再依赖任何第三方工具就能把长任务派给 tmux 里的 coding agent，回收后由 host 亲验收口：
+核心边界：
 
-- **Python fallback 退役**：删掉旧的 Python fallback 包与入口脚本，`lto` wrapper 只跑 `lto-rs`。原先的 Python 开关现在给出明确移除提示而非静默回退；历史 `.lto` state 兼容由 Rust fixture 测试保留。
-- **repo-owned tmux runner**：`lto runner --tmux-mode signal|sentinel|fire --target <pane>` 用直连 tmux 子进程派工，带 send-keys 前置安全检查、ready/skip 提示匹配、capture-pane 回收。不依赖第三方 tmux-autopilot。
-- **tmux 后端的 autopilot worker**：`lto autopilot --auto-exec --worker-runner tmux` 每个待办任务派一个有界 worker，按 `*.worker.json` 完成契约的 rc 更新任务状态，而非凭 pane 停了就算成功。
-- **O2 可观测事件接线**：runner 重试/healthcheck、audit、gate、budget、sandbox、judge、decision 的关键时刻都写进 `events.jsonl`；telemetry 多答「哪个 runner 失败率高/audit 收敛几轮」。
-- **host 亲验硬停止点**：新增 `tmux-goal-loop` playbook 与 `lto check --to closed --strict` 的 done-evidence 闸门(done 任务无证据直接拦 closeout)。
+- **Rust v2 是唯一支持的 CLI runtime**。Python fallback 已在 v0.5.0 删除；保留的 `scripts/*.py` 是文档检查、ledger 检查、ADR 写入等维护工具，不是运行时 fallback。
+- **LTO 是 harness，不是 planner**。`next`、`recap`、`autopilot --supervised` 只整理事实；路线判断仍由 host agent 和人决定。
+- **runner/audit/worktree 是 affordance**。它们提供派工、异构检查和可弃沙箱，不改变最终责任归属。
+- **macOS/Linux 优先**。Windows native support 暂停；当前内置 runner 协议依赖 `scripts/delegate/runners/*.sh` 和 `healthcheck.sh`，WSL/Unix-like shell 属于用户侧环境验证。
 
-完整技术条目见 [CHANGELOG.md](./CHANGELOG.md)。
+## 插件系统怎么用
 
-## v0.3.0 新增（2026-06-09）
+插件是 data-only path plugin：它可以提供 source note、path/playbook JSON、runtime profile、prompt suffix、output schema 和 eval pack；不能执行任意代码、自动提升权限、替 host 选 workflow 或自动 promotion。边界见 [references/plugin-boundary.md](./references/plugin-boundary.md)，真实 A/B eval 设计见 [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md)。
 
-这一版的主题是让 LTO **越用越聪明**——但聪明的是你这个主 agent，不是 LTO。它只机械摆数据，判断永远归你：
+当前仓库有 6 个插件：
 
-- **跨 run 数据挖掘**（`recap --mine`）：扫历史所有 run，机械算出「哪个 AI 模型在哪类任务上真有效、哪个阶段总卡壳」，细到能区分同一个 pi 跑 deepseek 还是 glm。**只摆事实和假设，不替你拍板该用谁。**
-- **全程留痕**（`events.jsonl`）：每个派工边跑边写黑匣子日志，派生出用量、耗时、人工干预记录。卡住了直接 `tail` 看，不用干等 timeout。这是「越用越聪明」的证据地基。
-- **autonomous 档落地**：autopilot 多放一档权，但**不是全自动**——它先查跨 run 数据攒够没（没攒够就诚实退回半自动），攒够了才在沙箱里机械跑安全可逆的小步。要判断、要推代码、碰 `git push`，永远停下问你。
+- `plugins/adversarial-audit`
+- `plugins/claim-verify-research`
+- `plugins/deep-agent-profiles`
+- `plugins/dev-workflow`
+- `plugins/meeting-transcript`
+- `plugins/migration-refactor`
 
-完整技术条目见 [CHANGELOG.md](./CHANGELOG.md)。
-
-## Rust v2 轨道（当前接管线）
-
-`lto-rs` 是按 2026-06-15 v2 spec 落地的 Rust 核心轨道，也是当前唯一支持的 LTO CLI。Python fallback 已在 v0.5.0 退役；历史 `.lto` state 兼容由 Rust fixture 测试保留。当前状态是：Rust workspace、21 个可见业务命令真实现（旧 `task-add`/`task-update`/`phase`/`parallel`/`pipeline` 作为隐藏兼容入口保留；`--help` 另含 clap 内置 `help` 行）、runner event parser、state/budget、delivery contract、scheduler typed core、worktree 沙箱、dispatch/merge-review/audit/decision/plugin 的核心类型、`plugin validate/render-profile/eval/mount/source-note/eval-run`、events/telemetry、COMMANDS.md 和回归测试已建立。
-
-当前 Rust v2 支持面聚焦 macOS 和 Linux。Windows 二进制与 runner 派工支持先暂停：内置 delegate runtime 仍是 `scripts/delegate/runners/*.sh` + `healthcheck.sh` 的 shell 协议，先把 Rust 接管旧 Python 和核心代码清理做稳，再重新评估 Windows 原生 runner。
+最小生命周期示例，以下命令已用 `plugins/adversarial-audit` 实跑验证：
 
 ```bash
-cargo test
-cargo run -- self-test
-cargo run -- check --run-id <run-id> --json
-
-# 全局 wrapper 执行 Rust CLI
-lto recap --run-id <run-id>
-lto check --run-id <run-id> --json
+$L plugin list
+$L plugin validate plugins/adversarial-audit --json
+$L plugin render-profile plugins/adversarial-audit codex-refuter-v1 \
+  --input .lto/<run-id>/plugin-profile-input.md \
+  --output .lto/<run-id>/plugin-profile-rendered.md \
+  --meta-output .lto/<run-id>/plugin-profile-rendered.meta.json \
+  --json
+$L plugin eval plugins/adversarial-audit --json \
+  --output .lto/<run-id>/plugin-static-eval-adversarial-audit.json
+$L plugin mount plugins/adversarial-audit --run-id <run-id>
+$L plugin eval-run plugins/adversarial-audit \
+  --run-id <run-id> \
+  --case agy-refute-adversarial-path \
+  --no-persist --json \
+  --output .lto/<run-id>/plugin-eval-run-adversarial-negative.json
 ```
 
-Rust 侧的原则是“黑盒行为对齐，内部 Rust-native”：外部兼容 `.lto/` 历史 state 和现有插件 JSON，内部用 enum/typed struct/trait/Result/serde flatten 固化不变量，不机械翻译旧 Python 模块边界。
+数据流是：validate 检查 manifest 和引用文件，render-profile 编译 profile prompt，eval 静态校验 eval pack，mount 只在 run 里写 provenance lock，eval-run 通过 scheduler 跑 baseline vs candidate 并输出 report。
 
-从 Python 切到 Rust、二进制下载状态和 release 打包流程见 [references/rust-migration-release.md](./references/rust-migration-release.md)。二进制下载是 release-gated：下载前先查 GitHub Releases 是否已有对应 `.tar.gz` 和 `.sha256`，校验 checksum 后再运行 `./lto-rs self-test`。
+## 预设工作流
 
-## 什么时候**不**该用
+预设工作流是 host-agent 调度先验，不是 `lto workflow run X` 这种硬命令。host 读 playbook 后组合 `start`、`task`、`runner`、`audit`、`judge`、`next`、`recap`、`closeout` 等 primitive。完整说明见 [references/workflow-playbook.md](./references/workflow-playbook.md) 和 [references/dev-workflow-spec.md](./references/dev-workflow-spec.md)。
 
-- 修个小 bug、改一行 —— 直接改，别套 harness。
-- 让人审一下代码 —— 走你自己的 review 流程。
-- 只是部署一下 —— 走部署流程。
+| 工作流 | 何时用 | 关键 primitive | 期望产物 |
+|---|---|---|---|
+| `review` | 高风险 spec/code/设计需要异构审计 | `audit`, `judge`, `check` | audit brief、findings、ledger、verdict |
+| `enterprise-audit` | 多层级/大厂标准审计 | `plugin mount plugins/dev-workflow`, audit ledger | layer findings、redline register、验收证据 |
+| `debug` | 同一失败反复出现或 task blocked | `runner`, `next`, `autopilot --supervised` | 最小复现、日志、根因、修复验证 |
+| `migration` | 跨模块/schema/API/持久化格式迁移 | `task`, `runner`, `run parallel`, `run pipeline`, `audit` | 分片计划、兼容/回滚证据、per-slice evidence |
+| `claim-verify` | 文档、研究、版本/API/事实主张要核验 | source notes, `runner --kind manual`, `audit` | claim ledger、supported/refuted/unknown verdict |
+| `research` | 多源研究、选型或生态判断 | 分源检索、manual evidence、source critique | source map、矛盾表、confidence labels |
+| `feature-dev` | 新功能从 spec 到实现和验收 | `start`, `task`, `runner`, `audit`, `judge`, `closeout` | 开发四证据、实现证据、测试、changelog |
+| `tmux-goal-loop` | 长跑 worker + host 亲验 | `runner --runner tmux`, `autopilot --worker-runner tmux` | live log、worker contract、host verification |
+| `docs-sync` | 代码大改后文档漂移 | docs drift fan-out, manual evidence | drift union、修复 diff、防漂移测试 |
+| `release` | 版本定版和公开交付 | `release --dry-run`, `check`, `closeout` | release plan、privacy scan、handoff |
+| `direction-review` | 架构方向或品味分歧 | evidence adjudication, decision log | 分歧分类、证据裁决、人类拍板点 |
 
-LTO 是给**要来回折腾好几轮、你担心做过头或做着做着跑偏**的长任务用的。短平快的活儿套上它只是负担。
+## Rust 迁移与 release 口径
 
-## 安装
+`lto-rs` 当前版本走 Rust-only path：source build 用 `cargo`，安装后的 `lto` wrapper 执行 `lto-rs`，Python fallback 不再存在。二进制下载是 release-gated：下载前必须实查 GitHub Releases 是否有对应 `.tar.gz` 和 `.sha256`，校验 checksum 后再运行 `./lto-rs self-test`。不要在未查 live release assets 前声称 GitHub 已有可下载 Rust 二进制。
 
-把整个 `long-task-orchestration/` 文件夹放进你的 agent skills 目录即可。详见 [INSTALL.md](./INSTALL.md)。
+Release 流程归 host：`lto release --dry-run`、验证、VERSION/CHANGELOG 更新、tag push，然后 CI `release-binaries` 上传 macOS/Linux assets。本任务不负责 release 或 tag。更完整的公开交付门槛见 [references/open-source-delivery-requirements.md](./references/open-source-delivery-requirements.md) 和 [references/rust-migration-release.md](./references/rust-migration-release.md)。
 
-## 深入阅读
+## 什么时候不该用 LTO
 
-| 你想了解 | 读哪份 |
+- 修一个小 bug、改一行、一次性脚本：直接做。
+- 只想让别人 review 一下：走普通 review。
+- 只是部署一下：走部署流程，必要时再用 LTO 登记验证证据。
+- 没有跨轮状态、异构审计、沙箱、resume/recap、closeout gate 的需求：LTO 只会增加负担。
+
+## 安装与深入阅读
+
+安装见 [INSTALL.md](./INSTALL.md)。常用入口：
+
+| 想了解 | 读这里 |
 |---|---|
-| **术语表 + 完整命令手册 + 怎么装给自己用** | **[references/onboarding.md](./references/onboarding.md)** ← agent 先读这份 |
-| LTO 是什么、为什么这么设计 | [SKILL.md](./SKILL.md) |
-| host agent 的调度先验（review/debug/migration…） | [references/workflow-playbook.md](./references/workflow-playbook.md) |
-| 预设场景插件（对抗审 / 主张核验 / 迁移闸门 / 开发链路，data-only） | [plugins/](./plugins/) + [references/plugin-boundary.md](./references/plugin-boundary.md) |
-| 开发链路插件的设计与三方审收敛记录 | [references/dev-workflow-spec.md](./references/dev-workflow-spec.md) |
-| 控制论 harness：run logs / telemetry / 闭环 | [references/control-loop-harness.md](./references/control-loop-harness.md) |
-| 在 codex/pi/agy 当宿主的专项坑 | [references/cross-runtime-host-notes.md](./references/cross-runtime-host-notes.md) |
-| 插件真实世界 eval-run 设计 | [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md) |
-| Rust 迁移、二进制下载和 release 打包 | [references/rust-migration-release.md](./references/rust-migration-release.md) |
-| 开源交付硬门槛、文档清理和完整验证矩阵 | [references/open-source-delivery-requirements.md](./references/open-source-delivery-requirements.md) |
-| Rust/Python 命令 ownership 与 legacy 分类 | [references/python-rust-ownership.md](./references/python-rust-ownership.md) |
-| 本机 AI coding 隐私自检 | [references/privacy-self-check.md](./references/privacy-self-check.md) |
-| 装依赖 / 给朋友用 / 项目级注入 | [references/sharing-guide.md](./references/sharing-guide.md) |
+| 完整命令面 | [COMMANDS.md](./COMMANDS.md) |
+| agent 手册和术语 | [references/onboarding.md](./references/onboarding.md) |
+| 设计哲学 | [SKILL.md](./SKILL.md) |
+| 工作流 playbook | [references/workflow-playbook.md](./references/workflow-playbook.md) |
+| 插件边界 | [references/plugin-boundary.md](./references/plugin-boundary.md) |
+| 真实 eval-run | [references/plugin-real-eval-runner.md](./references/plugin-real-eval-runner.md) |
+| Rust 迁移/release | [references/rust-migration-release.md](./references/rust-migration-release.md) |
+| Rust/Python ownership | [references/python-rust-ownership.md](./references/python-rust-ownership.md) |
+| 本次继承和架构调查 | [references/2026-06-17-rust-inheritance-and-architecture-review.md](./references/2026-06-17-rust-inheritance-and-architecture-review.md) |
