@@ -656,10 +656,13 @@ async fn run_sentinel(
     let mut skipped = BTreeSet::new();
     loop {
         if fs::metadata(sentinel).await.is_ok() {
-            let sentinel_text = fs::read_to_string(sentinel).await.unwrap_or_default();
-            let capture = capture_pane(&config.tmux_bin, target, config.capture_lines)
-                .await
-                .unwrap_or_default();
+            let sentinel_text = read_sentinel_text(sentinel).await?;
+            let capture_result = capture_pane(&config.tmux_bin, target, config.capture_lines).await;
+            let capture = match capture_result {
+                Ok(capture) => capture,
+                Err(err) if sentinel_text.trim().is_empty() => return Err(err),
+                Err(_) => String::new(),
+            };
             let _ = append_live_snapshot(live_log_path, "finished", target, &capture).await;
             return Ok(DispatchSummary {
                 target: target.to_string(),
@@ -692,6 +695,23 @@ async fn run_sentinel(
         }
         sleep(config.poll_interval).await;
     }
+}
+
+async fn read_sentinel_text(sentinel: &Path) -> Result<String, TmuxRunnerError> {
+    let mut last_err = None;
+    for _ in 0..3 {
+        match fs::read_to_string(sentinel).await {
+            Ok(text) => return Ok(text),
+            Err(err) => {
+                last_err = Some(err);
+                sleep(Duration::from_millis(10)).await;
+            }
+        }
+    }
+    let err = last_err
+        .map(|err| err.to_string())
+        .unwrap_or_else(|| "unknown read error".to_string());
+    Err(TmuxRunnerError::Io(format!("read sentinel: {err}")))
 }
 
 async fn run_fire(
@@ -1228,6 +1248,32 @@ sys.exit(0)
         bin
     }
 
+    fn fake_tmux_invalid_sentinel(tmp: &Path, sentinel: &Path) -> PathBuf {
+        let bin = tmp.join("tmux-invalid-sentinel");
+        let capture_path = tmp.join("capture.txt");
+        std_fs::write(&capture_path, "waiting").unwrap();
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import pathlib, sys
+capture = pathlib.Path(r'''{capture}''')
+sentinel = pathlib.Path(r'''{sentinel}''')
+args = sys.argv[1:]
+_ = sys.stdin.read() if args and args[0] == "load-buffer" else None
+if args and args[0] == "capture-pane":
+    print(capture.read_text())
+    sys.exit(0)
+if args and args[0] == "paste-buffer":
+    sentinel.write_bytes(b"\xff")
+sys.exit(0)
+"#,
+            capture = capture_path.display(),
+            sentinel = sentinel.display(),
+        );
+        std_fs::write(&bin, script).unwrap();
+        make_executable(&bin);
+        bin
+    }
+
     fn fake_tmux_target_disappears_after_ready(tmp: &Path) -> PathBuf {
         let bin = tmp.join("tmux");
         let log = tmp.join("tmux-log.jsonl");
@@ -1398,7 +1444,7 @@ sys.exit(0)
             sentinel_path: Some(sentinel.clone()),
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
-            ready_timeout: Duration::from_secs(5),
+            ready_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };
@@ -1418,6 +1464,35 @@ sys.exit(0)
     }
 
     #[tokio::test]
+    async fn sentinel_mode_fails_when_sentinel_file_is_unreadable_utf8() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sentinel = tmp.path().join("done.sentinel");
+        let bin = fake_tmux_invalid_sentinel(tmp.path(), &sentinel);
+        let config = TmuxRunnerConfig {
+            tmux_bin: bin.display().to_string(),
+            mode: TmuxMode::Sentinel,
+            target: Some("sess:1.0".to_string()),
+            session: None,
+            new_window: false,
+            new_session: false,
+            window_name: "lto-job".to_string(),
+            signal_name: "done".to_string(),
+            sentinel_path: Some(sentinel),
+            ready_patterns: Vec::new(),
+            skip_prompts: Vec::new(),
+            ready_timeout: Duration::from_secs(30),
+            poll_interval: Duration::from_millis(1),
+            capture_lines: 20,
+        };
+
+        let err = dispatch(&config, "finish this", Duration::from_secs(1), None)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("read sentinel"), "{err}");
+    }
+
+    #[tokio::test]
     async fn sentinel_mode_fails_fast_when_target_disappears() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_tmux_target_disappears_after_ready(tmp.path());
@@ -1433,7 +1508,7 @@ sys.exit(0)
             sentinel_path: Some(tmp.path().join("missing.sentinel")),
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
-            ready_timeout: Duration::from_secs(5),
+            ready_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };

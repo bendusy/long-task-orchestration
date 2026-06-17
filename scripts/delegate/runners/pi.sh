@@ -53,18 +53,35 @@ if [[ -n "${LTO_SESSION_ID:-}" ]]; then
   SESSION_ARGV=(--session-id "${LTO_SESSION_ID}")
 fi
 
+STREAM_RAW=1
+if [[ "${LTO_LEAN_CONTEXT:-0}" == "1" && "${LTO_PI_STREAM_RAW:-0}" != "1" ]]; then
+  STREAM_RAW=0
+fi
+
 # pipefail off so the tee in the pipe can't mask pi's rc; PIPESTATUS[0] keeps it.
-# stdout via tee: stored in RAW_FILE (for reply/token parse) AND streamed to this
-# process's stdout so LTO scheduler's Popen captures it into the live log.
-set +o pipefail
-timeout "${TIMEOUT_SEC}s" pi -p --mode json \
-  --provider deepseek --model deepseek-v4-pro \
-  ${PERM_ARGV[@]+"${PERM_ARGV[@]}"} \
-  ${LEAN_ARGV[@]+"${LEAN_ARGV[@]}"} \
-  ${SESSION_ARGV[@]+"${SESSION_ARGV[@]}"} \
-  "$(cat "$PROMPT_FILE")" 2>/dev/null | tee "$RAW_FILE"
-rc=${PIPESTATUS[0]}
-set -o pipefail
+# Default stdout via tee: stored in RAW_FILE (for reply/token parse) AND streamed
+# into the scheduler live log. Lean audit/judge disables raw streaming because
+# pi JSON thinking deltas can be hundreds of MB; heartbeat remains the progress
+# signal, and the parsed final reply is printed after parsing.
+if [[ "$STREAM_RAW" -eq 1 ]]; then
+  set +o pipefail
+  timeout "${TIMEOUT_SEC}s" pi -p --mode json \
+    --provider deepseek --model deepseek-v4-pro \
+    ${PERM_ARGV[@]+"${PERM_ARGV[@]}"} \
+    ${LEAN_ARGV[@]+"${LEAN_ARGV[@]}"} \
+    ${SESSION_ARGV[@]+"${SESSION_ARGV[@]}"} \
+    "$(cat "$PROMPT_FILE")" 2>/dev/null | tee "$RAW_FILE"
+  rc=${PIPESTATUS[0]}
+  set -o pipefail
+else
+  timeout "${TIMEOUT_SEC}s" pi -p --mode json \
+    --provider deepseek --model deepseek-v4-pro \
+    ${PERM_ARGV[@]+"${PERM_ARGV[@]}"} \
+    ${LEAN_ARGV[@]+"${LEAN_ARGV[@]}"} \
+    ${SESSION_ARGV[@]+"${SESSION_ARGV[@]}"} \
+    "$(cat "$PROMPT_FILE")" > "$RAW_FILE" 2>/dev/null
+  rc=$?
+fi
 
 # Parse NDJSON: reply = text blocks of the LAST assistant message_end; sidecar =
 # that same event's usage. Only `message_end` is matched (not `turn_end`) so
@@ -135,6 +152,16 @@ fi
 # with raw NDJSON (B1). Sentinel absent → schema mismatch / no python3 → raw.
 if [[ ! -f "$PARSED_FLAG" && ! -s "$REPLY_FILE" && -s "$RAW_FILE" ]]; then
   cp "$RAW_FILE" "$REPLY_FILE"
+fi
+
+if [[ "$STREAM_RAW" -eq 0 ]]; then
+  if [[ -s "$REPLY_FILE" && -f "$PARSED_FLAG" ]]; then
+    cat "$REPLY_FILE"
+  elif [[ "$rc" -ne 0 ]]; then
+    printf 'pi.sh: pi exited rc=%s before parsed reply\n' "$rc"
+  else
+    printf 'pi.sh: no parsed assistant reply; raw fallback captured\n'
+  fi
 fi
 
 # perm sidecar (RC3: job_id 绑定 + 原子 rename)。

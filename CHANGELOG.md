@@ -110,6 +110,25 @@
   actual runner/turn evidence, and tmux autopilot worker events keep the current
   phase for recap/mining classification.
 
+### BUG-1 + BUG-5 + BUG-8 scheduler/events hardening
+
+- Bounded scheduler post-exit pipe draining so an escaped descendant process
+  that keeps stdout/stderr open can no longer hang job closeout forever; drain
+  timeouts are recorded in `AgentResult.cost`.
+- Removed scheduler heartbeat sidecars after each job closes, keeping live logs
+  as the durable artifact while avoiding stale `.hb.jsonl` buildup.
+- Added owner metadata and stale recovery for `.events.lock`: live/fresh locks
+  still fail closed, but dead-pid or stale legacy locks are recovered through a
+  hard-link reclaim path serialized by an advisory `.events.lock.reclaiming`
+  lock; the reclaim path rechecks file identity before deleting the orphan, and
+  crashed reclaimers leave only a harmless guard file whose OS lock is released.
+- Hardened audit runner adapters: `pi` lean audit no longer streams raw JSON
+  thinking deltas into live logs, and `agy` authentication prompts now fail
+  non-zero instead of masquerading as successful audit replies.
+- Made tmux sentinel completion fail when the sentinel file exists but cannot be
+  read as UTF-8 after short retries, instead of silently returning an empty
+  success payload.
+
 ### L3 dispatch-goal and L4 cross-run mining
 
 - Added `lto dispatch-goal` for tmux-backed goal dispatch to codex, pi, and agy,

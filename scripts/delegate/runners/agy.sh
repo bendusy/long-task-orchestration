@@ -53,6 +53,10 @@ timeout "${TIMEOUT_SEC}s" agy \
 rc=${PIPESTATUS[0]}
 set -o pipefail
 
+if [[ "$rc" -eq 0 ]] && grep -Eiq 'authentication required|authentication timed out' "$REPLY_FILE"; then
+  rc=65
+fi
+
 # perm sidecar (RC3: job_id 绑定 + 原子 rename)。仅回传 scheduler 构造侧看不到的
 # 运行时事实（runner 实际接受的 flag）。scheduler 仍以自己构造的 argv 为权威。
 if [[ -n "$JOB_ID" ]]; then

@@ -22,8 +22,8 @@ use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore, oneshot};
-use tokio::task::JoinSet;
-use tokio::time::{MissedTickBehavior, sleep};
+use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::{MissedTickBehavior, sleep, timeout};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SchedulerConfig {
@@ -34,6 +34,7 @@ pub struct SchedulerConfig {
     pub healthcheck_retries: u32,
     pub stall_timeout_sec: Option<u64>,
     pub heartbeat_interval_sec: u64,
+    pub drain_after_exit_timeout_sec: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -46,6 +47,7 @@ impl Default for SchedulerConfig {
             healthcheck_retries: 1,
             stall_timeout_sec: None,
             heartbeat_interval_sec: 30,
+            drain_after_exit_timeout_sec: 5,
         }
     }
 }
@@ -433,7 +435,7 @@ impl Scheduler {
             Arc::clone(&last_output_at),
         ));
         let (stop_heartbeat, heartbeat_task) = spawn_heartbeat(
-            heartbeat_path,
+            heartbeat_path.clone(),
             job.job_id.clone(),
             self.config.heartbeat_interval_sec,
         );
@@ -447,21 +449,24 @@ impl Scheduler {
         .await;
         let _ = stop_heartbeat.send(());
         let _ = heartbeat_task.await;
-        if matches!(wait_outcome, WaitOutcome::TimedOut | WaitOutcome::Stalled) {
+        let _ = fs::remove_file(&heartbeat_path).await;
+        if matches!(
+            &wait_outcome,
+            WaitOutcome::TimedOut | WaitOutcome::Stalled | WaitOutcome::WaitFailed(_)
+        ) {
             kill_child_group(child_id).await;
-            let _ = child.wait().await;
+            let _ = timeout(
+                Duration::from_secs(self.config.drain_after_exit_timeout_sec.max(1)),
+                child.wait(),
+            )
+            .await;
         }
 
-        let stdout_text = stdout_task
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default();
-        let stderr_text = stderr_task
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default();
+        let drain_timeout = Duration::from_secs(self.config.drain_after_exit_timeout_sec.max(1));
+        let (stdout_text, stdout_drain_error) =
+            collect_drain_task(stdout_task, "stdout", drain_timeout).await;
+        let (stderr_text, stderr_drain_error) =
+            collect_drain_task(stderr_task, "stderr", drain_timeout).await;
         let reply_text = fs::read_to_string(&reply_path).await.unwrap_or_default();
         let elapsed = started.elapsed().as_secs_f64();
 
@@ -483,6 +488,16 @@ impl Scheduler {
         result
             .cost
             .insert("stdout_bytes".to_string(), json!(stdout_text.len()));
+        if let Some(err) = stdout_drain_error {
+            result
+                .cost
+                .insert("stdout_drain_error".to_string(), json!(err));
+        }
+        if let Some(err) = stderr_drain_error {
+            result
+                .cost
+                .insert("stderr_drain_error".to_string(), json!(err));
+        }
         result.permissions = permission_snapshot(&job.permission_policy);
         if let Some(handle) = write_worktree {
             result = self.finalize_write_task(job, result, handle);
@@ -1133,6 +1148,32 @@ where
     Ok(String::from_utf8_lossy(&output).into_owned())
 }
 
+async fn collect_drain_task(
+    mut task: JoinHandle<std::io::Result<String>>,
+    label: &str,
+    deadline: Duration,
+) -> (String, Option<String>) {
+    match timeout(deadline, &mut task).await {
+        Ok(Ok(Ok(text))) => (text, None),
+        Ok(Ok(Err(err))) => (String::new(), Some(format!("{label} drain error: {err}"))),
+        Ok(Err(err)) => (
+            String::new(),
+            Some(format!("{label} drain task join error: {err}")),
+        ),
+        Err(_) => {
+            task.abort();
+            let _ = task.await;
+            (
+                String::new(),
+                Some(format!(
+                    "{label} drain timed out after {:.3}s",
+                    deadline.as_secs_f64()
+                )),
+            )
+        }
+    }
+}
+
 fn spawn_heartbeat(
     path: PathBuf,
     job_id: String,
@@ -1323,7 +1364,7 @@ mod tests {
         std_fs::write(
             &fake_runner,
             r##"#!/usr/bin/env python3
-import json, os, sys, time
+import json, os, subprocess, sys, time
 prompt_file, reply_file, timeout_sec = sys.argv[1:4]
 with open(prompt_file) as f:
     first_line = f.readline().strip()
@@ -1334,6 +1375,17 @@ if ctrl and os.path.exists(ctrl):
     with open(ctrl) as f:
         data = json.load(f)
 behaviour = data.get(job_id, {})
+if behaviour.get("escape_stdout_holder"):
+    pid_file = behaviour["pid_file"]
+    child_code = (
+        "import os, sys, time; "
+        "os.setsid(); "
+        "sys.stdout.write('escaped child holds stdout\\n'); sys.stdout.flush(); "
+        "time.sleep(30)"
+    )
+    child = subprocess.Popen([sys.executable, "-c", child_code], stdout=sys.stdout, stderr=sys.stderr, close_fds=False)
+    with open(pid_file, "w") as f:
+        f.write(str(child.pid))
 time.sleep(float(behaviour.get("sleep", 0)))
 output = str(behaviour.get("output", ""))
 if "output_env" in behaviour:
@@ -1899,9 +1951,61 @@ print(json.dumps(data))
                 .exists()
         );
         assert!(
-            harness
+            !harness
                 .repo
                 .join(".lto/rust-scheduler/live/stall.hb.jsonl")
+                .exists(),
+            "heartbeat sidecar should be removed when the job closes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn escaped_stdout_holder_does_not_hang_scheduler_drain() {
+        let harness = Harness::new();
+        let pid_file = harness.repo.join("escaped-child.pid");
+        harness.set_control(json!({
+            "escape_stdout": {
+                "exit_code": 0,
+                "output": "done",
+                "escape_stdout_holder": true,
+                "pid_file": pid_file
+            }
+        }));
+        let scheduler = harness.scheduler_with(SchedulerConfig {
+            drain_after_exit_timeout_sec: 1,
+            heartbeat_interval_sec: 1,
+            ..SchedulerConfig::default()
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            scheduler.submit(vec![harness.job("escape_stdout")]),
+        )
+        .await
+        .expect("scheduler must not hang waiting for escaped stdout holder")
+        .unwrap();
+
+        if let Ok(pid) = std_fs::read_to_string(&pid_file) {
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(pid.trim())
+                .status();
+        }
+        assert_eq!(result[0].status, JobStatus::Ok);
+        assert!(
+            result[0]
+                .cost
+                .get("stdout_drain_error")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value.contains("timed out")),
+            "expected stdout_drain_error, got {:?}",
+            result[0].cost
+        );
+        assert!(
+            !harness
+                .repo
+                .join(".lto/rust-scheduler/live/escape_stdout.hb.jsonl")
                 .exists()
         );
     }

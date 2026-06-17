@@ -1,11 +1,13 @@
 use crate::redact::{redact_text, redact_value};
 use crate::state;
+use fs2::FileExt;
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const SCHEMA_VERSION: u64 = 1;
 pub const WARN_AT: usize = 10_000;
@@ -223,7 +225,13 @@ impl Drop for EventsLockGuard {
     }
 }
 
+struct ReclaimGuard {
+    _file: fs::File,
+}
+
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
+const LOCK_ABANDONED_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
 fn acquire_events_lock(path: &Path) -> anyhow::Result<Option<EventsLockGuard>> {
     acquire_events_lock_with_timeout(path, LOCK_TIMEOUT)
@@ -233,19 +241,46 @@ fn acquire_events_lock_with_timeout(
     path: &Path,
     timeout: Duration,
 ) -> anyhow::Result<Option<EventsLockGuard>> {
+    acquire_events_lock_with_timeout_and_stale(path, timeout, LOCK_STALE_AFTER)
+}
+
+fn acquire_events_lock_with_timeout_and_stale(
+    path: &Path,
+    timeout: Duration,
+    stale_after: Duration,
+) -> anyhow::Result<Option<EventsLockGuard>> {
     let lock_path = path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(".events.lock");
     let deadline = Instant::now() + timeout;
+    let stale_probe_interval = if stale_after == Duration::ZERO {
+        Duration::ZERO
+    } else {
+        Duration::from_millis(500)
+    };
+    let mut next_stale_probe = Instant::now();
     loop {
         match OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&lock_path)
         {
-            Ok(_) => return Ok(Some(EventsLockGuard { path: lock_path })),
+            Ok(mut file) => {
+                if let Err(err) = write_lock_owner(&mut file) {
+                    let _ = fs::remove_file(&lock_path);
+                    return Err(err);
+                }
+                return Ok(Some(EventsLockGuard { path: lock_path }));
+            }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                let now = Instant::now();
+                if now >= next_stale_probe {
+                    next_stale_probe = now + stale_probe_interval;
+                    if try_reclaim_stale_events_lock(&lock_path, stale_after).unwrap_or(false) {
+                        continue;
+                    }
+                }
                 if Instant::now() >= deadline {
                     // fail-closed (backlog ⑫): refuse a lock-less best-effort write.
                     // Two writers without the lock can interleave a half-written
@@ -262,6 +297,223 @@ fn acquire_events_lock_with_timeout(
             }
             Err(err) => return Err(err.into()),
         }
+    }
+}
+
+fn write_lock_owner(file: &mut fs::File) -> anyhow::Result<()> {
+    let payload = json!({
+        "pid": std::process::id(),
+        "created_at_unix_ms": unix_ms_now(),
+        "owner_exe": current_exe_name(),
+    });
+    file.write_all(payload.to_string().as_bytes())?;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    Ok(())
+}
+
+fn try_reclaim_stale_events_lock(lock_path: &Path, stale_after: Duration) -> anyhow::Result<bool> {
+    if !events_lock_is_stale(lock_path, stale_after).unwrap_or(false) {
+        return Ok(false);
+    }
+    let Some(_reclaim_guard) = try_acquire_reclaim_guard(lock_path)? else {
+        return Ok(false);
+    };
+    if !events_lock_is_stale(lock_path, stale_after).unwrap_or(false) {
+        return Ok(false);
+    }
+    let reclaim_path = unique_reclaim_path(lock_path);
+    fs::hard_link(lock_path, &reclaim_path)?;
+    let still_stale = events_lock_is_stale(&reclaim_path, stale_after).unwrap_or(false);
+    let lock_path_still_matches = same_file_identity(lock_path, &reclaim_path).unwrap_or(false);
+    let reclaimed = still_stale && lock_path_still_matches;
+    if reclaimed {
+        let _ = fs::remove_file(lock_path);
+    }
+    let _ = fs::remove_file(&reclaim_path);
+    Ok(reclaimed)
+}
+
+fn try_acquire_reclaim_guard(lock_path: &Path) -> anyhow::Result<Option<ReclaimGuard>> {
+    let reclaim_guard_path = lock_path.with_file_name(".events.lock.reclaiming");
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&reclaim_guard_path)?;
+    match file.try_lock_exclusive() {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return Ok(None),
+        Err(err) => return Err(err.into()),
+    }
+    file.set_len(0)?;
+    write_lock_owner(&mut file)?;
+    Ok(Some(ReclaimGuard { _file: file }))
+}
+
+fn unique_reclaim_path(lock_path: &Path) -> PathBuf {
+    let file_name = lock_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(".events.lock");
+    lock_path.with_file_name(format!(
+        "{file_name}.reclaim.{}.{}",
+        std::process::id(),
+        unix_ms_now()
+    ))
+}
+
+fn events_lock_is_stale(lock_path: &Path, stale_after: Duration) -> anyhow::Result<bool> {
+    let text = fs::read_to_string(lock_path).unwrap_or_default();
+    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+        let age_ms = value
+            .get("created_at_unix_ms")
+            .and_then(Value::as_u64)
+            .map(lock_age_ms);
+        if let Some(pid) = value.get("pid").and_then(Value::as_u64) {
+            if pid > u64::from(u32::MAX) {
+                return Ok(true);
+            }
+            return Ok(match probe_process(pid as u32) {
+                ProcessProbe::Dead => true,
+                ProcessProbe::Alive => {
+                    owner_exe_mismatch(&value, pid as u32).unwrap_or(false)
+                        || age_ms
+                            .map(|age| age >= duration_ms(LOCK_ABANDONED_AFTER))
+                            .unwrap_or(false)
+                }
+                ProcessProbe::Unknown => age_ms
+                    .map(|age| age >= duration_ms(stale_after))
+                    .unwrap_or(false),
+            });
+        }
+        if let Some(age) = age_ms {
+            return Ok(age >= duration_ms(stale_after));
+        }
+    }
+
+    let modified = fs::metadata(lock_path)?.modified()?;
+    let age = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or(Duration::ZERO);
+    Ok(age >= stale_after)
+}
+
+fn current_exe_name() -> Option<String> {
+    std::env::current_exe().ok().and_then(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    })
+}
+
+fn owner_exe_mismatch(value: &Value, pid: u32) -> Option<bool> {
+    let owner = value.get("owner_exe").and_then(Value::as_str)?;
+    let live = process_exe_name(pid)?;
+    Some(owner != live)
+}
+
+#[cfg(unix)]
+fn process_exe_name(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .arg("-p")
+        .arg(pid.to_string())
+        .arg("-o")
+        .arg("comm=")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let command = text.trim();
+    if command.is_empty() {
+        return None;
+    }
+    Some(
+        Path::new(command)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| command.to_string()),
+    )
+}
+
+#[cfg(not(unix))]
+fn process_exe_name(_pid: u32) -> Option<String> {
+    None
+}
+
+#[cfg(unix)]
+fn same_file_identity(a: &Path, b: &Path) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    let a = fs::metadata(a)?;
+    let b = fs::metadata(b)?;
+    Ok(a.dev() == b.dev() && a.ino() == b.ino())
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_a: &Path, _b: &Path) -> std::io::Result<bool> {
+    Ok(false)
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn lock_age_ms(created_at_unix_ms: u64) -> u64 {
+    unix_ms_now().saturating_sub(created_at_unix_ms)
+}
+
+fn unix_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ProcessProbe {
+    Alive,
+    Dead,
+    Unknown,
+}
+
+fn probe_process(pid: u32) -> ProcessProbe {
+    if pid == std::process::id() {
+        return ProcessProbe::Alive;
+    }
+    #[cfg(unix)]
+    {
+        let output = Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .output();
+        match output {
+            Ok(output) => process_probe_from_kill_output(output.status.success(), &output.stderr),
+            Err(_) => ProcessProbe::Unknown,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        ProcessProbe::Unknown
+    }
+}
+
+#[cfg(unix)]
+fn process_probe_from_kill_output(success: bool, stderr: &[u8]) -> ProcessProbe {
+    if success {
+        return ProcessProbe::Alive;
+    }
+    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if stderr.contains("no such process") {
+        ProcessProbe::Dead
+    } else if stderr.contains("operation not permitted") || stderr.contains("not permitted") {
+        ProcessProbe::Alive
+    } else {
+        ProcessProbe::Unknown
     }
 }
 
@@ -410,6 +662,311 @@ mod tests {
             },
         );
         assert!(ok.is_some(), "emit should succeed once the lock is free");
+    }
+
+    #[test]
+    fn stale_json_lock_with_dead_pid_is_recovered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": 999_999_999_u64,
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let event = emit(
+            tmp.path(),
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "after stale lock".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(event["event_id"], 1);
+        assert!(
+            !lock_path.exists(),
+            "lock guard should clean recovered lock"
+        );
+    }
+
+    #[test]
+    fn live_pid_lock_still_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": std::process::id(),
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        match acquire_events_lock_with_timeout(&path, Duration::from_millis(0)) {
+            Err(err) => assert!(err.to_string().contains("lock timeout"), "got: {err}"),
+            Ok(_) => panic!("live pid lock must not be stolen"),
+        }
+    }
+
+    #[test]
+    fn old_live_pid_lock_still_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": std::process::id(),
+                "created_at_unix_ms": unix_ms_now().saturating_sub(60_000)
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        match acquire_events_lock_with_timeout_and_stale(
+            &path,
+            Duration::from_millis(0),
+            Duration::ZERO,
+        ) {
+            Err(err) => assert!(err.to_string().contains("lock timeout"), "got: {err}"),
+            Ok(_) => panic!("old live pid lock must not be stolen"),
+        }
+    }
+
+    #[test]
+    fn reclaim_removes_dead_pid_lock_only_after_second_stale_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": 999_999_999_u64,
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(try_reclaim_stale_events_lock(&lock_path, Duration::ZERO).unwrap());
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn reclaim_does_not_remove_live_pid_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": std::process::id(),
+                "created_at_unix_ms": unix_ms_now().saturating_sub(60_000)
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(!try_reclaim_stale_events_lock(&lock_path, Duration::ZERO).unwrap());
+        assert!(lock_path.exists());
+    }
+
+    #[test]
+    fn reclaim_guard_prevents_parallel_reclaimer_from_removing_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        let reclaim_guard_path = lock_path.with_file_name(".events.lock.reclaiming");
+        let guard_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&reclaim_guard_path)
+            .unwrap();
+        guard_file.try_lock_exclusive().unwrap();
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": 999_999_999_u64,
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(!try_reclaim_stale_events_lock(&lock_path, Duration::ZERO).unwrap());
+        assert!(lock_path.exists());
+        drop(guard_file);
+        assert!(try_reclaim_stale_events_lock(&lock_path, Duration::ZERO).unwrap());
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn orphaned_reclaim_guard_file_does_not_block_reclaim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        let reclaim_guard_path = lock_path.with_file_name(".events.lock.reclaiming");
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": 999_999_999_u64,
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            &reclaim_guard_path,
+            json!({
+                "pid": 999_999_999_u64,
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(try_reclaim_stale_events_lock(&lock_path, Duration::ZERO).unwrap());
+        assert!(!lock_path.exists());
+        assert!(reclaim_guard_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaim_guard_file_replacement_does_not_delete_new_guard() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        let guard_path = lock_path.with_file_name(".events.lock.reclaiming");
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": 999_999_999_u64,
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            &guard_path,
+            json!({
+                "pid": 999_999_999_u64,
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::remove_file(&guard_path).unwrap();
+        fs::write(
+            &guard_path,
+            json!({
+                "pid": std::process::id(),
+                "created_at_unix_ms": unix_ms_now()
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(try_reclaim_stale_events_lock(&lock_path, Duration::ZERO).unwrap());
+        assert!(guard_path.exists());
+    }
+
+    #[test]
+    fn live_pid_with_different_owner_exe_is_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        fs::write(
+            &lock_path,
+            json!({
+                "pid": std::process::id(),
+                "created_at_unix_ms": unix_ms_now(),
+                "owner_exe": "definitely-not-this-process"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(events_lock_is_stale(&lock_path, LOCK_STALE_AFTER).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_file_identity_distinguishes_replaced_lock_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lock_path = tmp.path().join(".events.lock");
+        let reclaim_path = tmp.path().join(".events.lock.reclaim");
+        fs::write(&lock_path, b"old").unwrap();
+        fs::hard_link(&lock_path, &reclaim_path).unwrap();
+
+        assert!(same_file_identity(&lock_path, &reclaim_path).unwrap());
+        fs::remove_file(&lock_path).unwrap();
+        fs::write(&lock_path, b"new").unwrap();
+        assert!(!same_file_identity(&lock_path, &reclaim_path).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_probe_only_treats_no_such_process_as_dead() {
+        assert_eq!(
+            process_probe_from_kill_output(false, b"kill: 999999999: No such process\n"),
+            ProcessProbe::Dead
+        );
+        assert_eq!(
+            process_probe_from_kill_output(false, b"kill: 42: Operation not permitted\n"),
+            ProcessProbe::Alive
+        );
+        assert_eq!(
+            process_probe_from_kill_output(false, b"unexpected failure"),
+            ProcessProbe::Unknown
+        );
+        assert_eq!(
+            process_probe_from_kill_output(true, b""),
+            ProcessProbe::Alive
+        );
+    }
+
+    #[test]
+    fn legacy_stale_empty_lock_is_recovered_only_after_stale_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = events_path(tmp.path(), "r1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lock_path = path.parent().unwrap().join(".events.lock");
+        fs::write(&lock_path, b"").unwrap();
+
+        let guard = acquire_events_lock_with_timeout_and_stale(
+            &path,
+            Duration::from_millis(0),
+            Duration::ZERO,
+        )
+        .unwrap()
+        .expect("stale legacy lock should be recovered");
+
+        let text = fs::read_to_string(&lock_path).unwrap();
+        assert!(text.contains("created_at_unix_ms"));
+        drop(guard);
+        assert!(!lock_path.exists());
     }
 
     #[test]
