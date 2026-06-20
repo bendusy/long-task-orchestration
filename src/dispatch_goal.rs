@@ -9,7 +9,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LTO_HOOK_MARKER: &str = "long-task-orchestration";
 const CODEX_STOP_HOOK: &str = include_str!("../scripts/hooks/codex-stop-notify.sh");
-const AGY_PRINT_TIMEOUT: &str = "24h";
 const GOAL_CONSTRAINT_SUMMARY: &str = "Use LTO discipline: keep LTO self-managed, run required redlines, use heterogeneous audit before closeout, write the local commit when accepted, and leave release/tag/push to the host.";
 
 #[derive(Debug, Clone)]
@@ -133,7 +132,7 @@ fn run_dispatch(
     goal_path: &Path,
     cwd: &Path,
 ) -> anyhow::Result<GoalDispatchOutcome> {
-    let plan = runner_plan(&options.runner, goal_path, run_id, repo, cwd);
+    let plan = runner_plan(&options.runner, goal_path, run_id);
     let config = TmuxRunnerConfig {
         mode: TmuxMode::Fire,
         target: options.target.clone(),
@@ -200,13 +199,7 @@ struct GoalDispatchOutcome {
     completion_mode: String,
 }
 
-fn runner_plan(
-    runner: &str,
-    goal_path: &Path,
-    run_id: &str,
-    repo: &Path,
-    cwd: &Path,
-) -> GoalRunnerPlan {
+fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
     let goal = goal_path.display().to_string();
     match runner {
         "codex" => GoalRunnerPlan {
@@ -231,35 +224,18 @@ fn runner_plan(
             completion_mode: "manual-pi-tui".to_string(),
         },
         "agy" => {
-            let prompt = goal_prompt(&goal);
-            let completion = format!(
-                "{} --repo {} agent-turn-completed --run-id {} --runner agy --cwd {} --rc \"$rc\" --summary {} --source pane-exit",
-                shell_single_quote(&current_lto_bin()),
-                shell_single_quote(
-                    &absolutize(repo)
-                        .map(|path| path.display().to_string())
-                        .unwrap_or_else(|_| repo.display().to_string())
-                ),
-                shell_single_quote(run_id),
-                shell_single_quote(&cwd.display().to_string()),
-                shell_single_quote("agy command exited")
-            );
+            // agy `-i`/--prompt-interactive runs the initial prompt in a real
+            // TUI session and continues — it actually executes. `--print` only
+            // prints a plan without executing (false-success trap, bug #5/#6),
+            // so dispatch must use the interactive entrypoint like codex/pi.
             GoalRunnerPlan {
-                launch: None,
-                prompt: format!(
-                    "agy --print-timeout {} --print {}; rc=$?; {}",
-                    shell_single_quote(AGY_PRINT_TIMEOUT),
-                    shell_single_quote(&prompt),
-                    completion
-                ),
-                ready_patterns: Vec::new(),
-                confirm_patterns: vec![
-                    "agy --print".to_string(),
-                    "agent-turn-completed".to_string(),
-                ],
-                needs_probe: false,
-                completion_event: Some("agent.turn.completed".to_string()),
-                completion_mode: "auto-event".to_string(),
+                launch: Some("agy -i".to_string()),
+                prompt: goal_prompt(&goal),
+                ready_patterns: vec!["agy".to_string()],
+                confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
+                needs_probe: true,
+                completion_event: None,
+                completion_mode: "manual-agy-tui".to_string(),
             }
         }
         _ => unreachable!("runner validated"),
@@ -571,74 +547,66 @@ mod tests {
     fn runner_plan_uses_required_entrypoints() {
         let goal = Path::new("/tmp/goal.md");
         assert_eq!(
-            runner_plan("codex", goal, "r1", Path::new("/repo"), Path::new("/repo")).prompt,
+            runner_plan("codex", goal, "r1").prompt,
             "/goal /tmp/goal.md"
         );
         assert_eq!(
-            runner_plan("codex", goal, "r1", Path::new("/repo"), Path::new("/repo")).ready_patterns,
+            runner_plan("codex", goal, "r1").ready_patterns,
             vec!["gpt-".to_string()]
         );
         assert_eq!(
-            runner_plan("codex", goal, "r1", Path::new("/repo"), Path::new("/repo"))
-                .completion_event
-                .as_deref(),
+            runner_plan("codex", goal, "r1").completion_event.as_deref(),
             Some("agent.turn.completed")
         );
         assert!(
-            runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+            runner_plan("pi", goal, "r1")
                 .launch
                 .as_deref()
                 .unwrap()
                 .starts_with("LTO_RUN_ID='r1' pi --no-skills")
         );
         assert!(
-            !runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+            !runner_plan("pi", goal, "r1")
                 .launch
                 .as_deref()
                 .unwrap()
                 .contains("--print")
         );
         assert!(
-            runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+            runner_plan("pi", goal, "r1")
                 .prompt
                 .starts_with("Read the file ")
         );
         assert!(
-            runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+            runner_plan("pi", goal, "r1")
                 .prompt
                 .contains(GOAL_CONSTRAINT_SUMMARY)
         );
-        assert!(runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo")).needs_probe);
+        assert!(runner_plan("pi", goal, "r1").needs_probe);
+        assert_eq!(runner_plan("pi", goal, "r1").completion_event, None);
         assert_eq!(
-            runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo")).completion_event,
-            None
-        );
-        assert_eq!(
-            runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo")).completion_mode,
+            runner_plan("pi", goal, "r1").completion_mode,
             "manual-pi-tui"
         );
-        assert!(
-            runner_plan("agy", goal, "r1", Path::new("/repo"), Path::new("/repo"))
-                .prompt
-                .starts_with("agy --print-timeout '24h' --print ")
+        // agy must use the interactive entrypoint (`agy -i`), not `--print`
+        // which only prints a plan without executing (bug #5/#6).
+        assert_eq!(
+            runner_plan("agy", goal, "r1").launch.as_deref(),
+            Some("agy -i")
         );
+        assert!(!runner_plan("agy", goal, "r1").prompt.contains("--print"));
         assert!(
-            runner_plan("agy", goal, "r1", Path::new("/repo"), Path::new("/repo"))
+            runner_plan("agy", goal, "r1")
                 .prompt
                 .contains("Use LTO discipline")
         );
-        assert_eq!(
-            runner_plan("agy", goal, "r1", Path::new("/repo"), Path::new("/repo"))
-                .completion_event
-                .as_deref(),
-            Some("agent.turn.completed")
-        );
+        assert!(runner_plan("agy", goal, "r1").needs_probe);
     }
 
     #[test]
     fn pi_dispatch_confirmation_does_not_reuse_ready_text() {
         let goal = Path::new("/tmp/goal.md");
-        let plan = runner_plan("pi", goal, "r1", Path::new("/repo"), Path::new("/repo"));
+        let plan = runner_plan("pi", goal, "r1");
 
         assert!(
             plan.confirm_patterns
