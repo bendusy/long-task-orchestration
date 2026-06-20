@@ -164,6 +164,102 @@ pub fn events_path(repo: &Path, run_id: &str) -> PathBuf {
     repo.join(".lto").join(run_id).join("events.jsonl")
 }
 
+pub fn wait_for(
+    repo: &Path,
+    run_id: &str,
+    event_type: &str,
+    after: Option<u64>,
+    timeout: Duration,
+) -> anyhow::Result<Option<Value>> {
+    // Read once for both cursor derivation and the lookback check (after=None
+    // would otherwise parse events.jsonl twice back-to-back).
+    let existing = read(repo, run_id)?;
+    let start_after = match after {
+        Some(val) => val,
+        None => existing
+            .iter()
+            .filter_map(|event| event.get("event_id").and_then(Value::as_u64))
+            .max()
+            .unwrap_or(0),
+    };
+
+    let start_time = Instant::now();
+    let check_events = |events: &[Value]| -> Option<Value> {
+        events
+            .iter()
+            .find(|event| {
+                // Events without a numeric event_id are out-of-contract (emit()
+                // always assigns one from 1); skip them rather than coercing to
+                // 0, which could falsely (un)match at the start_after==0 boundary.
+                let Some(event_id) = event.get("event_id").and_then(Value::as_u64) else {
+                    return false;
+                };
+                let event_type_val = event.get("type").and_then(Value::as_str).unwrap_or("");
+                event_id > start_after && event_type_val == event_type
+            })
+            .cloned()
+    };
+
+    // 1. Lookback check (reuse the read above)
+    if let Some(matched) = check_events(&existing) {
+        return Ok(Some(matched));
+    }
+
+    // 2. Poll loop
+    let sleep_interval = if timeout < Duration::from_secs(2) {
+        Duration::from_millis(50)
+    } else {
+        Duration::from_millis(500)
+    };
+
+    while start_time.elapsed() < timeout {
+        thread::sleep(sleep_interval);
+        let current = read(repo, run_id)?;
+        if let Some(matched) = check_events(&current) {
+            return Ok(Some(matched));
+        }
+    }
+
+    Ok(None)
+}
+
+pub fn cmd_events(
+    repo: &Path,
+    run_id: &str,
+    wait: bool,
+    event_type: Option<String>,
+    after: Option<u64>,
+    timeout: u64,
+    json: bool,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    if !wait {
+        anyhow::bail!("events command without --wait is not implemented in phase 1");
+    }
+    let event_type = event_type.context("events --wait requires --event-type")?;
+    let duration = Duration::from_secs(timeout);
+
+    let result = wait_for(repo, run_id, &event_type, after, duration)?;
+    match result {
+        Some(event) => {
+            if json {
+                println!("{}", serde_json::to_string(&event)?);
+            } else {
+                let id = event.get("event_id").and_then(Value::as_u64).unwrap_or(0);
+                let at = event.get("at").and_then(Value::as_str).unwrap_or("");
+                let summary = event.get("summary").and_then(Value::as_str).unwrap_or("");
+                println!("Event #{id} [{at}] {event_type}: {summary}");
+            }
+            std::process::exit(0);
+        }
+        None => {
+            eprintln!("Timeout waiting for event '{event_type}' after {timeout} seconds");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn count_file_events(path: &Path) -> anyhow::Result<usize> {
     if !path.exists() {
         return Ok(0);
@@ -1273,5 +1369,150 @@ mod tests {
         }
         // count() reads counter file (O(1)), no lock needed.
         assert_eq!(count(repo, "r1").unwrap(), 3);
+    }
+
+    #[test]
+    fn wait_for_returns_existing_event_via_lookback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_id = "r1";
+
+        emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "agent.turn.completed".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "completed turn".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let matched = wait_for(
+            repo,
+            run_id,
+            "agent.turn.completed",
+            Some(0),
+            Duration::from_secs(1),
+        )
+        .unwrap()
+        .expect("must find existing event");
+
+        assert_eq!(matched["event_id"], 1);
+        assert_eq!(matched["type"], "agent.turn.completed");
+    }
+
+    #[test]
+    fn wait_for_filters_by_event_type() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_id = "r1";
+
+        emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "run.started".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "run start".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "agent.turn.completed".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "completed turn".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let matched = wait_for(
+            repo,
+            run_id,
+            "agent.turn.completed",
+            Some(0),
+            Duration::from_secs(1),
+        )
+        .unwrap()
+        .expect("must find matching event");
+
+        assert_eq!(matched["event_id"], 2);
+        assert_eq!(matched["type"], "agent.turn.completed");
+    }
+
+    #[test]
+    fn wait_for_respects_after_cursor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_id = "r1";
+
+        emit(
+            repo,
+            run_id,
+            EventRecord {
+                event_type: "agent.turn.completed".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "first".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let first_id = 1;
+
+        let repo_clone = tmp.path().to_path_buf();
+        let run_id_str = run_id.to_string();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            emit(
+                &repo_clone,
+                &run_id_str,
+                EventRecord {
+                    event_type: "agent.turn.completed".to_string(),
+                    actor_kind: "lto".to_string(),
+                    summary: "second".to_string(),
+                    ..EventRecord::default()
+                },
+            )
+            .unwrap();
+        });
+
+        let matched = wait_for(
+            repo,
+            run_id,
+            "agent.turn.completed",
+            Some(first_id),
+            Duration::from_secs(2),
+        )
+        .unwrap()
+        .expect("must find second event");
+
+        assert_eq!(matched["event_id"], 2);
+        assert_eq!(matched["summary"], "second");
+    }
+
+    #[test]
+    fn wait_for_times_out_when_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_id = "r1";
+
+        let matched = wait_for(
+            repo,
+            run_id,
+            "agent.turn.completed",
+            None,
+            Duration::from_millis(200),
+        )
+        .unwrap();
+
+        assert!(matched.is_none(), "must time out and return None");
     }
 }

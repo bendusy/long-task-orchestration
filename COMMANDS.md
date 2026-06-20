@@ -2,9 +2,9 @@
 
 Source of truth: `src/cli.rs` `COMMANDS` plus the clap argument definitions in `src/cli.rs`.
 
-Command count: 24.
+Command count: 25.
 
-This is the `lto-rs --help` top-level row count: 23 Rust-owned business
+This is the `lto-rs --help` top-level row count: 24 Rust-owned business
 commands plus clap built-in `help`. The table below lists only the
 Rust-owned business commands tracked by `src/cli.rs` `COMMANDS`.
 
@@ -40,3 +40,4 @@ aliases do not appear in the public help table below.
 | `plugin` | List, validate, render, statically eval, run real A/B evals, create source notes, or data-only mount plugin manifests. | Subcommand: `list`, `validate <dir>`, `render-profile <dir> <profile-id>`, `eval <dir>`, `eval-run <dir>`, `source-note <dir>`, or `mount <dir>` | `render-profile --input --output --meta-output --json`; `eval --eval-id --output --json`; `eval-run --run-id --eval-id --case --max-concurrency --no-persist --runners-dir --output --json`; `source-note --id --title --url --claim --hypothesis --append-manifest --no-append-manifest --json`; `mount --run-id`, `mount --mounts-json` |
 | `dispatch-goal` | Dispatch a goal file to codex, pi, or agy through tmux. | `--runner <runner> --goal <path>` | `--run-id`, `--target`, `--new-window`, `--window-name`, `--cwd`, `--tmux-session`, `--tmux-bin`, `--ready-timeout`, `--no-install-hooks`, `--uninstall-hooks` |
 | `agent-turn-completed` | Emit an agent turn completion event from a hook. | None | `--run-id`, `--runner`, `--payload-file`, `--cwd`, `--session-id`, `--summary`, `--rc`, `--source` |
+| `events` | Block until a matching run event appears. | None | `--run-id`, `--wait`, `--event-type`, `--after`, `--timeout`, `--json` |

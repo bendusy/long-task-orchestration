@@ -36,6 +36,7 @@ pub const COMMANDS: &[&str] = &[
     "memory",
     "agent-turn-completed",
     "plugin",
+    "events",
 ];
 
 #[derive(Debug, Parser)]
@@ -279,6 +280,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: PluginCommand,
     },
+    #[command(about = "Block until a matching run event appears")]
+    Events(EventsCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -433,6 +436,22 @@ pub struct AgentTurnCompletedCommand {
     rc: Option<i32>,
     #[arg(long, default_value = "hook")]
     source: String,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct EventsCommand {
+    #[arg(long)]
+    run_id: Option<String>,
+    #[arg(long)]
+    wait: bool,
+    #[arg(long)]
+    event_type: Option<String>,
+    #[arg(long)]
+    after: Option<u64>,
+    #[arg(long, default_value_t = 300)]
+    timeout: u64,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -1307,6 +1326,21 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 },
             )?;
         }
+        Commands::Events(cmd) => {
+            let run_id = cmd
+                .run_id
+                .or_else(|| current_run_id(&args.repo))
+                .context("events requires --run-id or .lto/current")?;
+            crate::events::cmd_events(
+                &args.repo,
+                &run_id,
+                cmd.wait,
+                cmd.event_type,
+                cmd.after,
+                cmd.timeout,
+                cmd.json,
+            )?;
+        }
     }
     Ok(())
 }
@@ -2075,7 +2109,7 @@ mod tests {
     #[test]
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
-        assert_eq!(COMMANDS.len(), 23);
+        assert_eq!(COMMANDS.len(), 24);
     }
 
     #[test]
@@ -2436,8 +2470,8 @@ mod tests {
         let doc =
             std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("COMMANDS.md"))
                 .unwrap();
-        assert!(doc.contains("Command count: 24."));
-        assert!(doc.contains("23 Rust-owned business"));
+        assert!(doc.contains("Command count: 25."));
+        assert!(doc.contains("24 Rust-owned business"));
         assert!(doc.contains("clap built-in `help`"));
         for command in COMMANDS {
             assert!(
