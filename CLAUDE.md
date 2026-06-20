@@ -1,4 +1,87 @@
-# LTO project instructions
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Build, test, and run
+
+This crate is `lto-rs` (binary + library), Rust edition 2024. There is no Python runtime — `scripts/*.py` are maintenance/CI checks only.
+
+```bash
+# Run the CLI from source (preferred during development)
+cargo run --quiet -- <command>          # e.g. cargo run --quiet -- runs
+cargo run --quiet -- self-test          # built-in CLI contract self-test
+
+# Build
+cargo build --release --locked --bin lto-rs
+
+# Full local gate — must pass before claiming work done (mirrors CI rust-v2.yml)
+cargo fmt --all --check
+cargo check --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+python3 scripts/check_docs_consistency.py        # docs vs CLI surface consistency
+python3 scripts/check_python_rust_ownership.py   # enforces no Python runtime fallback
+git diff --check
+
+# Run a single test (227+ inline #[test]/#[tokio::test] across src/, plus tests/python_rust_compat.rs)
+cargo test --locked <test_name>                  # by name substring
+cargo test --locked --test python_rust_compat    # one integration test file
+cargo test --locked <module>::                   # all tests in a module
+```
+
+`clippy -D warnings` is enforced — warnings fail CI. `unsafe_code = "forbid"` (see Cargo.toml). When changing logs/telemetry/artifacts/plugins/delegation, also run `scripts/privacy_self_check.sh` before pushing.
+
+## Architecture
+
+LTO (Long Task Orchestration) is a **control harness for long AI-agent work** — not a planner. The host agent plans; LTO provides state, evidence, gates, bounded actuators, and run logs. See the design principles below; this section maps the code.
+
+### Control loop
+
+```text
+state → observe (events) → derive signal (telemetry) → propose → gate → execute → record outcome
+```
+
+Everything persists under `.lto/<run-id>/` — this file protocol is the product boundary (principle 7). The active run id lives in `.lto/current`.
+
+### Persistence layout (`.lto/<run-id>/`)
+
+| File | Role |
+|------|------|
+| `state.json` | Run state: phase, tasks, budget, workspace/env snapshot, delivery contract. Path constant in `state.rs`. |
+| `events.jsonl` (+ `.counter`) | Append-only event log; warn@10K, hard-stop@50K events. `events.rs`. |
+| `telemetry.json` | Derived signal snapshots only (run/runner/audit/task/budget metrics). `telemetry.rs`. |
+| `artifacts.json` | Artifact manifest (kind/producer/path/tags). |
+| `run-state.md` | Human-readable state; `closeout` appends a closeout section. |
+| `plugin-mounts.json` | Approved plugin ids + sandbox grants. |
+| `worktrees/<run-id>/<task-id>/` | Persistent git worktrees for isolated task edits. |
+
+Legacy `.lto` run fixtures live in `tests/fixtures/legacy-run/` and back the v0.5.0 Python-removal parity test.
+
+### Module map (`src/`)
+
+The single binary entry is `main.rs` → `cli.rs` (2400+ lines: clap `Commands` enum + dispatch). Library re-exports in `lib.rs`.
+
+**State & run lifecycle**: `state.rs` (run-state serde + delivery contract), `commands/resume.rs` (HEAD-drift detection → re-verify tasks), `commands/recap.rs` (human progress recap), `commands/closeout.rs` (closeout gate → phase "closed"), `commands/ops.rs` (preflight/check/runner/judge/next), `commands/util.rs` (load/save context, git status, token tallies).
+
+**Dispatch & execution**: `scheduler.rs` (concurrent job scheduler: submit/retry/healthcheck/deps), `dispatch.rs` (capability-scored runner selection), `dispatch_goal.rs` (`dispatch-goal` → codex/pi/agy via tmux + hook install), `agent_job.rs` (`AgentJob`/`AgentResult`/`Sandbox`/`PermissionPolicy`), `agent_turn.rs` (`agent.turn.completed` hook routing), `process.rs` (git/shell command factory), `worktree.rs` (worktree lifecycle), `tmux_runner.rs` (tmux-driven runner; Signal/Sentinel/Fire completion modes).
+
+**Evaluation as evidence (sensors are fallible — principle 5)**: `audit.rs` + `audit_dispatch.rs` (heterogeneous cross-family audit selection, fail-closed on unhealthy runners), `llm_judge.rs` (evidence-frozen blocking judgment: strong/adequate/weak/none), `decision.rs` (multi-runner voting / supermajority), `merge_review.rs` (diff + tests + sensitive-file detection).
+
+**Bounding & observability**: `budget.rs` (token/round/deadline limits — principle 4), `events.rs` + `event_emit.rs` (event log + emit API), `telemetry.rs` (derived snapshots), `effect.rs` (regex command-effect classification: Reversible/Network/NeedsSemanticJudgement), `redact.rs` (**single source of truth** for secret/private-path regexes — ingress redaction before any write).
+
+**Plugins (data-only boundary)**: `plugin.rs` (`PluginManifest`/`PluginSecurity` validation, discovery in `plugins/` and `.lto/plugins/`), `plugin_eval_run.rs` (eval-pack runs as sub-LTO-runs; leak detection).
+
+### Runner delegation
+
+The built-in runner protocol shells out to `scripts/delegate/runners/*.sh` (codex/claude/agy/pi/gemini) gated by `healthcheck.sh`. This is why Windows native support is paused (macOS/Linux first). `runner --kind` defaults to `test`; `--runner` defaults to `codex`; `--timeout` defaults to 300s.
+
+### CLI surface
+
+`cargo run -- --help` is authoritative; `COMMANDS.md` documents the full surface. Key commands: `start` (open a run / write delivery contract), `task`/`phase`, `runner` (execute + record evidence), `check`, `next`/`resume`/`recap` (deterministic context briefs), `audit --auto-dispatch`/`--discover-risks`, `judge`, `closeout`, `release` (host-owned), `autopilot --supervised`. Note: historical `audit --collect` is **not** a current command — use `runner`/`collect-agent-run`/artifacts.
+
+### Reference docs
+
+`references/` holds the design specs. Read the relevant one before changing an area — `control-loop-harness.md`, `plugin-boundary.md`, `protocol-and-language-strategy.md`, `run-state-workflow.md`, `runner-readonly-contract.md`, `privacy-self-check.md`. `AGENTS.md` defines the development gate (architecture_alignment / first_principles / simplification_dedupe / value_measurement) and closeout gate that must be recorded into run-state.
 
 ## Project identity
 

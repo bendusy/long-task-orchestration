@@ -57,6 +57,14 @@ if [[ "$rc" -eq 0 ]] && grep -Eiq 'authentication required|authentication timed 
   rc=65
 fi
 
+# agy --print 可能只产出"方案"然后停下来等交互式 Proceed。非交互派工里这会
+# 返回 rc 0 但工作区一行未改 = 假成功（bug #5/#6）。把"方案待确认"型回复判为
+# 可感知失败，让 scheduler/healthcheck 不再把它当成功。auth(65) 在前先胜出。
+if [[ "$rc" -eq 0 ]] && grep -Eiq 'proceed|请确认.*方案|回复指示.*实施|shall i proceed|waiting for confirmation' "$REPLY_FILE"; then
+  echo "agy.sh: reply looks like a plan awaiting confirmation (no execution); failing non-zero" >&2
+  rc=66
+fi
+
 # perm sidecar (RC3: job_id 绑定 + 原子 rename)。仅回传 scheduler 构造侧看不到的
 # 运行时事实（runner 实际接受的 flag）。scheduler 仍以自己构造的 argv 为权威。
 if [[ -n "$JOB_ID" ]]; then

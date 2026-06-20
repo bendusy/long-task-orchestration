@@ -365,6 +365,15 @@ pub async fn wait_for_capture_patterns(
 
 async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerError> {
     if config.new_session {
+        // If we are already inside tmux, prefer a visible window in the attached
+        // session so the host/user can switch to it and watch the dispatched
+        // agent, instead of a detached `new-session -d` they cannot see
+        // (am 0a3fa8f.md: 10 floating sessions the user never found).
+        // Outside tmux (headless/CI/non-tmux shell), current_session returns
+        // None and we fall through to the unchanged detached path below.
+        if let Some(session) = current_session(&config.tmux_bin).await? {
+            return new_window_in_session(config, Some(session)).await;
+        }
         let session = config.session.as_ref().ok_or_else(|| {
             TmuxRunnerError::Config("tmux_new_session requires tmux_session".to_string())
         })?;
@@ -1615,6 +1624,63 @@ sys.exit(0)
             .unwrap_err();
 
         assert!(err.to_string().contains("tmux binary not found"));
+    }
+
+    #[tokio::test]
+    async fn new_session_inside_tmux_opens_visible_window_in_attached_session() {
+        // When running inside tmux (TMUX_PANE set) and the fake tmux resolves a
+        // current session via display-message, the new_session path must open a
+        // VISIBLE new-window in the attached session instead of a detached
+        // `new-session -d` the user cannot see (am 0a3fa8f.md). This test only
+        // exercises the attached branch when the test process is itself in tmux;
+        // outside tmux it documents the fallback by asserting detached is used.
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_tmux(tmp.path(), "ready", None);
+        let config = TmuxRunnerConfig {
+            tmux_bin: bin.display().to_string(),
+            mode: TmuxMode::Fire,
+            target: None,
+            session: Some("lto".to_string()),
+            new_window: false,
+            new_session: true,
+            window_name: "lto-job".to_string(),
+            signal_name: "done".to_string(),
+            sentinel_path: None,
+            ready_patterns: Vec::new(),
+            skip_prompts: Vec::new(),
+            ready_timeout: Duration::from_secs(5),
+            poll_interval: Duration::from_millis(1),
+            capture_lines: 20,
+        };
+        dispatch(&config, "echo ok", Duration::from_secs(1), None)
+            .await
+            .unwrap();
+        let log = read_log(tmp.path());
+        let inside_tmux = std::env::var("TMUX_PANE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .is_some()
+            || std::env::var("TMUX")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .is_some();
+        if inside_tmux {
+            // attached: visible new-window, NEVER a detached new-session
+            assert!(
+                log.iter()
+                    .any(|args| args.first().map(String::as_str) == Some("new-window"))
+            );
+            assert!(
+                !log.iter()
+                    .any(|args| args.first().map(String::as_str) == Some("new-session"))
+            );
+        } else {
+            // headless/CI: unchanged detached `new-session -d`
+            assert!(log.iter().any(|args| {
+                args.first().map(String::as_str) == Some("new-session")
+                    && args.iter().any(|a| a == "-d")
+            }));
+        }
     }
 
     #[tokio::test]

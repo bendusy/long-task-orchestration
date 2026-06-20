@@ -30,7 +30,8 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 - **外部观点默认先进插件**：有趣文章先做 `source_note → experimental path plugin → eval → promote/reject`，详见 `references/plugin-boundary.md`。只有像交付契约这种被拍板为通用 core primitive 的能力才进 core；插件仍只编译到现有 primitive，不替 host 规划、不自带升权。
 - **覆盖四层 loop**：业界把 harness 看成可叠加四层 loop（loop engineering / loopcraft）。LTO 是覆盖 L1–L4 的长任务 harness——L1 agent loop（runner/scheduler）、**L2 verification（`audit` 跨族异构互审，比单模型 LLM-judge 抗盲区，是差异化）**、L3 event-driven（`events.jsonl` 事件总线就绪，tmux 派工+完成通知补触发层）、L4 hill-climbing（跨 run 挖掘喂 host，**只出 brief 不自动改写 harness**）。详见 README「放到业界 loop 工程坐标里看 LTO」。
 - **自动化是梯度**：brief → supervised → sandboxed auto-exec → human gate。每一级都必须保留证据、可恢复状态和人工刹车。
-- **运行中可见、用量可查**：每个派工的输出边跑边写进 `.lto/<run-id>/live/<job-id>.log`，卡住时 `tail` 就能看（学 tmux-autopilot 可观测精髓但不用 tmux，scheduler 仍是确定性 subprocess）。token 用量按 runner 计量（四家 runner 中 codex/pi/claude 有真实计量，agy 无 CLI 用量诚实标 unmetered），`recap`/`closeout` 汇总「这次 run 烧了多少 token」。
+- **派外部 agent 首选 tmux 真 TUI**：跨 runtime 派 codex/pi/agy 等外部 agent，**默认走 `lto dispatch-goal`（tmux 真 TUI 会话）或 `runner --runner tmux`**——agent 在 attached 会话里可见可监督，codex/agy 还能自动检测完成。headless delegate（`scripts/delegate/runners/*.sh`）只用于 shell 证据采集、只读审计派工，以及 tmux 不可用/headless CI 的兜底。不要默认退回 headless print（agy 的 `--print` 只出方案不执行，是假成功陷阱）。
+- **运行中可见、用量可查**：每个派工的输出边跑边写进 `.lto/<run-id>/live/<job-id>.log`，卡住时 `tail` 就能看；tmux 派工在 attached 会话里直接切窗观察。token 用量按 runner 计量（四家 runner 中 codex/pi/claude 有真实计量，agy 无 CLI 用量诚实标 unmetered），`recap`/`closeout` 汇总「这次 run 烧了多少 token」。
 - **`.lto/` 是本地记忆，进项目先看**：装了 am（animem）时 run 成果 publish 到 am 做长期记忆；**没装 am 时 `.lto/` 就是全部记忆**（永远是本项目真源，am 只是下游投影）。接手项目第一件事跑 `lto runs`——列出本项目所有历史 run（目标/阶段/进度），别丢掉前人经验重复踩坑。
 
 ## 三个核心原则
@@ -112,6 +113,10 @@ $LTO audit --auto-dispatch
 # 派 agent 主动找漏掉的风险点（对抗"自报完整性"，未审 risk 会被 closeout 闸门拦）
 $LTO audit --discover-risks
 
+# 让慢的重 thinking runner（pi）不阻塞收口：--prefer-runner 限定并排序审计池
+# （host 可控旋钮，非按历史 telemetry 自动路由）
+$LTO audit --auto-dispatch --prefer-runner codex --prefer-runner agy
+
 # 半自动（想手动控制）：
 $LTO audit                                           # 写简报 + 打印派工指令
 # 已产出的外部 runner 回复用 collect-agent-run 登记到 state；
@@ -122,7 +127,7 @@ $LTO collect-agent-run --task-id T1 --runner codex --reply .lto/<run-id>/audit/r
 > 审者输出结构化 JSON findings（severity 是字段，不靠正文扫关键词）；
 > auto-dispatch/risk-discovery 负责异构派工，已有回复用 `collect-agent-run` 登记证据。
 
-**手动派工**（直接用自带 runner）：
+**手动派工**（只读审计/一次性评审 → headless delegate 合适）：
 ```bash
 AD="scripts/delegate/runners"  # 本 repo 自带，无需外部依赖
 $AD/codex.sh  方案.md 回复-codex.md  300 &
@@ -132,6 +137,13 @@ wait  # 等它们都跑完
 # 每份回复逐个登记，文件名/metadata 保留 runner 来源。
 $LTO collect-agent-run --task-id T1 --runner agy --reply 回复-agy.md
 ```
+
+> headless delegate 只适合**只读、一次性**的评审派工。**开发型派工**（让外部 agent 真改代码）
+> 必须走 tmux 真 TUI，否则 agy `--print` 只出方案不执行（假成功），多轮交互也没有完成信号：
+> ```bash
+> # 在当前 attached 会话开可见窗口派 codex/pi/agy（agent 干完自动检测完成）
+> $LTO dispatch-goal --runner codex --goal goal.md --new-window
+> ```
 
 **拿到结果后做什么**：
 1. 不投票。三个都说「没问题」≠ 真的没问题

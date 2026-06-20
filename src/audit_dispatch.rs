@@ -29,6 +29,33 @@ pub fn pick_auditors_with(host: &str, allow_same_family: bool) -> Vec<String> {
     if picked.is_empty() { pool } else { picked }
 }
 
+/// Host-controllable knob (CLAUDE.md 原则1): when `prefer` is non-empty the audit
+/// pool is RESTRICTED to and ORDERED by `prefer`, intersected with the normal
+/// cross-family pool. Empty `prefer` leaves today's behavior unchanged.
+///
+/// Restrict (not just reorder) is intentional: the scheduler runs an
+/// auto-dispatch batch concurrently and `submit` only returns once every job is
+/// done, so the batch blocks on the slowest auditor. Reordering codex/agy ahead
+/// of a heavy-thinking `pi` does not unblock closeout while pi is still in the
+/// batch (bug #8) -- removing pi from the pool does. Selection stays an explicit
+/// host flag, never historical-telemetry auto-routing (原则3/原则5).
+pub fn pick_auditors_preferred(
+    host: &str,
+    allow_same_family: bool,
+    prefer: &[String],
+) -> Vec<String> {
+    let base = pick_auditors_with(host, allow_same_family);
+    if prefer.is_empty() {
+        return base;
+    }
+    let ordered = prefer
+        .iter()
+        .filter(|name| base.iter().any(|b| b == *name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if ordered.is_empty() { base } else { ordered }
+}
+
 pub fn pick_healthy_discoverer(repo: &Path, auditors: &[String], host: &str) -> Option<String> {
     let runners_dir = default_runners_dir(repo);
     pick_healthy_discoverer_with_runners_dir(repo, auditors, host, &runners_dir)
@@ -215,6 +242,36 @@ mod tests {
         assert_eq!(
             pick_auditors_with("codex", true),
             vec!["codex", "pi", "agy"]
+        );
+    }
+
+    #[test]
+    fn prefer_runner_restricts_and_orders_pool_and_keeps_pi_off_critical_path() {
+        // empty prefer => today's behavior unchanged
+        assert_eq!(
+            pick_auditors_preferred("claude", false, &[]),
+            vec!["codex", "pi", "agy"]
+        );
+        // restrict to fast runners, pi excluded (bug #8 fix), prefer order preserved
+        assert_eq!(
+            pick_auditors_preferred("claude", false, &["agy".into(), "codex".into()]),
+            vec!["agy", "codex"]
+        );
+        // single fast runner honored
+        assert_eq!(
+            pick_auditors_preferred("claude", false, &["codex".into()]),
+            vec!["codex"]
+        );
+        // all-invalid prefer => fall back to base, never empty
+        assert_eq!(
+            pick_auditors_preferred("claude", false, &["bogus".into()]),
+            vec!["codex", "pi", "agy"]
+        );
+        // prefer cannot resurrect a same-family runner the cross-family filter dropped:
+        // host=codex base = [pi, agy]; preferring codex is invalid here -> fall back to base
+        assert_eq!(
+            pick_auditors_preferred("codex", false, &["codex".into()]),
+            vec!["pi", "agy"]
         );
     }
 

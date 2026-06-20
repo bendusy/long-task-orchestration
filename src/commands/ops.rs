@@ -1059,7 +1059,34 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
+    warn_if_tmux_flags_ignored(&options);
     run_task_command(repo, options)
+}
+
+/// Nudge (CLAUDE.md 原则1): tmux pipeline flags are silently dropped on the
+/// headless path. Warn the caller instead of swallowing them, and point at the
+/// preferred interactive dispatch, without changing the default runner.
+fn warn_if_tmux_flags_ignored(options: &RunnerOptions) {
+    if options.runner == "tmux" {
+        return;
+    }
+    let has_tmux_flags = options.tmux_target.is_some()
+        || options.tmux_mode.is_some()
+        || options.tmux_sentinel.is_some()
+        || options.tmux_session.is_some()
+        || options.tmux_new_window
+        || options.tmux_new_session
+        || options.tmux_window_name.is_some()
+        || !options.tmux_ready_patterns.is_empty()
+        || !options.tmux_skip_prompts.is_empty()
+        || options.tmux_ready_timeout_sec.is_some();
+    if has_tmux_flags {
+        eprintln!(
+            "warning: --tmux-* flags are ignored with --runner {} (headless); \
+             use --runner tmux or `lto dispatch-goal` for an interactive session",
+            options.runner
+        );
+    }
 }
 
 pub fn cmd_judge(repo: &Path, options: JudgeOptions) -> anyhow::Result<()> {
@@ -1306,7 +1333,7 @@ pub fn cmd_task_add(repo: &Path, options: TaskAddOptions) -> anyhow::Result<()> 
         "retry_by_command": {},
     });
     if let Some(command) = options.command {
-        task["commands_run"] = json!([command]);
+        task["planned_command"] = json!(command);
     }
     util::json_array_mut(&mut ctx.state.tasks).push(task);
     util::save_run(&ctx)?;
@@ -2419,6 +2446,7 @@ fn auto_exec_tasks(
             .and_then(Value::as_array)
             .and_then(|items| items.last())
             .and_then(Value::as_str)
+            .or_else(|| task.get("planned_command").and_then(Value::as_str))
             .map(str::to_string);
         let Some(command) = command else {
             continue;
@@ -3895,10 +3923,14 @@ fn task_command(tasks: &Value, task_id: &str) -> Option<String> {
     util::json_array(tasks)
         .iter()
         .find(|task| task.get("id").and_then(Value::as_str) == Some(task_id))
-        .and_then(|task| task.get("commands_run").and_then(Value::as_array))
-        .and_then(|items| items.last())
-        .and_then(Value::as_str)
-        .map(str::to_string)
+        .and_then(|task| {
+            task.get("commands_run")
+                .and_then(Value::as_array)
+                .and_then(|items| items.last())
+                .and_then(Value::as_str)
+                .or_else(|| task.get("planned_command").and_then(Value::as_str))
+                .map(str::to_string)
+        })
 }
 
 #[cfg(test)]
@@ -3987,7 +4019,8 @@ mod tests {
         let task = &util::json_array(&state.tasks)[0];
         assert_eq!(task["id"], "T1");
         assert_eq!(task["status"], "pending");
-        assert_eq!(task["commands_run"][0], "cargo test");
+        assert_eq!(task["commands_run"], json!([]));
+        assert_eq!(task["planned_command"], "cargo test");
 
         let err = cmd_task_add(
             &h.repo,
@@ -4001,6 +4034,80 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn planned_command_is_not_double_counted_after_a_real_run() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        cmd_task_add(
+            &h.repo,
+            TaskAddOptions {
+                run_id: Some("r1".into()),
+                task_id: "T1".into(),
+                title: "run once".into(),
+                phase: Some("implementation".into()),
+                command: Some("true".into()),
+            },
+        )
+        .unwrap();
+        cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                run_id: Some("r1".into()),
+                task_id: Some("T1".into()),
+                kind: "test".into(),
+                command: Some("true".into()),
+                cwd: None,
+                timeout: 5,
+                touch: Vec::new(),
+                note: None,
+                status_on_fail: "blocked".into(),
+                runner: "codex".into(),
+                prompt: None,
+                prompt_file: None,
+                job_file: None,
+                job_id: None,
+                tmux_target: None,
+                tmux_mode: None,
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: None,
+                tmux_bin: None,
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        let task = &util::json_array(&state.tasks)[0];
+        assert_eq!(task["commands_run"], json!(["true"]));
+        assert_eq!(task["planned_command"], "true");
+    }
+
+    #[test]
+    fn task_command_falls_back_to_planned_command_before_any_run() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        cmd_task_add(
+            &h.repo,
+            TaskAddOptions {
+                run_id: Some("r1".into()),
+                task_id: "T1".into(),
+                title: "not yet run".into(),
+                phase: Some("implementation".into()),
+                command: Some("echo hi".into()),
+            },
+        )
+        .unwrap();
+        let state = h.state();
+        assert_eq!(
+            task_command(&state.tasks, "T1"),
+            Some("echo hi".to_string())
+        );
     }
 
     #[test]

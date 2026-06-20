@@ -2,6 +2,8 @@
 
 > 2026-05-31，让 codex/pi/agy 各自审视本 skill 中「对它这家 CLI 的描述」后提炼。每家最懂自己的坑——这些是单靠主 agent（只深测了 codex 一条路）发现不了的。主 agent 已逐条核验，标注采纳/存疑。
 
+> **派工方式总纲（tmux 优先）**：跨 runtime 派外部 agent **首选 tmux 真 TUI**（`lto dispatch-goal --new-window` 在 attached 会话开可见窗口，codex/agy 自动检测完成）。下文的 `codex exec` / `pi -p` / `agy --print` 等 headless 写法只适合**只读、一次性**的审计/评审派工，或 tmux 不可用/headless CI 的兜底；**开发型派工**（让 agent 真改代码）走 headless 会撞 agy `--print` 不执行、多轮无完成信号等坑。
+
 ## 一、最该记的元发现：沙箱不是通用铁律（三家共识）
 
 早期 sharing-guide 把「宿主派工必须放开沙箱」写成所有宿主的硬前提。**codex/pi/agy 三家自评一致反驳，且实测坐实这是错的**：

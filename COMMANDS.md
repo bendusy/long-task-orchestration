@@ -27,7 +27,7 @@ aliases do not appear in the public help table below.
 | `hook` | Run boundary gates. | `gate` | `--force`, `--reason` |
 | `self-test` | Assert the Rust CLI command contract. | None | None |
 | `run` | Run batch and staged job primitives. | Subcommand: `parallel` or `pipeline` | `run parallel --run-id --task-ids --phase --kind --command --timeout --concurrency --job-file`; `run pipeline --run-id --task-ids --phase --stages --kind --timeout --concurrency --continue-on-error --job-file` |
-| `audit` | Prepare audit dispatch facts and auditor selection. | None | `--run-id`, `--auto-dispatch`, `--discover-risks`, `--allow-same-family` |
+| `audit` | Prepare audit dispatch facts and auditor selection. | None | `--run-id`, `--auto-dispatch`, `--discover-risks`, `--allow-same-family`, `--prefer-runner` (repeatable; restricts/orders the cross-family auditor pool, e.g. keep slow `pi` off the closeout critical path) |
 | `next` | Print deterministic next-step facts and route suggestion. | None | `--run-id`, `--json` |
 | `autopilot` | Print supervised route facts and optionally auto-exec task commands through sandbox or tmux workers. | None | `--run-id`, `--supervised`, `--auto-exec`, `--autonomous`, `--timeout`, `--worker-runner`, `--target`, `--tmux-bin`, `--ready-timeout` |
 | `recap` | Render a human recap of goal, why, progress, remaining work, tokens, live jobs, or read-only cross-run mining. | None | `--run-id`, `--artifacts`, `--mine` |

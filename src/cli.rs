@@ -147,6 +147,11 @@ pub enum Commands {
         discover_risks: bool,
         #[arg(long)]
         allow_same_family: bool,
+        /// Restrict and order the cross-family auditor pool (repeatable).
+        /// Keeps slow heavy-thinking runners off the closeout critical path,
+        /// e.g. `--prefer-runner codex --prefer-runner agy` drops pi.
+        #[arg(long = "prefer-runner")]
+        prefer_runner: Vec<String>,
     },
     #[command(about = "Print deterministic next-step facts")]
     Next {
@@ -343,6 +348,11 @@ pub struct RunnerCommand {
     note: Option<String>,
     #[arg(long, default_value = "blocked")]
     status_on_fail: String,
+    /// Runner backend: codex/pi/agy/gemini/claude (headless delegate scripts) or
+    /// `tmux` for an interactive real-TUI session with completion detection.
+    /// Prefer `--runner tmux` (or `lto dispatch-goal`) when dispatching an
+    /// external agent so the host/user can watch it; headless runners are for
+    /// shell evidence capture and tmux-unavailable/CI fallback.
     #[arg(long, default_value = "codex")]
     runner: String,
     #[arg(long)]
@@ -867,6 +877,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             auto_dispatch,
             discover_risks,
             allow_same_family,
+            prefer_runner,
         } => {
             cmd_audit(
                 &args.repo,
@@ -875,6 +886,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     auto_dispatch,
                     discover_risks,
                     allow_same_family,
+                    prefer_runner,
                 },
             )?;
         }
@@ -1312,6 +1324,7 @@ struct AuditOptions {
     auto_dispatch: bool,
     discover_risks: bool,
     allow_same_family: bool,
+    prefer_runner: Vec<String>,
 }
 
 fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
@@ -1323,7 +1336,11 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
     let state_path = run_dir.join("state.json");
     let state = state::load_state(&state_path)?;
     let host = effective_audit_host(&state);
-    let auditors = audit_dispatch::pick_auditors_with(&host, options.allow_same_family);
+    let auditors = audit_dispatch::pick_auditors_preferred(
+        &host,
+        options.allow_same_family,
+        &options.prefer_runner,
+    );
     let audit_dir = run_dir.join("audit");
     fs::create_dir_all(&audit_dir)?;
     crate::event_emit::emit_audit_dispatched(repo, &run_id, &host, &auditors, "prepare", None);
