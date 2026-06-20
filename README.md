@@ -35,21 +35,25 @@ $L start --goal "提升检索召回" \
 $L task add --task-id T1 --title "给 login 加判空" --command "pytest tests/test_auth.py -x"
 $L runner --task-id T1 --kind test --command "pytest tests/test_auth.py -x" --note "验证空指针修复"
 
-# 3. 迷路时看事实简报
+# 3. 派外部 agent 跑长任务，别轮询——阻塞等完成事件（v0.6.1+）
+$L dispatch-goal --runner codex --goal goal.md --new-window
+$L events --wait --event-type agent.turn.completed --timeout 1800   # 干完自动唤醒
+
+# 4. 迷路时看事实简报
 $L next
 $L resume
 $L recap
 
-# 4. 高风险时异构审计
-$L audit --auto-dispatch
+# 5. 高风险时异构审计（--prefer-runner 把慢 runner 挪出收口关键路径）
+$L audit --auto-dispatch --prefer-runner codex --prefer-runner agy
 $L audit --discover-risks
 
-# 5. 收尾前硬检查，再 closeout
+# 6. 收尾前硬检查，再 closeout
 $L check --to closed --strict
 $L closeout --summary "登录重构完成，测试和异构审计已收敛"
 ```
 
-`audit` 当前命令面是 `--auto-dispatch`、`--discover-risks`、`--allow-same-family`。历史文档里出现过的 `audit --collect <dir>` 不是当前 Rust CLI 命令；已有回复应通过当前 `runner`/`collect-agent-run`/artifact 机制登记。
+`audit` 当前命令面是 `--auto-dispatch`、`--discover-risks`、`--allow-same-family`、`--prefer-runner`。历史文档里出现过的 `audit --collect <dir>` 不是当前 Rust CLI 命令；已有回复应通过当前 `runner`/`collect-agent-run`/artifact 机制登记。
 
 ## 架构全貌
 

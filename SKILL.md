@@ -31,6 +31,8 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 - **覆盖四层 loop**：业界把 harness 看成可叠加四层 loop（loop engineering / loopcraft）。LTO 是覆盖 L1–L4 的长任务 harness——L1 agent loop（runner/scheduler）、**L2 verification（`audit` 跨族异构互审，比单模型 LLM-judge 抗盲区，是差异化）**、L3 event-driven（`events.jsonl` 事件总线就绪，tmux 派工+完成通知补触发层）、L4 hill-climbing（跨 run 挖掘喂 host，**只出 brief 不自动改写 harness**）。详见 README「放到业界 loop 工程坐标里看 LTO」。
 - **自动化是梯度**：brief → supervised → sandboxed auto-exec → human gate。每一级都必须保留证据、可恢复状态和人工刹车。
 - **派外部 agent 首选 tmux 真 TUI**：跨 runtime 派 codex/pi/agy 等外部 agent，**默认走 `lto dispatch-goal`（tmux 真 TUI 会话）或 `runner --runner tmux`**——agent 在 attached 会话里可见可监督，codex/agy 还能自动检测完成。headless delegate（`scripts/delegate/runners/*.sh`）只用于 shell 证据采集、只读审计派工，以及 tmux 不可用/headless CI 的兜底。不要默认退回 headless print（agy 的 `--print` 只出方案不执行，是假成功陷阱）。
+- **派工完成自动唤醒，别轮询（v0.6.1+）**：派工出去后不要反复 `capture-pane`/手动盯。用 `lto events --wait --event-type agent.turn.completed --timeout <秒>` 阻塞等完成事件——runner 跑完时 `agent-turn-completed` 会通过本地 TCP 立刻唤醒你。还可选 `--bell`（响铃提示本地的人）和 `--notify-cmd '<命令>'`（host 自配远程通知，如发飞书；不可信文本走 `$LTO_SUMMARY` 环境变量，不硬编码任何通知工具）。
+- **审计派工可控优先级（v0.6.1+）**：`lto audit --auto-dispatch --prefer-runner codex --prefer-runner agy` 限定并排序审计 runner 池，把慢的 pi 挪出收口关键路径，避免卡 timeout。host 可控旋钮，不按历史 telemetry 自动路由。
 - **运行中可见、用量可查**：每个派工的输出边跑边写进 `.lto/<run-id>/live/<job-id>.log`，卡住时 `tail` 就能看；tmux 派工在 attached 会话里直接切窗观察。token 用量按 runner 计量（四家 runner 中 codex/pi/claude 有真实计量，agy 无 CLI 用量诚实标 unmetered），`recap`/`closeout` 汇总「这次 run 烧了多少 token」。
 - **`.lto/` 是本地记忆，进项目先看**：装了 am（animem）时 run 成果 publish 到 am 做长期记忆；**没装 am 时 `.lto/` 就是全部记忆**（永远是本项目真源，am 只是下游投影）。接手项目第一件事跑 `lto runs`——列出本项目所有历史 run（目标/阶段/进度），别丢掉前人经验重复踩坑。
 
