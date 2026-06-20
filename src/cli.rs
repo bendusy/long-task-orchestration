@@ -436,6 +436,13 @@ pub struct AgentTurnCompletedCommand {
     rc: Option<i32>,
     #[arg(long, default_value = "hook")]
     source: String,
+    /// Ring the terminal/tmux bell on completion (off by default).
+    #[arg(long)]
+    bell: bool,
+    /// Host notification command run on completion, with {summary}/{rc}/{run_id}/{runner}
+    /// placeholders, e.g. an iaf progress call. LTO does not hardcode any notifier.
+    #[arg(long = "notify-cmd")]
+    notify_cmd: Option<String>,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -1323,6 +1330,8 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     summary: cmd.summary,
                     rc: cmd.rc,
                     source: cmd.source,
+                    bell: cmd.bell,
+                    notify_cmd: cmd.notify_cmd,
                 },
             )?;
         }

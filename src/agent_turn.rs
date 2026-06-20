@@ -17,6 +17,12 @@ pub struct AgentTurnOptions {
     pub summary: Option<String>,
     pub rc: Option<i32>,
     pub source: String,
+    /// Ring the terminal/tmux bell on completion so a watching human notices.
+    pub bell: bool,
+    /// Optional human-notification command template run on completion. Supports
+    /// {summary}/{rc}/{run_id}/{runner} placeholders. LTO does not hardcode any
+    /// notifier (e.g. iaf) — the host wires its own through this hook.
+    pub notify_cmd: Option<String>,
 }
 
 pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyhow::Result<()> {
@@ -50,6 +56,8 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         "payload_sha256": payload_hash,
         "known_payload_schema": payload.is_some(),
     });
+    let runner_name = options.runner.clone();
+    let summary_text = summary.clone();
     let event = events::safe_emit(
         repo,
         &run_id,
@@ -69,7 +77,53 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
     } else {
         println!("agent.turn.completed dropped for run {run_id}");
     }
+
+    // Last hop: signal that the turn is done. All best-effort and never fail the
+    // command (Hook Shim discipline — a notifier must not stall/crash the turn).
+    // 1. Wake any `lto events --wait` waiter for this run (machine -> machine).
+    crate::notify::wake_run(repo, &run_id);
+    // 2. Ring the bell so a watching human notices (machine -> local human).
+    if options.bell {
+        print!("\x07");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+    }
+    // 3. Run the host-supplied notifier, e.g. iaf (machine -> remote human).
+    if let Some(template) = options.notify_cmd.as_deref() {
+        run_notify_cmd(template, &run_id, &runner_name, &summary_text, options.rc);
+    }
     Ok(())
+}
+
+/// Run a host-supplied notification command, exposing the turn fields as
+/// environment variables ($LTO_SUMMARY/$LTO_RC/$LTO_RUN_ID/$LTO_RUNNER) rather
+/// than interpolating them into the shell string. The summary comes from
+/// runner output and is untrusted; passing it via env keeps a value like
+/// `; rm -rf ~` from being re-parsed by the shell (no command injection).
+/// {placeholder} forms are still substituted for convenience but only for the
+/// trusted internal fields (run_id/runner/rc), never the untrusted summary.
+/// Best-effort: any failure is logged to stderr and swallowed so the turn never
+/// fails because of a notifier.
+fn run_notify_cmd(template: &str, run_id: &str, runner: &str, summary: &str, rc: Option<i32>) {
+    let rc_str = rc.map(|v| v.to_string()).unwrap_or_default();
+    // Only trusted, shell-safe internal fields are interpolated. The untrusted
+    // summary is intentionally NOT substituted into the command string; use
+    // $LTO_SUMMARY in the template to reference it safely.
+    let rendered = template
+        .replace("{run_id}", run_id)
+        .replace("{runner}", runner)
+        .replace("{rc}", &rc_str);
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&rendered)
+        .env("LTO_SUMMARY", summary)
+        .env("LTO_RUN_ID", run_id)
+        .env("LTO_RUNNER", runner)
+        .env("LTO_RC", &rc_str)
+        .status();
+    if let Err(err) = status {
+        eprintln!("notify-cmd failed (ignored): {err}");
+    }
 }
 
 fn current_phase(repo: &Path, run_id: &str) -> Option<String> {
@@ -241,6 +295,8 @@ mod tests {
                 summary: Some("done".to_string()),
                 rc: Some(0),
                 source: "test".to_string(),
+                bell: false,
+                notify_cmd: None,
             },
         )
         .unwrap();
@@ -250,5 +306,40 @@ mod tests {
         assert_eq!(events[0]["phase"], "implementation");
         assert_eq!(events[0]["fields"]["runner"], "codex");
         assert_eq!(events[0]["fields"]["session_id"], "s1");
+    }
+
+    #[test]
+    fn notify_cmd_substitutes_trusted_fields_and_passes_summary_via_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("notified.txt");
+        // Trusted fields via {placeholder}; untrusted summary via $LTO_SUMMARY.
+        let template = format!(
+            "printf '%s' \"{{run_id}}|{{runner}}|$LTO_SUMMARY|{{rc}}\" > {}",
+            out.display()
+        );
+        run_notify_cmd(&template, "run-7", "agy", "all green", Some(0));
+        let written = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(written, "run-7|agy|all green|0");
+    }
+
+    #[test]
+    fn notify_cmd_does_not_execute_injection_in_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pwned = tmp.path().join("pwned.txt");
+        let out = tmp.path().join("safe.txt");
+        // A malicious summary that WOULD run `touch pwned` if interpolated into sh -c.
+        let evil = format!("x\"; touch {} ; echo \"", pwned.display());
+        let template = format!("printf '%s' \"$LTO_SUMMARY\" > {}", out.display());
+        run_notify_cmd(&template, "r1", "agy", &evil, Some(0));
+        // The injection file must NOT exist — summary was passed as data, not code.
+        assert!(!pwned.exists(), "summary must not be executed as a command");
+        // And the literal evil string lands in the output as plain data.
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), evil);
+    }
+
+    #[test]
+    fn notify_cmd_failure_is_swallowed() {
+        // A failing command must not panic / propagate (Hook Shim discipline).
+        run_notify_cmd("exit 3", "r1", "codex", "x", Some(3));
     }
 }

@@ -13,6 +13,7 @@ pub mod event_emit;
 pub mod events;
 pub mod llm_judge;
 pub mod merge_review;
+pub mod notify;
 pub mod plugin;
 pub mod plugin_eval_run;
 pub mod process;

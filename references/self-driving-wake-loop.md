@@ -58,16 +58,23 @@ lto events --wait --run-id <id> --event-type agent.turn.completed \
 
 完成判据：`cargo test events::wait_for` 覆盖 ①lookback 命中 ②阻塞被 wake 唤醒 ③timeout 返回 ④游标推进。
 
-### Phase 2：TCP connect-drop 唤醒【传输层】
+### Phase 2：TCP connect-drop 唤醒 + 人在环信号【传输层】— ✅ 已实现
 
-新增 `src/notify.rs`（对标 hcom `notify/server.rs` + `wake.rs`）：
-- `Server::bind() -> port`：非阻塞 TcpListener，`wait(timeout)` 用 `nix::poll` 在 fd 上阻塞，POLLIN 即 `drain()`（accept 后立即 drop）。
-- `wake(port)`：`TcpStream::connect_timeout`，connect-and-close，不发数据（WAKE_TARGETED_MS≈100ms）。
-- `wake_run(repo, run_id)`：读 `notify-endpoints.json` → 对每个 waiter port connect-drop。
+`src/notify.rs`（对标 hcom `notify/server.rs` + `wake.rs`）：
+- `NotifyServer::register(repo, run_id, waiter_id) -> Server`：非阻塞 `TcpListener` 绑随机端口，写进 `.lto/<run-id>/notify-endpoints.json`；`Drop` 自动注销。
+- `drain()`：非阻塞 `accept()` 排空，返回是否被唤醒。
+- `wake_run(repo, run_id)`：读 `notify-endpoints.json` → 对每个 waiter port `TcpStream::connect_timeout` connect-and-close（100ms）。
 
-接入点：`agent_turn.rs:66`（写完 agent.turn.completed 事件后）追加 `notify::wake_run(repo, &run_id)`。
+**实现裁决（偏离 spec 草案）**：hcom 的 `wait()` 用 `nix::poll` + `unsafe { BorrowedFd::borrow_raw }`（源码实证 server.rs:47）——这违反 LTO `unsafe_code = "forbid"`。改用**纯 std**：非阻塞 listener + `accept()` 轮询（hcom 自己的测试 helper 就这么做）。零新依赖、零 unsafe，唤醒延迟降到 poll-tick 级（仍远优于 Phase 1 的 500ms）。
 
-完成判据：单测起一个 Server、另一线程 wake、断言 wait 在 timeout 前返回。
+**人在环三路（吸收用户建议：iaf + tmux bell）**——`agent-turn-completed` 写完事件后统一发，全部可选、best-effort、绝不 fail turn：
+1. `notify::wake_run` — 机器唤醒主 agent（machine→machine）。
+2. `--bell` — 终端/tmux BEL，本地人注意（machine→local human）。
+3. `--notify-cmd "<模板>"` — host 自配通知器。可信内部字段用 `{run_id}`/`{runner}`/`{rc}` 占位符；**不可信的 summary（runner 输出）经 `$LTO_SUMMARY` 环境变量传入**，不内联进 shell 字符串，杜绝命令注入（审计 #3）。LTO **不硬编码** iaf 等私有工具，保持可移植；host 在派工时传 iaf 命令即可（machine→remote human）。
+
+接入点：`agent_turn.rs`（写完 agent.turn.completed 事件、telemetry::save 后）依次触发上述三路。
+
+完成判据（已验）：`notify::wake_unblocks_a_registered_server`、endpoint 注册/Drop 注销、`wake_run` 无 endpoint 安全、`run_notify_cmd` 占位符替换 + 失败吞掉。242 测试全绿。
 
 ### Phase 3：per-runtime adapter 双协议【跨 runtime】
 

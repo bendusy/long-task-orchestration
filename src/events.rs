@@ -205,7 +205,15 @@ pub fn wait_for(
         return Ok(Some(matched));
     }
 
-    // 2. Poll loop
+    // Register a wake endpoint so `agent-turn-completed` can connect-drop to
+    // unblock us the moment an event lands, instead of waiting out a full poll
+    // tick. Registration failure is non-fatal: we degrade to plain polling.
+    let waiter_id = format!("wait-{}", std::process::id());
+    let server = crate::notify::NotifyServer::register(repo, run_id, &waiter_id).ok();
+
+    // 2. Poll loop. The sleep is short when no wake transport is available; with
+    // a server we still poll (as the correctness backstop) but a wake shortens
+    // the effective latency by draining between sleeps.
     let sleep_interval = if timeout < Duration::from_secs(2) {
         Duration::from_millis(50)
     } else {
@@ -214,6 +222,10 @@ pub fn wait_for(
 
     while start_time.elapsed() < timeout {
         thread::sleep(sleep_interval);
+        if let Some(server) = &server {
+            // Drain wake pings; a true return just means "re-check now".
+            let _ = server.drain();
+        }
         let current = read(repo, run_id)?;
         if let Some(matched) = check_events(&current) {
             return Ok(Some(matched));
@@ -1514,5 +1526,59 @@ mod tests {
         .unwrap();
 
         assert!(matched.is_none(), "must time out and return None");
+    }
+
+    #[test]
+    fn wait_for_is_woken_by_an_event_emitted_concurrently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().to_path_buf();
+        let run_id = "r1";
+        // Seed the run dir so the endpoints file has a home.
+        emit(
+            &repo,
+            run_id,
+            EventRecord {
+                event_type: "runner.started".to_string(),
+                actor_kind: "runner".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let repo_w = repo.clone();
+        let waiter = std::thread::spawn(move || {
+            wait_for(
+                &repo_w,
+                run_id,
+                "agent.turn.completed",
+                None,
+                Duration::from_secs(5),
+            )
+            .unwrap()
+        });
+
+        // Let the waiter register its endpoint, then emit the target event and
+        // wake it the way agent-turn-completed does.
+        thread::sleep(Duration::from_millis(150));
+        emit(
+            &repo,
+            run_id,
+            EventRecord {
+                event_type: "agent.turn.completed".to_string(),
+                actor_kind: "runner".to_string(),
+                summary: "done".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+        crate::notify::wake_run(&repo, run_id);
+
+        let started = Instant::now();
+        let matched = waiter.join().unwrap();
+        assert!(matched.is_some(), "waiter must catch the emitted event");
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "waiter must return well before the 5s timeout (woken, not timed out)"
+        );
     }
 }
