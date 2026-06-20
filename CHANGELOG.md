@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.1 — 派工默认走 tmux 真 TUI，完成能自动唤醒主 agent（2026-06-21）
+
+这一版补齐了"派工出去 → 干完自动回来找你"的最后一跳：主 agent 不再需要人提醒去看 runner 干完没。同时把几个让 agent 不自觉退回无头模式的默认值和文档掰正，并修了一批审计揪出的边角缺陷。
+
+### 新功能
+
+- **完成自动唤醒主 agent（唤醒回路 Phase 1+2）**：新增 `lto events --wait`——阻塞等待某个 run 事件出现（带 `--event-type`/`--after`/`--timeout`），而不是反复轮询。runner 跑完时 `lto agent-turn-completed` 写完事件后，会通过本地 TCP connect-drop 把正在 `events --wait` 的主 agent 立即唤醒。纯 std 实现（不引 nix、不破 `unsafe_code = forbid`），并发注册用文件锁 + 原子写防丢。
+- **人在环三路信号**：`agent-turn-completed` 完成时除了唤醒主 agent，还可选 `--bell`（响终端/tmux 铃提示本地的人）和 `--notify-cmd`（host 自配通知器，如发飞书）。LTO 不硬编码任何私有通知工具，保持可移植；不可信的 summary 经 `$LTO_SUMMARY` 环境变量传入，不内联进 shell，杜绝命令注入。
+- **audit 派工可控优先级**：`lto audit --auto-dispatch --prefer-runner` 可限定并排序审计 runner 池，把慢的重 thinking runner（pi）挪出收口关键路径，避免反复卡 timeout 拖死收口。是 host 可控旋钮，不按历史 telemetry 自动路由。
+
+### 修复与文档
+
+- **派外部 agent 默认走 tmux 真 TUI**：SKILL.md 与 host 笔记把"开发型派工首选 tmux 真 TUI、headless 仅兜底"写成响亮默认（之前一句"不用 tmux"把无头设成了默认）。`runner --runner` help 标注 tmux 选项，误用 tmux flag 会告警。
+- **修 dispatch-goal 派 agy 用无头 `--print`**：`lto dispatch-goal --runner agy` 之前在 tmux 窗口里跑 `agy --print`（只出方案不执行的假成功陷阱），改为 `agy -i` 真 TUI，与 codex/pi 一致。
+- **修 agy.sh 无头派工空转假成功**：headless agy runner 回复若是"方案待确认"型（没真执行），返回非零让调度感知失败，不再当成功。
+- **修 `task add --command` 命令重复计数**：预设命令存进独立 `planned_command` 字段，`commands_run` 留空到 runner 真执行为止，复盘不再把简单任务显示成跑了两次。
+- **修 tmux 派工游离会话**：在 tmux 内派工时在当前 attached 会话开可见窗口，而非用户找不到的 `new-session -d` 游离会话；无 tmux 的 headless/CI 仍走 detached 兜底。
+
 ## v0.6.0 — 事件驱动 + 跨 run 复盘，调度更快更稳（2026-06-17）
 
 这一版把 LTO 从"能调度、能审计"推进到覆盖完整的四层 agent loop：派工能记录完成信号、跑过的历史能挖出来指导下一次怎么派，同时修了两个会影响数据正确性和性能的底层问题。
