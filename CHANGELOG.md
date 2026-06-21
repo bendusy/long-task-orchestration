@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.2 — dispatch-goal 无参即落到当前 tmux 会话（2026-06-21）
+
+- **dispatch-goal 无参即用当前 tmux 会话**：之前 `lto dispatch-goal` 强制"必须二选一传 `--target` 或 `--new-window`"，host 偷懒不传参直接 bail，带错参又退回游离——v0.6.1 在 `tmux_runner` 内部修好的"自动在当前 attached 会话开窗"逻辑因此够不着。现在两个 flag 都改为可选：都不传时自动探测 `$TMUX_PANE` 所在会话（如 `cc`）开可见 window，headless/CI 无 tmux 才报错。这才让"努力用 tmux"成为真正的默认，而非靠 host 每次记得传参。
+
 ## v0.6.1 — 派工默认走 tmux 真 TUI，完成能自动唤醒主 agent（2026-06-21）
 
 这一版补齐了"派工出去 → 干完自动回来找你"的最后一跳：主 agent 不再需要人提醒去看 runner 干完没。同时把几个让 agent 不自觉退回无头模式的默认值和文档掰正，并修了一批审计揪出的边角缺陷。
