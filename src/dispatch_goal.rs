@@ -58,9 +58,7 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     if !options.goal.exists() {
         anyhow::bail!("goal file does not exist: {}", options.goal.display());
     }
-    if options.target.is_some() == options.new_window {
-        anyhow::bail!("pass exactly one of --target or --new-window");
-    }
+    validate_dispatch_target(options.target.as_deref(), options.new_window)?;
 
     let ctx = util::load_run(repo, options.run_id.as_deref())?;
     let goal_path = absolutize(&options.goal)?;
@@ -502,6 +500,18 @@ fn validate_runner(runner: &str) -> anyhow::Result<()> {
     }
 }
 
+/// `--target` and `--new-window` are mutually exclusive, but neither is
+/// required. With both unset, `prepare_target` auto-detects the attached
+/// tmux session and opens a visible window there — the "try hard to use
+/// tmux" default so a host that forgets the flag still lands in the current
+/// cc session instead of bailing or spawning a detached session it can't see.
+fn validate_dispatch_target(target: Option<&str>, new_window: bool) -> anyhow::Result<()> {
+    if target.is_some() && new_window {
+        anyhow::bail!("pass at most one of --target or --new-window");
+    }
+    Ok(())
+}
+
 fn current_lto_bin() -> String {
     std::env::current_exe()
         .ok()
@@ -542,6 +552,18 @@ fn now_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dispatch_target_defaults_to_auto_detect() {
+        // No flags: must NOT bail — prepare_target auto-detects the attached
+        // tmux session (the "try hard to use tmux" default).
+        assert!(validate_dispatch_target(None, false).is_ok());
+        // Either flag alone is fine.
+        assert!(validate_dispatch_target(Some("sess:1.0"), false).is_ok());
+        assert!(validate_dispatch_target(None, true).is_ok());
+        // Both together is the only error.
+        assert!(validate_dispatch_target(Some("sess:1.0"), true).is_err());
+    }
 
     #[test]
     fn runner_plan_uses_required_entrypoints() {

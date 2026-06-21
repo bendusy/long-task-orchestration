@@ -143,8 +143,9 @@ $LTO collect-agent-run --task-id T1 --runner agy --reply 回复-agy.md
 > headless delegate 只适合**只读、一次性**的评审派工。**开发型派工**（让外部 agent 真改代码）
 > 必须走 tmux 真 TUI，否则 agy `--print` 只出方案不执行（假成功），多轮交互也没有完成信号：
 > ```bash
-> # 在当前 attached 会话开可见窗口派 codex/pi/agy（agent 干完自动检测完成）
-> $LTO dispatch-goal --runner codex --goal goal.md --new-window
+> # 不带 --target/--new-window 即默认：自动在你当前 attached 的会话（如 cc）开可见窗口
+> # 派 codex/pi/agy，host 不用记得传参就不会退回游离/无头（agent 干完自动检测完成）
+> $LTO dispatch-goal --runner codex --goal goal.md
 > ```
 
 **拿到结果后做什么**：

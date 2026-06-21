@@ -36,7 +36,7 @@ $L task add --task-id T1 --title "给 login 加判空" --command "pytest tests/t
 $L runner --task-id T1 --kind test --command "pytest tests/test_auth.py -x" --note "验证空指针修复"
 
 # 3. 派外部 agent 跑长任务，别轮询——阻塞等完成事件（v0.6.1+）
-$L dispatch-goal --runner codex --goal goal.md --new-window
+$L dispatch-goal --runner codex --goal goal.md   # 默认在当前 tmux 会话开窗，不用传 --new-window
 $L events --wait --event-type agent.turn.completed --timeout 1800   # 干完自动唤醒
 
 # 4. 迷路时看事实简报
