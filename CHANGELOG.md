@@ -78,7 +78,7 @@
 **Next**: Host owns release/tag/push; local implementation is ready after split commits and post-commit strict check.
 
 
-## Unreleased
+## v0.7.0 — island 清理 + 模型感知跨 run 挖掘 + 调度/事件加固（2026-06-22）
 
 ### Phase A island cleanup
 
