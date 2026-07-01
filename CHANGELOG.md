@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.1 — 修 dispatch-goal 派 agy 的 `-i` flag 拼法（2026-07-01）
+
+- **修 `agy -i` 缺 prompt 值导致启动即崩**：v0.8.0 的 `dispatch-goal --runner agy` 拼的是裸 `agy -i`，但本机 agy CLI 的 `-i`/`--prompt-interactive` 是**需要带值的 flag**——裸 `agy -i` 直接报 `flag needs an argument: -i` 并退出，TUI 根本起不来（v0.8.0 的真机验证只验到 SessionEnd hook 触发唤醒，漏了 agy TUI 能否启动这一环）。现在 launch 命令拼成 `agy -i '<goal_prompt>'`，prompt 在启动时带上；新增 `launch_includes_prompt` 标记让 `run_dispatch` 对 agy 跳过后续单独 send（否则 prompt 会被提交两次）。codex/pi 仍先起 REPL 再单独发 prompt，不受影响。加回归测试锁死 `-i` 后必带 prompt。
+
 ## v0.8.0 — pi/agy 派工也走机制级完成信号 + hs 列为外部查询首选（2026-07-01）
 
 这一版把 v0.6.1 的"完成自动唤醒主 agent"从只有 codex 走通，补齐到 **pi 和 agy 也机制级触发**——三个 runner 全走 tmux 真 TUI（不退无头），干完各用自己的官方 hook 触发 `agent-turn-completed`，复用已有的 wake 回路唤醒主 agent，不再靠 `capture-pane` 轮询或 agent 自觉汇报。

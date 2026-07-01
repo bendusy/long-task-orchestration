@@ -37,6 +37,11 @@ struct GoalRunnerPlan {
     needs_probe: bool,
     completion_event: Option<String>,
     completion_mode: String,
+    /// When true the launch command already carries the initial prompt (e.g.
+    /// `agy -i '<prompt>'`), so run_dispatch must NOT also send the prompt as a
+    /// separate line — doing so would submit it twice. codex/pi start a REPL
+    /// first and take the prompt on a later line, so they leave this false.
+    launch_includes_prompt: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -181,11 +186,17 @@ fn run_dispatch(
                 tmux_runner::send_dispatch_text(&config, &target, launch).await?;
                 tmux_runner::wait_for_dispatch_ready(&config, &target).await?;
             }
-            if plan.needs_probe {
-                let probe = format!("LTO_PROBE_{}", now_millis());
-                let _ = tmux_runner::confirm_tui_input(&config, &target, &probe).await?;
+            // When the launch line already carries the prompt (agy -i '<prompt>'),
+            // the prompt is submitted at startup — do NOT probe or re-send it, or
+            // it would be entered twice. codex/pi start a REPL first, so they
+            // probe then send the prompt on a separate line.
+            if !plan.launch_includes_prompt {
+                if plan.needs_probe {
+                    let probe = format!("LTO_PROBE_{}", now_millis());
+                    let _ = tmux_runner::confirm_tui_input(&config, &target, &probe).await?;
+                }
+                tmux_runner::send_dispatch_text(&config, &target, &plan.prompt).await?;
             }
-            tmux_runner::send_dispatch_text(&config, &target, &plan.prompt).await?;
             let capture =
                 tmux_runner::wait_for_capture_patterns(&config, &target, &plan.confirm_patterns)
                     .await?;
@@ -220,6 +231,8 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
             needs_probe: true,
             completion_event: Some("agent.turn.completed".to_string()),
             completion_mode: "auto-event".to_string(),
+            // codex starts a REPL, then takes /goal on a later line.
+            launch_includes_prompt: false,
         },
         "pi" => {
             // pi runs in a real tmux TUI (never headless). Completion is
@@ -262,16 +275,26 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
                 } else {
                     "manual-pi-tui".to_string()
                 },
+                // pi starts a REPL, then takes the prompt on a later line.
+                launch_includes_prompt: false,
             }
         }
         "agy" => {
             // agy `-i`/--prompt-interactive runs the initial prompt in a real
             // TUI session and continues — it actually executes. `--print` only
-            // prints a plan without executing (false-success trap, bug #5/#6),
-            // so dispatch must use the interactive entrypoint like codex/pi.
+            // prints a plan without executing (false-success trap, bug #5/#6).
+            // Critically, `-i` is a value flag: it REQUIRES the prompt on the
+            // launch command (`agy -i '<prompt>'`). A bare `agy -i` errors with
+            // "flag needs an argument: -i" and never starts, so unlike codex/pi
+            // the prompt is baked into launch and NOT sent as a later line.
+            let prompt = goal_prompt(&goal);
             GoalRunnerPlan {
-                launch: Some(format!("LTO_RUN_ID={} agy -i", shell_single_quote(run_id))),
-                prompt: goal_prompt(&goal),
+                launch: Some(format!(
+                    "LTO_RUN_ID={} agy -i {}",
+                    shell_single_quote(run_id),
+                    shell_single_quote(&prompt)
+                )),
+                prompt,
                 ready_patterns: vec!["agy".to_string()],
                 confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
                 needs_probe: true,
@@ -280,6 +303,7 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
                 // agent-turn-completed when the agy session ends.
                 completion_event: Some("agent.turn.completed".to_string()),
                 completion_mode: "agy-session-end-hook".to_string(),
+                launch_includes_prompt: true,
             }
         }
         _ => unreachable!("runner validated"),
@@ -863,6 +887,26 @@ mod tests {
                 .contains("Use LTO discipline")
         );
         assert!(runner_plan("agy", goal, "r1").needs_probe);
+
+        // Regression (v0.8.0 bug): `agy -i` is a VALUE flag — a bare `agy -i`
+        // errors "flag needs an argument: -i" and never starts. The launch line
+        // must carry the prompt right after `-i`, and run_dispatch must know the
+        // prompt is already in the launch (so it isn't submitted twice).
+        let agy = runner_plan("agy", goal, "r1");
+        let launch = agy.launch.as_deref().unwrap();
+        // `-i` is immediately followed by a quoted prompt, not end-of-string.
+        assert!(
+            launch.contains("agy -i '"),
+            "agy -i must be followed by a quoted prompt, got: {launch}"
+        );
+        assert!(launch.contains("Read the file"), "prompt baked into launch");
+        assert!(
+            agy.launch_includes_prompt,
+            "agy launch carries the prompt; run_dispatch must skip re-sending it"
+        );
+        // codex/pi start a REPL and take the prompt on a later line.
+        assert!(!runner_plan("codex", goal, "r1").launch_includes_prompt);
+        assert!(!runner_plan("pi", goal, "r1").launch_includes_prompt);
     }
 
     #[test]
