@@ -113,11 +113,66 @@ pub enum Commands {
         #[arg(long)]
         record: bool,
     },
-    #[command(about = "Run or dispatch one scheduler-backed task")]
+    #[command(
+        about = "Run or dispatch one scheduler-backed task",
+        long_about = "Run or dispatch one scheduler-backed task. Choose exactly one work mode:\n\
+\n  \
+--command \"<shell>\"   Run a shell command as evidence. REQUIRES --task-id.\n  \
+--prompt \"<text>\"     Send a prompt to --runner (or --prompt-file <path>).\n  \
+--job-file <path>     Run a pre-built job spec (with --job-id).\n\
+\n\
+The runner backend is --runner (default codex; see its help for the full set). \
+Use --runner tmux for an interactive real-TUI session, or prefer `lto dispatch-goal`.\n\
+\n\
+Examples:\n  \
+lto runner --task-id T1 --command \"cargo test\"          # evidence run\n  \
+lto runner --task-id T1 --runner tmux --prompt \"fix X\"   # interactive dispatch\n  \
+lto runner --job-file job.json --job-id J1                # run a job spec\n\
+\n\
+See also: lto dispatch-goal (goal-file dispatch), lto events --wait (await completion)."
+    )]
     Runner(Box<RunnerCommand>),
-    #[command(about = "Dispatch a goal file to codex, pi, or agy through tmux")]
+    #[command(
+        about = "Dispatch a goal file AND block until the agent completes (dispatch-goal + events --wait)",
+        long_about = "One-step convenience: dispatch a goal to an external agent, then block until \
+its agent.turn.completed event fires (the mechanical completion hook installed by dispatch), and \
+print a summary. Equivalent to `lto dispatch-goal ...` followed by `lto events --wait \
+--event-type agent.turn.completed`, but in a single call.\n\
+\n\
+Examples:\n  \
+lto dispatch-and-wait --runner codex --goal goal.md               # dispatch + wait (default 600s)\n  \
+lto dispatch-and-wait --runner pi --goal goal.md --timeout 1200   # longer wait\n\
+\n\
+After it returns, register the reply with `lto collect-agent-run` if you need it as audit evidence.\n\
+The single-step `lto dispatch-goal` and `lto events --wait` remain available for finer control."
+    )]
+    DispatchAndWait(DispatchAndWaitCommand),
+    #[command(
+        about = "Dispatch a goal file to codex, pi, or agy through tmux",
+        long_about = "Dispatch a goal file to an external agent (codex/pi/agy) in a real tmux TUI. \
+With no --target/--new-window it opens a visible window in your current tmux session. \
+Installs the runner's completion hook so the agent wakes you when done.\n\
+\n\
+Examples:\n  \
+lto dispatch-goal --runner codex --goal goal.md          # dispatch into current tmux\n  \
+lto dispatch-goal --runner agy --goal goal.md --new-window\n  \
+lto dispatch-and-wait --runner codex --goal goal.md      # dispatch AND block until done\n\
+\n\
+See also: lto dispatch-and-wait (one-step dispatch+wait), lto events --wait (await), \
+lto collect-agent-run (register the reply)."
+    )]
     DispatchGoal(DispatchGoalCommand),
-    #[command(about = "Record or run an evidence-based judgment")]
+    #[command(
+        about = "Record or run an evidence-based judgment",
+        long_about = "Record an evidence-based judgment (strong/adequate/weak/none), or run an \
+LLM judge over frozen evidence. State mode just records; LLM mode needs a runner + evidence.\n\
+\n\
+Examples:\n  \
+lto judge --task-id T1 --verdict adequate --note \"tests pass\"   # record\n  \
+lto judge --task-id T1 --runner codex --rerun-tests             # LLM judge\n\
+\n\
+See also: lto audit (cross-family audit), lto check (gate status)."
+    )]
     Judge(JudgeCommand),
     #[command(about = "Run an opt-in boundary hook")]
     Hook {
@@ -138,7 +193,19 @@ pub enum Commands {
     Parallel(ParallelCommand),
     #[command(hide = true)]
     Pipeline(PipelineCommand),
-    #[command(about = "Dispatch and collect heterogeneous audit rounds")]
+    #[command(
+        about = "Dispatch and collect heterogeneous audit rounds",
+        long_about = "Dispatch and collect cross-family audit rounds. --auto-dispatch picks healthy \
+runners of a different family than the author and dispatches them; --discover-risks first surfaces \
+risk points to audit. Fails closed if no healthy heterogeneous runner is available.\n\
+\n\
+Examples:\n  \
+lto audit --auto-dispatch                                  # auto-pick + dispatch auditors\n  \
+lto audit --auto-dispatch --prefer-runner codex --prefer-runner agy   # order the pool\n  \
+lto audit --discover-risks                                 # surface risks first\n\
+\n\
+See also: lto events --wait (collect replies), lto judge (single judgment)."
+    )]
     Audit {
         #[arg(long)]
         run_id: Option<String>,
@@ -245,7 +312,16 @@ pub enum Commands {
         #[arg(long = "set")]
         set_phase: Option<String>,
     },
-    #[command(about = "Register an existing agent reply artifact")]
+    #[command(
+        about = "Register an existing agent reply artifact",
+        long_about = "Register a reply an external agent already produced into the run's agent_runs, \
+so audit/judge can use it as evidence. --status defaults to `returned`.\n\
+\n\
+Example:\n  \
+lto collect-agent-run --task-id T1 --runner agy --reply reply-agy.md --status ok\n\
+\n\
+See also: lto dispatch-goal (produce the reply), lto audit (use it as evidence)."
+    )]
     CollectAgentRun {
         #[arg(long)]
         run_id: Option<String>,
@@ -268,6 +344,36 @@ pub enum Commands {
     },
     #[command(about = "List local LTO runs")]
     Runs,
+    #[command(
+        about = "Reclaim disk from finished runs (keeps state index, never touches active runs)",
+        long_about = "Reclaim disk by removing bulk logs (events.jsonl, live/, audit/, dispatch/) \
+from finished runs, while KEEPING the lightweight history index (state.json, run-state.md, \
+artifacts.json). Only runs with phase=closed and older than --older-than days are eligible; \
+active/unfinished runs are never touched. Dry-run by default — pass --yes to actually delete.\n\n\
+Examples:\n  \
+lto prune                         # dry-run: show what 30d+ closed runs would free\n  \
+lto prune --yes                   # actually reclaim\n  \
+lto prune --older-than 7 --yes    # prune closed runs older than 7 days\n  \
+lto prune --keep-last 10 --yes    # keep the 10 most recent closed runs\n  \
+lto prune --run-id <id> --yes     # prune one specific closed run"
+    )]
+    Prune {
+        /// Show what would be reclaimed without deleting (default; use --yes to delete).
+        #[arg(long)]
+        dry_run: bool,
+        /// Actually delete the bulk artifacts (turns off the default dry-run).
+        #[arg(long)]
+        yes: bool,
+        /// Only prune closed runs older than this many days.
+        #[arg(long, default_value_t = 30)]
+        older_than: i64,
+        /// Keep the most recent N closed runs untouched even if they qualify.
+        #[arg(long, default_value_t = 0)]
+        keep_last: usize,
+        /// Prune one specific run (skips age/keep-last gates; still refuses active runs).
+        #[arg(long)]
+        run_id: Option<String>,
+    },
     #[command(about = "Export, publish, or resume redacted run memory")]
     Memory {
         #[command(subcommand)]
@@ -313,7 +419,8 @@ pub enum TaskCommand {
         run_id: Option<String>,
         #[arg(long)]
         task_id: String,
-        #[arg(long)]
+        /// New task status: pending | in_progress | blocked | done | skipped.
+        #[arg(long, value_parser = crate::commands::util::VALID_TASK_STATUSES.to_vec())]
         status: Option<String>,
         #[arg(long)]
         phase: Option<String>,
@@ -337,26 +444,38 @@ pub struct RunnerCommand {
     run_id: Option<String>,
     #[arg(long)]
     task_id: Option<String>,
+    /// What kind of work this run records: test | build | eval | research | lint | custom.
+    /// Defaults to `test`. Used for classification/telemetry, not execution.
     #[arg(long, default_value = "test")]
     kind: String,
     #[arg(long)]
     command: Option<String>,
     #[arg(long)]
     cwd: Option<PathBuf>,
+    /// Max seconds the runner may run before it is killed. Defaults to 300.
     #[arg(long, default_value_t = 300)]
     timeout: u64,
     #[arg(long)]
     touch: Vec<String>,
     #[arg(long)]
     note: Option<String>,
-    #[arg(long, default_value = "blocked")]
+    /// Task status to record when the runner exits non-zero. Defaults to
+    /// `blocked` (NOT `failed`) — a blocked task is a gate the host must clear,
+    /// not a permanent failure. Pass `--status-on-fail failed` if you want a
+    /// hard failure instead.
+    #[arg(long, default_value = "blocked", value_parser = ["blocked", "failed"])]
     status_on_fail: String,
-    /// Runner backend: codex/pi/agy/gemini/claude (headless delegate scripts) or
-    /// `tmux` for an interactive real-TUI session with completion detection.
-    /// Prefer `--runner tmux` (or `lto dispatch-goal`) when dispatching an
-    /// external agent so the host/user can watch it; headless runners are for
-    /// shell evidence capture and tmux-unavailable/CI fallback.
-    #[arg(long, default_value = "codex")]
+    /// Runner backend (default `codex`): codex/pi/agy/gemini/claude are headless
+    /// delegate scripts; `tmux` is an interactive real-TUI session with
+    /// completion detection. Prefer `--runner tmux` (or `lto dispatch-goal`)
+    /// when dispatching an external agent so the host/user can watch it;
+    /// headless runners are for shell evidence capture and tmux-unavailable/CI
+    /// fallback. Validated against the known set (same as dispatch-goal).
+    #[arg(
+        long,
+        default_value = "codex",
+        value_parser = ["codex", "pi", "agy", "gemini", "claude", "tmux"]
+    )]
     runner: String,
     #[arg(long)]
     prompt: Option<String>,
@@ -368,6 +487,10 @@ pub struct RunnerCommand {
     job_id: Option<String>,
     #[arg(long)]
     target: Option<String>,
+    /// tmux completion detection: `signal` (one-shot command → tmux wait-for,
+    /// zero polling; best for `codex exec`-style commands), `sentinel` (agent
+    /// touches a done-file the host polls; for interactive TUIs), or `fire`
+    /// (fire-and-forget, no completion wait). Defaults to the runner's own mode.
     #[arg(long = "tmux-mode", value_parser = ["signal", "sentinel", "fire"])]
     tmux_mode: Option<String>,
     #[arg(long)]
@@ -416,6 +539,15 @@ pub struct DispatchGoalCommand {
     no_install_hooks: bool,
     #[arg(long = "uninstall-hooks")]
     uninstall_hooks: bool,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct DispatchAndWaitCommand {
+    #[command(flatten)]
+    dispatch: DispatchGoalCommand,
+    /// Max seconds to wait for the completion event after dispatch. Defaults to 600.
+    #[arg(long, default_value_t = 600)]
+    timeout: u64,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -889,14 +1021,37 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             for entry in std::fs::read_dir(lto)? {
                 let entry = entry?;
                 if entry.file_type()?.is_dir() && entry.path().join("state.json").exists() {
-                    runs.push(entry.file_name().to_string_lossy().to_string());
+                    let (size, phase) = crate::commands::prune::run_size_and_phase(&entry.path());
+                    runs.push((entry.file_name().to_string_lossy().to_string(), size, phase));
                 }
             }
-            runs.sort();
+            runs.sort_by(|a, b| a.0.cmp(&b.0));
             println!("# LTO runs in this project ({} total)", runs.len());
-            for run_id in runs {
-                println!("{run_id}");
+            for (run_id, size, phase) in runs {
+                println!(
+                    "{:<8} {:>9}  {run_id}",
+                    phase,
+                    crate::commands::prune::format_bytes(size)
+                );
             }
+        }
+        Commands::Prune {
+            dry_run,
+            yes,
+            older_than,
+            keep_last,
+            run_id,
+        } => {
+            crate::commands::prune::cmd_prune(
+                &args.repo,
+                crate::commands::prune::PruneOptions {
+                    dry_run,
+                    yes,
+                    older_than_days: older_than,
+                    keep_last,
+                    run_id,
+                },
+            )?;
         }
         Commands::Audit {
             run_id,
@@ -1040,6 +1195,65 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     uninstall_hooks: cmd.uninstall_hooks,
                 },
             )?;
+        }
+        Commands::DispatchAndWait(cmd) => {
+            let d = cmd.dispatch;
+            // Resolve the run id before dispatch so we can wait on it after.
+            let run_id = d
+                .run_id
+                .clone()
+                .or_else(|| current_run_id(&args.repo))
+                .context("dispatch-and-wait requires --run-id or .lto/current")?;
+            crate::dispatch_goal::cmd_dispatch_goal(
+                &args.repo,
+                crate::dispatch_goal::DispatchGoalOptions {
+                    run_id: Some(run_id.clone()),
+                    runner: d.runner,
+                    goal: d.goal,
+                    target: d.target,
+                    new_window: d.new_window,
+                    window_name: d.window_name,
+                    cwd: d.cwd,
+                    tmux_session: d.tmux_session,
+                    tmux_bin: d.tmux_bin,
+                    ready_timeout_sec: d.ready_timeout,
+                    no_install_hooks: d.no_install_hooks,
+                    uninstall_hooks: d.uninstall_hooks,
+                },
+            )?;
+            println!(
+                "\nwaiting up to {}s for agent.turn.completed on run {run_id} ...",
+                cmd.timeout
+            );
+            match crate::events::wait_for(
+                &args.repo,
+                &run_id,
+                "agent.turn.completed",
+                None,
+                std::time::Duration::from_secs(cmd.timeout),
+            )? {
+                Some(event) => {
+                    let summary = event
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(no summary)");
+                    let runner = event
+                        .get("fields")
+                        .and_then(|f| f.get("runner"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    println!("DONE runner={runner} summary={summary}");
+                    println!(
+                        "Register the reply as evidence with: lto collect-agent-run --run-id {run_id} --runner {runner} --reply <path>"
+                    );
+                }
+                None => {
+                    println!(
+                        "TIMEOUT after {}s — the agent may still be running. Check with `lto events --wait --run-id {run_id}` or `tmux` directly.",
+                        cmd.timeout
+                    );
+                }
+            }
         }
         Commands::Judge(cmd) => {
             ops::cmd_judge(

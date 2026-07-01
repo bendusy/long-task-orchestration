@@ -341,6 +341,8 @@ pub fn cmd_preflight(repo: &Path, options: PreflightOptions) -> anyhow::Result<(
             .insert("checks".to_string(), Value::Array(checks));
         util::save_run(&ctx)?;
     }
+    // Advisory: nudge the host to reclaim disk if .lto has grown large.
+    crate::commands::prune::maybe_nudge_prune(repo);
     if pass {
         Ok(())
     } else {

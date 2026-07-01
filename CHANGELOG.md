@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.9.0 — 日志 retention + 命令 UX 加固（2026-07-01）
+
+统一解决两块系统性欠债：`.lto` 日志零清理（已积累数 GB）+ 命令行让 agent 调错/不愿调。
+
+### 新功能
+
+- **`lto prune` 回收磁盘（手动，不自动删）**：清 **closed** 且 **超 30 天**（`--older-than` 覆盖）run 的大件（events.jsonl/live/audit/dispatch），**保留** state.json/run-state.md 轻量历史索引，active/未完成 run 永不动。默认 dry-run，`--yes` 才真删，`--keep-last N` 保最近几个，`--run-id` 指定单个。被 prune 的 run 在 run-state.md 留标记（日志被回收，非数据丢失）。守「不静默删数据」铁律。
+- **closeout/preflight 超阈值提醒**：`.lto` 超阈值（>1 GiB 或 >30 closed run）时打印一行提醒该 `lto prune`，不删只提醒（对齐 git gc --auto）。
+- **`lto runs` 加 phase + 磁盘占用列**：一眼看出哪些 run 是 closed、占多少空间，便于 prune 前决策。
+- **`lto dispatch-and-wait` 组合命令**：派工 + 阻塞等 `agent.turn.completed` + 打印摘要，合成一步（= dispatch-goal + events --wait）。`--timeout` 默认 600s。单步命令仍保留供精细控制。
+
+### 命令 UX 修复（agent 友好）
+
+- **枚举值 + 默认值全进 `--help`**：`runner --kind/--runner/--status-on-fail/--tmux-mode`、`task update --status` 现在都在 help 列出合法值 + 默认值，错误信息提示合法值——agent 不用再靠报错试错。特别是 `--status-on-fail` 默认 `blocked`（非 failed）现在显式说明。
+- **`runner --runner` 加校验**：对齐 dispatch-goal，非法 runner 报错列出合法集（之前 runner 无校验、dispatch-goal 严格，行为不一致）。
+- **runner 三工作模式 help 说清**：`--command`（需 --task-id）/`--prompt`/`--job-file` 三互斥模式在 long help 讲明。
+- **复杂命令加 examples**：runner/dispatch-goal/dispatch-and-wait/audit/judge/collect-agent-run 的 `--help` 末尾加真实可照抄的 example + "See also"。
+
 ## v0.8.1 — 修 dispatch-goal 派 agy 的 `-i` flag 拼法（2026-07-01）
 
 - **修 `agy -i` 缺 prompt 值导致启动即崩**：v0.8.0 的 `dispatch-goal --runner agy` 拼的是裸 `agy -i`，但本机 agy CLI 的 `-i`/`--prompt-interactive` 是**需要带值的 flag**——裸 `agy -i` 直接报 `flag needs an argument: -i` 并退出，TUI 根本起不来（v0.8.0 的真机验证只验到 SessionEnd hook 触发唤醒，漏了 agy TUI 能否启动这一环）。现在 launch 命令拼成 `agy -i '<goal_prompt>'`，prompt 在启动时带上；新增 `launch_includes_prompt` 标记让 `run_dispatch` 对 agy 跳过后续单独 send（否则 prompt 会被提交两次）。codex/pi 仍先起 REPL 再单独发 prompt，不受影响。加回归测试锁死 `-i` 后必带 prompt。

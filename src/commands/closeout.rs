@@ -144,6 +144,8 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
 
     println!("{}", handoff_path.display());
     println!("interventions: none recorded by rust closeout");
+    // Advisory: nudge the host to reclaim disk if .lto has grown large.
+    crate::commands::prune::maybe_nudge_prune(repo);
     Ok(())
 }
 
