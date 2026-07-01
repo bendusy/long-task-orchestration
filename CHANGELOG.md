@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.1 — 根治 agy 派工的长 prompt 截断 + trust 提示卡住（2026-07-01）
+
+真机实测 v0.9.0 派 agy 时暴露两个可靠性缺陷，都已根治：
+
+- **agy 长 prompt 被 tmux 截断（根治，非补丁）**：v0.8.1 把完整 goal prompt（含 ~700 字符 constraint summary，总 ~1044 字符）塞进 `agy -i '<prompt>'` 命令行，被 tmux paste / 终端行长度在 ~1000 字符处截断，agy 收到残缺命令、没能执行。修法是让 agy 和 codex/pi 走同一条路——`agy -i 'start'` 用短占位起 TUI（满足 `-i` 需带值），真 prompt 随后 paste 进 TUI 输入框（不经 shell 命令行，彻底免截断/元字符问题）。终结了 agy 派工的 `--print`→`-i`→截断 三连坑：不再让 agy「猜」怎么把长 prompt 塞命令行。
+- **agy 新目录 trust 提示自动确认**：agy（Gemini CLI 系）首次进新项目会问 `Do you trust the contents of this project?`，dispatch 的 skip_prompts 之前没覆盖，会卡住。现在加了 pattern → 自动 Enter 选「Yes, I trust this folder」。
+
+实测：agy + pi 双双端到端跑通（真创建标记文件 = 真执行，events 落完成事件，tmux bell 兜底信号收到）。
+
 ## v0.9.0 — 日志 retention + 命令 UX 加固（2026-07-01）
 
 统一解决两块系统性欠债：`.lto` 日志零清理（已积累数 GB）+ 命令行让 agent 调错/不愿调。

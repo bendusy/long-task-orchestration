@@ -280,21 +280,26 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
             }
         }
         "agy" => {
-            // agy `-i`/--prompt-interactive runs the initial prompt in a real
-            // TUI session and continues — it actually executes. `--print` only
-            // prints a plan without executing (false-success trap, bug #5/#6).
-            // Critically, `-i` is a value flag: it REQUIRES the prompt on the
-            // launch command (`agy -i '<prompt>'`). A bare `agy -i` errors with
-            // "flag needs an argument: -i" and never starts, so unlike codex/pi
-            // the prompt is baked into launch and NOT sent as a later line.
-            let prompt = goal_prompt(&goal);
+            // agy `-i`/--prompt-interactive runs a prompt in a real TUI session
+            // and continues — it actually executes (`--print` only prints a plan
+            // without executing: false-success trap, bug #5/#6).
+            //
+            // `-i` is a value flag, so a bare `agy -i` errors "flag needs an
+            // argument". Earlier we baked the full goal prompt into the launch
+            // command (`agy -i '<prompt>'`), but that prompt is ~1000+ chars and
+            // gets TRUNCATED by tmux paste / terminal line limits, so agy never
+            // saw the whole thing. Instead we start agy with a tiny placeholder
+            // prompt to satisfy the flag, then paste the real (long) prompt into
+            // the TUI input box on a later line — exactly like codex/pi. The
+            // prompt never rides a shell command line, so length/metachar issues
+            // disappear. Hence launch_includes_prompt = false.
             GoalRunnerPlan {
                 launch: Some(format!(
                     "LTO_RUN_ID={} agy -i {}",
                     shell_single_quote(run_id),
-                    shell_single_quote(&prompt)
+                    shell_single_quote("start")
                 )),
-                prompt,
+                prompt: goal_prompt(&goal),
                 ready_patterns: vec!["agy".to_string()],
                 confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
                 needs_probe: true,
@@ -303,7 +308,7 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
                 // agent-turn-completed when the agy session ends.
                 completion_event: Some("agent.turn.completed".to_string()),
                 completion_mode: "agy-session-end-hook".to_string(),
-                launch_includes_prompt: true,
+                launch_includes_prompt: false,
             }
         }
         _ => unreachable!("runner validated"),
@@ -732,6 +737,13 @@ fn default_skip_prompts() -> Vec<SkipPrompt> {
             key: "t".to_string(),
         },
         SkipPrompt {
+            // agy (Gemini CLI) prompts this on first entry to a new project.
+            // The default selection is "Yes, I trust this folder", so Enter
+            // confirms it and lets dispatch proceed unattended.
+            pattern: "Do you trust the contents".to_string(),
+            key: "Enter".to_string(),
+        },
+        SkipPrompt {
             pattern: "esc to close".to_string(),
             key: "Escape".to_string(),
         },
@@ -888,25 +900,38 @@ mod tests {
         );
         assert!(runner_plan("agy", goal, "r1").needs_probe);
 
-        // Regression (v0.8.0 bug): `agy -i` is a VALUE flag — a bare `agy -i`
-        // errors "flag needs an argument: -i" and never starts. The launch line
-        // must carry the prompt right after `-i`, and run_dispatch must know the
-        // prompt is already in the launch (so it isn't submitted twice).
+        // Regression — two bugs must both stay fixed:
+        //  v0.8.0: a bare `agy -i` errors "flag needs an argument" and never
+        //          starts, so `-i` must still be followed by a value.
+        //  v0.9.0: baking the ~1000-char goal prompt into `agy -i '<prompt>'`
+        //          got truncated by tmux paste/terminal limits. So the launch
+        //          must carry only a SHORT placeholder, and the real prompt must
+        //          be sent later into the TUI (launch_includes_prompt = false),
+        //          exactly like codex/pi.
         let agy = runner_plan("agy", goal, "r1");
         let launch = agy.launch.as_deref().unwrap();
-        // `-i` is immediately followed by a quoted prompt, not end-of-string.
+        // `-i` is followed by a value (bug #1 stays fixed)...
         assert!(
             launch.contains("agy -i '"),
-            "agy -i must be followed by a quoted prompt, got: {launch}"
+            "agy -i must still carry a value, got: {launch}"
         );
-        assert!(launch.contains("Read the file"), "prompt baked into launch");
+        // ...but that value is the SHORT placeholder, NOT the long goal prompt
+        // (bug #2 stays fixed).
         assert!(
-            agy.launch_includes_prompt,
-            "agy launch carries the prompt; run_dispatch must skip re-sending it"
+            launch.contains("agy -i 'start'"),
+            "agy launch must use a short placeholder prompt, got: {launch}"
         );
-        // codex/pi start a REPL and take the prompt on a later line.
+        assert!(
+            !launch.contains("Read the file"),
+            "the long goal prompt must NOT be in the launch line (truncation risk): {launch}"
+        );
+        assert!(launch.len() < 120, "agy launch must stay short: {launch}");
+        // agy takes the real prompt on a later line, like codex/pi.
+        assert!(!agy.launch_includes_prompt);
         assert!(!runner_plan("codex", goal, "r1").launch_includes_prompt);
         assert!(!runner_plan("pi", goal, "r1").launch_includes_prompt);
+        // The real prompt still exists (sent later), and it's the full goal prompt.
+        assert!(agy.prompt.contains("Read the file"));
     }
 
     #[test]
