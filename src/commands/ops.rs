@@ -205,6 +205,31 @@ pub struct PipelineOptions {
     pub job_file: Option<PathBuf>,
 }
 
+/// Best-effort check for an executable on PATH (no spawn). Used for advisory
+/// tool probes like hs, so a missing tool never blocks or fails preflight.
+fn which_in_path(cmd: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| {
+        let candidate = dir.join(cmd);
+        candidate.is_file() && is_executable(&candidate)
+    })
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|meta| meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
 pub fn cmd_preflight(repo: &Path, options: PreflightOptions) -> anyhow::Result<()> {
     let runners = util::KNOWN_RUNNERS
         .iter()
@@ -239,27 +264,62 @@ pub fn cmd_preflight(repo: &Path, options: PreflightOptions) -> anyhow::Result<(
             );
         }
     }
+    // hs (Hybrid Search router) is the preferred entry for external docs/API
+    // lookups when dispatched agents research a capability. It is an optional
+    // host tool, not an LTO dependency, so this is advisory only (`advisory:
+    // true`) and never counts toward the pass/fail gate.
+    let hs_present = which_in_path("hs");
+    checks.push(json!({
+        "name": "tool:hs",
+        "pass": hs_present,
+        "advisory": true,
+        "detail": if hs_present {
+            "available (route external docs/API lookups through hs, then verify locally)"
+        } else {
+            "not found (optional: install hs for cross-checked external research)"
+        },
+    }));
+
+    // Only non-advisory checks gate pass/fail.
+    let gating = |check: &Value| {
+        !check
+            .get("advisory")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
     let pass = checks
         .iter()
+        .filter(|check| gating(check))
         .all(|check| check.get("pass").and_then(Value::as_bool).unwrap_or(false));
     let passed = checks
         .iter()
+        .filter(|check| gating(check))
         .filter(|check| check.get("pass").and_then(Value::as_bool).unwrap_or(false))
         .count();
+    let gating_total = checks.iter().filter(|check| gating(check)).count();
     println!(
         "=== LTO Preflight ({}: {}/{}) ===",
         if pass { "pass" } else { "fail" },
         passed,
-        checks.len()
+        gating_total
     );
     for check in &checks {
+        let ok = check.get("pass").and_then(Value::as_bool).unwrap_or(false);
+        let advisory = check
+            .get("advisory")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        // Advisory checks never read as FAIL — they are informational.
+        let label = if ok {
+            "OK"
+        } else if advisory {
+            "INFO"
+        } else {
+            "FAIL"
+        };
         println!(
             "  {} {}: {}",
-            if check.get("pass").and_then(Value::as_bool).unwrap_or(false) {
-                "OK"
-            } else {
-                "FAIL"
-            },
+            label,
             check.get("name").and_then(Value::as_str).unwrap_or("?"),
             check.get("detail").and_then(Value::as_str).unwrap_or("")
         );
@@ -3939,6 +3999,14 @@ mod tests {
     use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
     use std::process::Command;
 
+    #[test]
+    fn which_in_path_finds_executable_and_misses_absent() {
+        // A ubiquitous executable that is on PATH in any CI/dev shell.
+        assert!(which_in_path("sh"), "sh must resolve on PATH");
+        // A name that cannot exist as a bare command.
+        assert!(!which_in_path("lto-definitely-not-a-real-tool-xyz"));
+    }
+
     struct Harness {
         _tmp: tempfile::TempDir,
         repo: PathBuf,
@@ -5292,13 +5360,17 @@ printf ']'
             state.environment_snapshot.extra["preflight_verdict"],
             "pass"
         );
-        assert_eq!(
-            state.environment_snapshot.extra["checks"]
-                .as_array()
-                .unwrap()
-                .len(),
-            util::KNOWN_RUNNERS.len() + 2
-        );
+        // sandbox_write + git_repo + one advisory tool:hs check, plus one per runner.
+        let recorded_checks = state.environment_snapshot.extra["checks"]
+            .as_array()
+            .unwrap();
+        assert_eq!(recorded_checks.len(), util::KNOWN_RUNNERS.len() + 3);
+        // The hs probe is present and marked advisory so it never gates.
+        let hs = recorded_checks
+            .iter()
+            .find(|c| c.get("name").and_then(Value::as_str) == Some("tool:hs"))
+            .expect("tool:hs check recorded");
+        assert_eq!(hs.get("advisory").and_then(Value::as_bool), Some(true));
     }
 
     fn write_fake_tmux(repo: &Path) -> PathBuf {

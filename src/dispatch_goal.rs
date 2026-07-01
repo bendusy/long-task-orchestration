@@ -9,7 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LTO_HOOK_MARKER: &str = "long-task-orchestration";
 const CODEX_STOP_HOOK: &str = include_str!("../scripts/hooks/codex-stop-notify.sh");
-const GOAL_CONSTRAINT_SUMMARY: &str = "Use LTO discipline: keep LTO self-managed, run required redlines, use heterogeneous audit before closeout, write the local commit when accepted, and leave release/tag/push to the host.";
+const PI_AGENT_END_HOOK: &str = include_str!("../scripts/hooks/pi-agent-end-notify.ts");
+const GOAL_CONSTRAINT_SUMMARY: &str = "Use LTO discipline: keep LTO self-managed, run required redlines, and write the local commit when accepted while leaving release/tag/push to the host. For heterogeneous audit before closeout, you are a host: run `lto audit --auto-dispatch` (and `lto dispatch-goal --runner <name> --goal <file>` for sub-tasks), then block on `lto events --wait --event-type agent.turn.completed --timeout <sec>` to collect replies. NEVER impersonate another runner or hand-write reply-*.md yourself — that fabricates cross-family audit evidence; if no healthy heterogeneous runner is available, stop and report blocked rather than self-audit. For any external docs/API/tool-capability lookup, route through `hs` first (Hybrid Search) rather than raw web fetches, then confirm against the local `--help`/config/binary before acting — external sources can name the wrong project; local evidence decides.";
 
 #[derive(Debug, Clone)]
 pub struct DispatchGoalOptions {
@@ -47,11 +48,10 @@ struct HookStatus {
 
 pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::Result<()> {
     if options.uninstall_hooks {
-        let status = uninstall_codex_hook(repo)?;
-        println!(
-            "codex hook uninstall: {} ({})",
-            status.status, status.detail
-        );
+        let codex = uninstall_codex_hook(repo)?;
+        println!("codex hook uninstall: {} ({})", codex.status, codex.detail);
+        let agy = uninstall_agy_hook(repo)?;
+        println!("agy hook uninstall: {} ({})", agy.status, agy.detail);
         return Ok(());
     }
     validate_runner(&options.runner)?;
@@ -63,17 +63,29 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     let ctx = util::load_run(repo, options.run_id.as_deref())?;
     let goal_path = absolutize(&options.goal)?;
     let cwd = options.cwd.clone().unwrap_or_else(|| repo.to_path_buf());
-    let hook_status = if options.runner == "codex" && !options.no_install_hooks {
-        install_codex_hook(repo).unwrap_or_else(|err| HookStatus {
-            status: "degraded".to_string(),
-            detail: err.to_string(),
-            script_path: None,
-        })
-    } else {
+    let degraded = |err: anyhow::Error| HookStatus {
+        status: "degraded".to_string(),
+        detail: err.to_string(),
+        script_path: None,
+    };
+    let hook_status = if options.no_install_hooks {
         HookStatus {
             status: "skipped".to_string(),
-            detail: "not a codex dispatch or --no-install-hooks".to_string(),
+            detail: "--no-install-hooks".to_string(),
             script_path: None,
+        }
+    } else {
+        match options.runner.as_str() {
+            // codex: ~/.codex Stop hook; agy: ~/.gemini SessionEnd hook. pi
+            // needs no install here — its agent_end extension is loaded via the
+            // launch command's `-e` flag (see runner_plan).
+            "codex" => install_codex_hook(repo).unwrap_or_else(degraded),
+            "agy" => install_agy_hook(repo).unwrap_or_else(degraded),
+            _ => HookStatus {
+                status: "skipped".to_string(),
+                detail: "runner installs completion hook inline (pi) or has none".to_string(),
+                script_path: None,
+            },
         }
     };
 
@@ -209,31 +221,65 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
             completion_event: Some("agent.turn.completed".to_string()),
             completion_mode: "auto-event".to_string(),
         },
-        "pi" => GoalRunnerPlan {
-            launch: Some(format!(
-                "LTO_RUN_ID={} pi --no-skills --no-context-files --no-extensions",
-                shell_single_quote(run_id)
-            )),
-            prompt: goal_prompt(&goal),
-            ready_patterns: vec!["deepseek".to_string(), "ctx".to_string()],
-            confirm_patterns: vec!["Working".to_string()],
-            needs_probe: true,
-            completion_event: None,
-            completion_mode: "manual-pi-tui".to_string(),
-        },
+        "pi" => {
+            // pi runs in a real tmux TUI (never headless). Completion is
+            // mechanical, not self-report: an explicitly-loaded extension fires
+            // on `agent_end` and spawns `lto agent-turn-completed` (writes the
+            // event, wakes waiters, rings the tmux bell as a human fallback).
+            // `-e` still loads under `--no-extensions` ("explicit -e paths still
+            // work"), so we keep discovery disabled and load only our hook.
+            // The dispatcher `cd`s the pi pane into the repo before launch
+            // (see run_dispatch), so the extension resolves LTO_REPO from
+            // process.cwd() — no need to thread the path through here.
+            let hook = pi_hook_path();
+            let launch = match &hook {
+                Some(path) => format!(
+                    "LTO_RUN_ID={} pi --no-skills --no-context-files --no-extensions -e {}",
+                    shell_single_quote(run_id),
+                    shell_single_quote(&path.display().to_string()),
+                ),
+                // Hook install failed: fall back to the plain TUI. No mechanical
+                // completion event, but dispatch still works (degraded).
+                None => format!(
+                    "LTO_RUN_ID={} pi --no-skills --no-context-files --no-extensions",
+                    shell_single_quote(run_id)
+                ),
+            };
+            let has_hook = hook.is_some();
+            GoalRunnerPlan {
+                launch: Some(launch),
+                prompt: goal_prompt(&goal),
+                ready_patterns: vec!["deepseek".to_string(), "ctx".to_string()],
+                confirm_patterns: vec!["Working".to_string()],
+                needs_probe: true,
+                completion_event: if has_hook {
+                    Some("agent.turn.completed".to_string())
+                } else {
+                    None
+                },
+                completion_mode: if has_hook {
+                    "pi-agent-end-hook".to_string()
+                } else {
+                    "manual-pi-tui".to_string()
+                },
+            }
+        }
         "agy" => {
             // agy `-i`/--prompt-interactive runs the initial prompt in a real
             // TUI session and continues — it actually executes. `--print` only
             // prints a plan without executing (false-success trap, bug #5/#6),
             // so dispatch must use the interactive entrypoint like codex/pi.
             GoalRunnerPlan {
-                launch: Some("agy -i".to_string()),
+                launch: Some(format!("LTO_RUN_ID={} agy -i", shell_single_quote(run_id))),
                 prompt: goal_prompt(&goal),
                 ready_patterns: vec!["agy".to_string()],
                 confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
                 needs_probe: true,
-                completion_event: None,
-                completion_mode: "manual-agy-tui".to_string(),
+                // Mechanical completion via the ~/.gemini SessionEnd hook that
+                // cmd_dispatch_goal installs (like codex). The hook fires
+                // agent-turn-completed when the agy session ends.
+                completion_event: Some("agent.turn.completed".to_string()),
+                completion_mode: "agy-session-end-hook".to_string(),
             }
         }
         _ => unreachable!("runner validated"),
@@ -277,6 +323,185 @@ fn write_dispatch_record(
     });
     fs::write(&path, serde_json::to_string_pretty(&record)? + "\n")?;
     Ok(path)
+}
+
+/// Materialize the pi `agent_end` extension to a stable on-disk path and return
+/// it, so the pi launch command can load it with `-e`. Returns None on any
+/// failure (missing HOME, write error) — the caller then falls back to a plain
+/// pi TUI without the mechanical completion event. Best-effort by design: a
+/// notifier must never block dispatch.
+fn pi_hook_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let hooks_dir = home.join(".lto").join("hooks");
+    fs::create_dir_all(&hooks_dir).ok()?;
+    let path = hooks_dir.join("pi-agent-end-notify.ts");
+    // Rewrite only when content differs, so concurrent dispatches don't churn.
+    let needs_write = match fs::read_to_string(&path) {
+        Ok(existing) => existing != PI_AGENT_END_HOOK,
+        Err(_) => true,
+    };
+    if needs_write {
+        fs::write(&path, PI_AGENT_END_HOOK).ok()?;
+    }
+    Some(path)
+}
+
+const AGY_SESSION_END_HOOK: &str = include_str!("../scripts/hooks/agy-session-end-notify.sh");
+
+/// agy is Gemini-CLI based: its hooks live in `~/.gemini/settings.json` under
+/// `hooks.SessionEnd`, alongside the user's own settings. We merge (never
+/// overwrite) an LTO-marked SessionEnd entry that runs our notify script when
+/// the agy session ends. Idempotent; preserves all existing user hooks.
+fn install_agy_hook(repo: &Path) -> anyhow::Result<HookStatus> {
+    let Some(gemini_home) = gemini_home() else {
+        return Ok(HookStatus {
+            status: "skipped".to_string(),
+            detail: "HOME is not set".to_string(),
+            script_path: None,
+        });
+    };
+    install_agy_hook_at(repo, &gemini_home)
+}
+
+fn install_agy_hook_at(repo: &Path, gemini_home: &Path) -> anyhow::Result<HookStatus> {
+    fs::create_dir_all(gemini_home)?;
+    let hooks_dir = gemini_home.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+    let script_path = hooks_dir.join("lto-agy-session-end-notify.sh");
+    fs::write(&script_path, AGY_SESSION_END_HOOK)?;
+    set_executable(&script_path)?;
+
+    let settings_path = gemini_home.join("settings.json");
+    let mut value = if settings_path.exists() {
+        let text = fs::read_to_string(&settings_path)?;
+        serde_json::from_str::<Value>(&text)
+            .with_context(|| format!("parse {}", settings_path.display()))?
+    } else {
+        json!({})
+    };
+    let repo_abs = absolutize(repo)?.display().to_string();
+    let lto_bin = current_lto_bin();
+    let command = format!(
+        "LTO_REPO_FALLBACK={} LTO_BIN={} bash {}",
+        shell_single_quote(&repo_abs),
+        shell_single_quote(&lto_bin),
+        shell_single_quote(&script_path.display().to_string())
+    );
+    let entries = session_end_hooks_mut(&mut value)?;
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|entry| entry.get("_lto_marker").and_then(Value::as_str) == Some(LTO_HOOK_MARKER))
+    {
+        if hook_command(existing).as_deref() == Some(command.as_str()) {
+            return Ok(HookStatus {
+                status: "already-installed".to_string(),
+                detail: settings_path.display().to_string(),
+                script_path: Some(script_path),
+            });
+        }
+        backup_hooks(&settings_path)?;
+        *existing = agy_session_end_hook_entry(&command, &repo_abs, &lto_bin);
+        fs::write(&settings_path, serde_json::to_string_pretty(&value)? + "\n")?;
+        return Ok(HookStatus {
+            status: "updated".to_string(),
+            detail: settings_path.display().to_string(),
+            script_path: Some(script_path),
+        });
+    }
+    backup_hooks(&settings_path)?;
+    session_end_hooks_mut(&mut value)?
+        .push(agy_session_end_hook_entry(&command, &repo_abs, &lto_bin));
+    fs::write(&settings_path, serde_json::to_string_pretty(&value)? + "\n")?;
+    Ok(HookStatus {
+        status: "installed".to_string(),
+        detail: settings_path.display().to_string(),
+        script_path: Some(script_path),
+    })
+}
+
+fn agy_session_end_hook_entry(command: &str, repo: &str, lto_bin: &str) -> Value {
+    json!({
+        "matcher": "*",
+        "_lto_marker": LTO_HOOK_MARKER,
+        "_lto_repo": repo,
+        "_lto_bin": lto_bin,
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": 10000
+        }]
+    })
+}
+
+/// Get a mutable handle to `hooks.SessionEnd` in a gemini settings object,
+/// creating the `hooks` object and `SessionEnd` array if absent. Never touches
+/// other keys, so the user's settings are preserved.
+fn session_end_hooks_mut(value: &mut Value) -> anyhow::Result<&mut Vec<Value>> {
+    if !value.is_object() {
+        anyhow::bail!("gemini settings.json root is not an object");
+    }
+    let object = value.as_object_mut().expect("settings object");
+    object.entry("hooks").or_insert_with(|| json!({}));
+    let hooks = object
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow!("gemini settings 'hooks' is not an object"))?;
+    hooks.entry("SessionEnd").or_insert_with(|| json!([]));
+    hooks
+        .get_mut("SessionEnd")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow!("hooks.SessionEnd is not an array"))
+}
+
+fn uninstall_agy_hook(repo: &Path) -> anyhow::Result<HookStatus> {
+    let _ = repo;
+    let Some(gemini_home) = gemini_home() else {
+        return Ok(HookStatus {
+            status: "skipped".to_string(),
+            detail: "HOME is not set".to_string(),
+            script_path: None,
+        });
+    };
+    uninstall_agy_hook_at(&gemini_home)
+}
+
+fn uninstall_agy_hook_at(gemini_home: &Path) -> anyhow::Result<HookStatus> {
+    let settings_path = gemini_home.join("settings.json");
+    let script_path = gemini_home
+        .join("hooks")
+        .join("lto-agy-session-end-notify.sh");
+    if !settings_path.exists() {
+        let _ = fs::remove_file(&script_path);
+        return Ok(HookStatus {
+            status: "skipped".to_string(),
+            detail: format!("{} does not exist", settings_path.display()),
+            script_path: Some(script_path),
+        });
+    }
+    let mut value = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)?;
+    let removed = {
+        let hooks = session_end_hooks_mut(&mut value)?;
+        let before = hooks.len();
+        hooks.retain(|entry| {
+            entry.get("_lto_marker").and_then(Value::as_str) != Some(LTO_HOOK_MARKER)
+                && !entry.to_string().contains("lto-agy-session-end-notify.sh")
+        });
+        before.saturating_sub(hooks.len())
+    };
+    backup_hooks(&settings_path)?;
+    fs::write(&settings_path, serde_json::to_string_pretty(&value)? + "\n")?;
+    let _ = fs::remove_file(&script_path);
+    Ok(HookStatus {
+        status: "uninstalled".to_string(),
+        detail: format!("removed {removed} hook group(s)"),
+        script_path: Some(script_path),
+    })
+}
+
+fn gemini_home() -> Option<PathBuf> {
+    std::env::var_os("LTO_GEMINI_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".gemini")))
 }
 
 fn install_codex_hook(repo: &Path) -> anyhow::Result<HookStatus> {
@@ -605,16 +830,31 @@ mod tests {
                 .contains(GOAL_CONSTRAINT_SUMMARY)
         );
         assert!(runner_plan("pi", goal, "r1").needs_probe);
-        assert_eq!(runner_plan("pi", goal, "r1").completion_event, None);
-        assert_eq!(
-            runner_plan("pi", goal, "r1").completion_mode,
-            "manual-pi-tui"
-        );
+        // pi now gets a mechanical completion event via the agent_end extension
+        // hook loaded with `-e`. When the hook materializes (HOME writable, the
+        // normal case) the plan reports the event + hook mode and the launch
+        // command loads the extension; if it can't, it degrades to manual.
+        let pi_plan = runner_plan("pi", goal, "r1");
+        let pi_launch = pi_plan.launch.as_deref().unwrap();
+        if pi_launch.contains(" -e ") {
+            assert_eq!(
+                pi_plan.completion_event.as_deref(),
+                Some("agent.turn.completed")
+            );
+            assert_eq!(pi_plan.completion_mode, "pi-agent-end-hook");
+        } else {
+            // Degraded fallback: still a valid plain-TUI dispatch.
+            assert_eq!(pi_plan.completion_event, None);
+            assert_eq!(pi_plan.completion_mode, "manual-pi-tui");
+        }
         // agy must use the interactive entrypoint (`agy -i`), not `--print`
         // which only prints a plan without executing (bug #5/#6).
-        assert_eq!(
-            runner_plan("agy", goal, "r1").launch.as_deref(),
-            Some("agy -i")
+        assert!(
+            runner_plan("agy", goal, "r1")
+                .launch
+                .as_deref()
+                .unwrap()
+                .starts_with("LTO_RUN_ID='r1' agy -i")
         );
         assert!(!runner_plan("agy", goal, "r1").prompt.contains("--print"));
         assert!(
@@ -623,6 +863,110 @@ mod tests {
                 .contains("Use LTO discipline")
         );
         assert!(runner_plan("agy", goal, "r1").needs_probe);
+    }
+
+    #[test]
+    fn agy_hook_merges_and_preserves_user_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gemini = tmp.path().join(".gemini");
+        fs::create_dir_all(&gemini).unwrap();
+        // Pre-existing user settings: an unrelated key AND a user SessionEnd hook.
+        fs::write(
+            gemini.join("settings.json"),
+            r#"{"theme":"dark","hooks":{"SessionEnd":[{"matcher":"*","hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+        )
+        .unwrap();
+        let status = install_agy_hook_at(tmp.path(), &gemini).unwrap();
+        assert_eq!(status.status, "installed");
+        let value: Value =
+            serde_json::from_str(&fs::read_to_string(gemini.join("settings.json")).unwrap())
+                .unwrap();
+        // Unrelated key preserved.
+        assert_eq!(value["theme"], "dark");
+        let se = value["hooks"]["SessionEnd"].as_array().unwrap();
+        // User hook kept, LTO hook appended.
+        assert_eq!(se.len(), 2);
+        assert!(se[0].to_string().contains("echo user"));
+        assert!(se[1].to_string().contains(LTO_HOOK_MARKER));
+        // The command runs our notify script (which calls agent-turn-completed).
+        assert!(se[1].to_string().contains("lto-agy-session-end-notify.sh"));
+
+        // Idempotent: installing again must not add a duplicate.
+        let again = install_agy_hook_at(tmp.path(), &gemini).unwrap();
+        assert_eq!(again.status, "already-installed");
+        let value2: Value =
+            serde_json::from_str(&fs::read_to_string(gemini.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(value2["hooks"]["SessionEnd"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn agy_hook_install_into_fresh_gemini_home() {
+        // No settings.json yet: install must create it with just our hook.
+        let tmp = tempfile::tempdir().unwrap();
+        let gemini = tmp.path().join(".gemini");
+        let status = install_agy_hook_at(tmp.path(), &gemini).unwrap();
+        assert_eq!(status.status, "installed");
+        let value: Value =
+            serde_json::from_str(&fs::read_to_string(gemini.join("settings.json")).unwrap())
+                .unwrap();
+        let se = value["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(se.len(), 1);
+        assert!(se[0].to_string().contains(LTO_HOOK_MARKER));
+    }
+
+    #[test]
+    fn agy_hook_uninstall_removes_only_lto_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gemini = tmp.path().join(".gemini");
+        fs::create_dir_all(&gemini).unwrap();
+        fs::write(
+            gemini.join("settings.json"),
+            r#"{"hooks":{"SessionEnd":[{"matcher":"*","hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+        )
+        .unwrap();
+        install_agy_hook_at(tmp.path(), &gemini).unwrap();
+        let status = uninstall_agy_hook_at(&gemini).unwrap();
+        assert_eq!(status.status, "uninstalled");
+        let value: Value =
+            serde_json::from_str(&fs::read_to_string(gemini.join("settings.json")).unwrap())
+                .unwrap();
+        let se = value["hooks"]["SessionEnd"].as_array().unwrap();
+        // Only the user's hook remains.
+        assert_eq!(se.len(), 1);
+        assert!(se[0].to_string().contains("echo user"));
+        assert!(!se[0].to_string().contains(LTO_HOOK_MARKER));
+    }
+
+    #[test]
+    fn pi_hook_materializes_and_launch_loads_it() {
+        // pi_hook_path writes the extension under $HOME/.lto/hooks and the pi
+        // plan loads exactly that file via `-e`, so completion is mechanical.
+        let Some(path) = pi_hook_path() else {
+            // No HOME in this environment: the plan must degrade cleanly.
+            let plan = runner_plan("pi", Path::new("/tmp/goal.md"), "r1");
+            assert_eq!(plan.completion_event, None);
+            return;
+        };
+        assert!(path.ends_with("pi-agent-end-notify.ts"));
+        let contents = std::fs::read_to_string(&path).unwrap();
+        // The extension must fire on agent_end and call agent-turn-completed
+        // with the human-visible bell fallback.
+        assert!(contents.contains("agent_end"));
+        assert!(contents.contains("agent-turn-completed"));
+        assert!(contents.contains("--bell"));
+
+        let plan = runner_plan("pi", Path::new("/tmp/goal.md"), "r1");
+        let launch = plan.launch.as_deref().unwrap();
+        assert!(launch.contains(&format!(
+            "-e {}",
+            shell_single_quote(&path.display().to_string())
+        )));
+        assert_eq!(
+            plan.completion_event.as_deref(),
+            Some("agent.turn.completed")
+        );
+        assert_eq!(plan.completion_mode, "pi-agent-end-hook");
     }
 
     #[test]

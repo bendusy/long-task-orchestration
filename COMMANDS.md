@@ -21,7 +21,7 @@ aliases do not appear in the public help table below.
 | `check` | Read a run and report phase/goal, optionally as JSON. | None | `--run-id`, `--strict`, `--to`, `--json` |
 | `closeout` | Gate closeout, update state/run-state, write handoff and changelog. | `--summary` | `--run-id`, `--next-action`, `--blocked-by`, `--allow-dirty`, `--no-changelog`, `--force` |
 | `resume` | Print an active-session capsule and detect HEAD drift. | None | `--run-id` |
-| `preflight` | Check write access, git repo status, and delegate runner health. | None | `--run-id`, `--record` |
+| `preflight` | Check write access, git repo status, delegate runner health, and an advisory `tool:hs` probe (present→OK, absent→INFO; never gates). | None | `--run-id`, `--record` |
 | `runner` | Run a task command or dispatch prompt/job-file work through scheduler. | Mode-dependent: `--task-id --command`, `--prompt`, `--prompt-file`, or `--job-file`; `--runner tmux --command` may dispatch without `--task-id` | `--run-id`, `--kind`, `--cwd`, `--timeout`, `--touch`, `--note`, `--status-on-fail`, `--runner`, `--job-id`, `--target`, `--tmux-mode`, `--sentinel`, `--tmux-session`, `--new-window`, `--new-session`, `--window-name`, `--ready-pattern`, `--skip-prompt`, `--ready-timeout`, `--tmux-bin` |
 | `judge` | Write a state verdict or run LLM judge mode over frozen evidence. | None for state mode; LLM mode requires `--brief --baseline-reply --candidate-reply --candidate-runner` | `--run-id`, `--task-id`, `--phase`, `--runner`, `--rerun-tests`, `--case-dir`, `--judge-runner`, `--execute` |
 | `hook` | Run boundary gates. | `gate` | `--force`, `--reason` |

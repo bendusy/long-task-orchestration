@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.8.0 — pi/agy 派工也走机制级完成信号 + hs 列为外部查询首选（2026-07-01）
+
+这一版把 v0.6.1 的"完成自动唤醒主 agent"从只有 codex 走通，补齐到 **pi 和 agy 也机制级触发**——三个 runner 全走 tmux 真 TUI（不退无头），干完各用自己的官方 hook 触发 `agent-turn-completed`，复用已有的 wake 回路唤醒主 agent，不再靠 `capture-pane` 轮询或 agent 自觉汇报。
+
+### 新功能
+
+- **pi 派工机制级完成信号**：`dispatch-goal --runner pi` 的启动命令加载一个 LTO 扩展（`pi -e`，在 `--no-extensions` 下仍生效），扩展在 pi 的 `agent_end` 事件里 spawn `lto agent-turn-completed --bell`。pi 跑完一个 prompt 即机制级触发完成信号（不靠进程退出、不靠 headless、不靠 agent 自觉），`completion_mode=pi-agent-end-hook`。扩展落盘到 `~/.lto/hooks/`，幂等。
+- **agy 派工机制级完成信号**：`dispatch-goal --runner agy` 幂等地把一个 LTO SessionEnd hook merge 进 `~/.gemini/settings.json`（agy 是 Gemini-CLI 系），会话结束时调 `lto agent-turn-completed --bell`。merge 保留用户已有的全部 hook，`--uninstall-hooks` 只移除 LTO 标记项，`completion_mode=agy-session-end-hook`。
+- **tmux bell 兜底**：pi/agy 的完成 hook 都带 `--bell`——机制级 wake 是主信号，tmux bell 是 hook 命令免费带的人工兜底（配合 `monitor-bell` 让盯屏的人立即看到哪个 window 完成），万一 wake 那侧断了，人也能察觉。
+- **hs 列为外部查询首选（advisory）**：`lto preflight` 新增 `tool:hs` 探测——存在报 `OK`、缺失报 `INFO`，作为 advisory 检查不计入 pass/fail 门控（hs 是可选 host 工具，非 LTO 依赖）。派工约束串加入纪律：查外部 docs/API/工具能力先走 hs，再用本机 `--help`/config/binary 实证核对（外部来源可能张冠李戴，本机证据说了算）。详见 `references/hs-as-core-tool.md`。
+
 ## v0.6.2 — dispatch-goal 无参即落到当前 tmux 会话（2026-06-21）
 
 - **dispatch-goal 无参即用当前 tmux 会话**：之前 `lto dispatch-goal` 强制"必须二选一传 `--target` 或 `--new-window`"，host 偷懒不传参直接 bail，带错参又退回游离——v0.6.1 在 `tmux_runner` 内部修好的"自动在当前 attached 会话开窗"逻辑因此够不着。现在两个 flag 都改为可选：都不传时自动探测 `$TMUX_PANE` 所在会话（如 `cc`）开可见 window，headless/CI 无 tmux 才报错。这才让"努力用 tmux"成为真正的默认，而非靠 host 每次记得传参。
