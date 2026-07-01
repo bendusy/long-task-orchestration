@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.9.2 — 压测根治 agy 派工两个时序 bug（2026-07-01）
+
+多轮压测（agy×3 + pi×3）揪出 v0.9.1 里两个单次测试发现不了的 agy 派工缺陷，agy 每次首轮必失败。均已根治，修复后压测 6/6 全过、零失败、零串台。
+
+- **占位 prompt 改空串（`agy -i ''`）**：v0.9.1 用 `agy -i 'start'` 起 TUI，但 agy 把 "start" 当成真指令，立即漫游探索工作区（ListDir、读所有文件），与随后 paste 的真 prompt 竞态并污染它，导致 agy 执行错任务。改用空串占位（`agy -i ''`）——agy 起 TUI 后停在空闲输入框，真 prompt 是它唯一的指令。
+- **就绪判定改用 TUI 输入框标志**：agy 的 `ready_patterns` 之前是 `["agy"]`，但 launch 命令 `agy -i ''` 的命令行回显本身就含 "agy"，导致 `wait_for_dispatch_ready` 在 agy 进程还没启动（pane 仍是 shell）时就误判就绪，真 prompt 被发进 shell 而非 agy TUI（prompt 丢失）。改为等 `? for shortcuts`——只在 agy 的 TUI 输入框真正就绪时才出现的标志。冷启动派工也稳定通过（建议 `--ready-timeout 45` 应对 agy 冷启动慢）。
+
 ## v0.9.1 — 根治 agy 派工的长 prompt 截断 + trust 提示卡住（2026-07-01）
 
 真机实测 v0.9.0 派 agy 时暴露两个可靠性缺陷，都已根治：

@@ -288,19 +288,28 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
             // argument". Earlier we baked the full goal prompt into the launch
             // command (`agy -i '<prompt>'`), but that prompt is ~1000+ chars and
             // gets TRUNCATED by tmux paste / terminal line limits, so agy never
-            // saw the whole thing. Instead we start agy with a tiny placeholder
-            // prompt to satisfy the flag, then paste the real (long) prompt into
-            // the TUI input box on a later line — exactly like codex/pi. The
-            // prompt never rides a shell command line, so length/metachar issues
-            // disappear. Hence launch_includes_prompt = false.
+            // saw the whole thing. Instead we start agy with an EMPTY placeholder
+            // (`agy -i ''`) just to satisfy the flag, then paste the real prompt
+            // into the TUI input box on a later line — exactly like codex/pi.
+            //
+            // The placeholder MUST be empty, not a word like "start": agy treats
+            // any non-empty initial prompt as a real instruction and immediately
+            // starts exploring the workspace, which races with (and corrupts) the
+            // real prompt we send next. An empty value leaves agy idle at the
+            // input box, so the real prompt is its first and only instruction.
             GoalRunnerPlan {
                 launch: Some(format!(
                     "LTO_RUN_ID={} agy -i {}",
                     shell_single_quote(run_id),
-                    shell_single_quote("start")
+                    shell_single_quote("")
                 )),
                 prompt: goal_prompt(&goal),
-                ready_patterns: vec!["agy".to_string()],
+                // Readiness must key on a marker that appears ONLY once agy's TUI
+                // input box is live — NOT "agy", which the launch command echoes
+                // (`agy -i ''`) while the shell is still running, causing a false
+                // ready that sends the real prompt into the shell (prompt lost).
+                // agy's idle input box shows "? for shortcuts"; wait for that.
+                ready_patterns: vec!["? for shortcuts".to_string()],
                 confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
                 needs_probe: true,
                 // Mechanical completion via the ~/.gemini SessionEnd hook that
@@ -905,9 +914,11 @@ mod tests {
         //          starts, so `-i` must still be followed by a value.
         //  v0.9.0: baking the ~1000-char goal prompt into `agy -i '<prompt>'`
         //          got truncated by tmux paste/terminal limits. So the launch
-        //          must carry only a SHORT placeholder, and the real prompt must
-        //          be sent later into the TUI (launch_includes_prompt = false),
-        //          exactly like codex/pi.
+        //          carries an EMPTY placeholder and the real prompt is sent later
+        //          into the TUI (launch_includes_prompt = false), like codex/pi.
+        //  v0.9.1-followup: the placeholder MUST be empty ('') — a word like
+        //          "start" makes agy treat it as a real instruction and explore
+        //          the workspace, racing with/corrupting the real prompt.
         let agy = runner_plan("agy", goal, "r1");
         let launch = agy.launch.as_deref().unwrap();
         // `-i` is followed by a value (bug #1 stays fixed)...
@@ -915,11 +926,11 @@ mod tests {
             launch.contains("agy -i '"),
             "agy -i must still carry a value, got: {launch}"
         );
-        // ...but that value is the SHORT placeholder, NOT the long goal prompt
-        // (bug #2 stays fixed).
+        // ...and that value is EMPTY, not a word that agy would act on, and NOT
+        // the long goal prompt (bugs #2 + #3 stay fixed).
         assert!(
-            launch.contains("agy -i 'start'"),
-            "agy launch must use a short placeholder prompt, got: {launch}"
+            launch.contains("agy -i ''"),
+            "agy launch must use an EMPTY placeholder ('') so agy stays idle, got: {launch}"
         );
         assert!(
             !launch.contains("Read the file"),
