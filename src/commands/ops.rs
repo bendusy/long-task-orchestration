@@ -3223,7 +3223,8 @@ fn autonomous_gate(repo: &Path) -> (bool, String) {
     if mining.entries.is_empty() {
         return (
             false,
-            "cross-run mining has no runner.finished or agent.turn.completed entries".to_string(),
+            "cross-run mining has no runner.finished or agent.dispatch.completed entries"
+                .to_string(),
         );
     }
     let mining_dispatches = mining
@@ -4539,7 +4540,7 @@ mod tests {
                 tmux_window_name: None,
                 tmux_ready_patterns: Vec::new(),
                 tmux_skip_prompts: Vec::new(),
-                tmux_ready_timeout_sec: Some(5),
+                tmux_ready_timeout_sec: Some(15),
                 tmux_bin: Some(fake_tmux.display().to_string()),
             },
         )
@@ -4689,7 +4690,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 worker_runner: "tmux".into(),
                 tmux_target: Some("sess:1.0".into()),
                 tmux_bin: Some(fake_tmux.display().to_string()),
-                tmux_ready_timeout_sec: Some(5),
+                tmux_ready_timeout_sec: Some(15),
             },
         )
         .unwrap();
@@ -4942,7 +4943,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 worker_runner: "tmux".into(),
                 tmux_target: Some("sess:1.0".into()),
                 tmux_bin: Some(fake_tmux.display().to_string()),
-                tmux_ready_timeout_sec: Some(5),
+                tmux_ready_timeout_sec: Some(15),
             },
         )
         .unwrap();

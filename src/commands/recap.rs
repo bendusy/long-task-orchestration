@@ -386,10 +386,10 @@ fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
         String::new(),
     ];
     if mining.entries.is_empty() {
-        lines.push("未发现可挖掘的 runner.finished 或 agent.turn.completed 事件。".to_string());
+        lines.push("未发现可挖掘的 runner.finished 或 agent.dispatch.completed 事件。".to_string());
         return lines.join("\n");
     }
-    lines.push("| Runner | Model | 任务类型 | 时间窗 | distinct runs | 失败率 | 平均耗时 | 平均 retry | 平均 audit 轮次 | turn.completed | 评估类型 |".to_string());
+    lines.push("| Runner | Model | 任务类型 | 时间窗 | distinct runs | 失败率 | 平均耗时 | 平均 retry | 平均 audit 轮次 | dispatch.completed | 评估类型 |".to_string());
     lines.push(
         "| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |"
             .to_string(),
@@ -406,7 +406,7 @@ fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
             format_opt_seconds(entry.avg_elapsed_sec),
             format_opt_float(entry.avg_retry),
             format_opt_float(entry.avg_audit_rounds),
-            entry.agent_turn_completed,
+            entry.agent_dispatch_completed,
             if entry.subjective_non_measurement {
                 "主观非测量"
             } else {
@@ -548,7 +548,7 @@ mod tests {
                 avg_elapsed_sec: Some(12.0),
                 avg_retry: Some(0.5),
                 avg_audit_rounds: Some(1.0),
-                agent_turn_completed: 2,
+                agent_dispatch_completed: 2,
                 distinct_runs: 2,
                 subjective_non_measurement: false,
             }],

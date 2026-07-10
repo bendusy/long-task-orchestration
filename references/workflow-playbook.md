@@ -318,10 +318,14 @@ run-state、task evidence 或等价 artifact：
   `plugins/adversarial-audit` 的 refuter profile）。
 - `lto runner` 落实现证据；`lto audit --auto-dispatch` 做 impl-audit。
 - 长目标要交给 codex/pi/agy 在 tmux 中自驱时，用 `lto dispatch-goal`
-  派 goal；codex Stop hook 和 agy pane-exit wrapper 会把完成通知写入
-  对应 run 的 `events.jsonl` 中的 `agent.turn.completed`，不写单独的
-  turns 日志。pi 走真实 TUI 派工，当前只记录 `manual-pi-tui`，直到
-  可靠 hook/sentinel 实装前不声称自动完成。
+  派 goal；普通 Codex Stop 只写 per-turn 的 `agent.turn.completed`，
+  transcript 中出现真实 `update_goal complete` 后才写
+  `agent.dispatch.completed`。pi/agy 走真实 TUI，进程退出 wrapper 把真实
+  rc 写入同一个 dispatch 完成事件。wait/cleanup 只认 dispatch 事件。
+- 自动窗口名是 `lto:<runner>:<goal-slug>`；显示名不参与程序寻址。
+  LTO 自建窗口的不可变 `@window_id` 记录在 run state，成功后清理，失败、
+  timeout、交互阻塞或 `--keep-window` 时保留。显式用户 `--target` 不会被
+  纳入清理，除非它本来就是该 run 记录的 retained LTO 窗口。
 - worktree_exec 在 dispatch 阶段隔离写入（specify 全程 read-only，
   spec 收口后才开 worktree）。
 - `lto judge` / `lto closeout`。

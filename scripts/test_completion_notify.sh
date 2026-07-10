@@ -48,6 +48,7 @@ printf 'Working\n'
   --run-id "${LTO_RUN_ID:?}" \
   --runner codex \
   --summary "fake goal done" \
+  --source codex-process-exit \
   --rc 0 \
   --bell
 EOF
@@ -78,7 +79,7 @@ TARGET="$("$TMUX_BIN" new-session -d -P -F '#{session_name}:#{window_index}.#{pa
 
 "$LTO_BIN" --repo "$REPO" events \
   --wait \
-  --event-type agent.turn.completed \
+  --event-type agent.dispatch.completed \
   --run-id notify-e2e \
   --timeout 10 > "$TMP/wait.out" &
 WAITER_PID=$!
@@ -109,16 +110,19 @@ wait "$WAITER_PID"
 WAITER_PID=""
 
 grep -F "fake goal done" "$TMP/wait.out" >/dev/null
-grep -F "wait_command=lto events --wait --event-type agent.turn.completed --run-id notify-e2e --timeout 600" "$TMP/dispatch.out" >/dev/null
+grep -F "wait_command=lto events --wait --event-type agent.dispatch.completed --run-id notify-e2e --timeout 600" "$TMP/dispatch.out" >/dev/null
 grep -F "dispatch_and_wait=lto dispatch-and-wait" "$TMP/dispatch.out" >/dev/null
 test "$(cat "$NOTIFIED")" = "fake goal done"
 
 printf '{"cwd":"%s"}\n' "$REPO" |
   LTO_BIN="$TMP/capture-lto" \
   LTO_CAPTURE_FILE="$TMP/hook-args.txt" \
-  LTO_REPO_FALLBACK="$REPO" \
   bash "$ROOT/scripts/hooks/codex-stop-notify.sh"
 grep -Fx -- "--bell" "$TMP/hook-args.txt" >/dev/null
+if grep -Fx -- "--rc" "$TMP/hook-args.txt" >/dev/null; then
+  echo "codex Stop hook must not fabricate rc" >&2
+  exit 1
+fi
 
-grep -F '"type":"agent.turn.completed"' "$REPO/.lto/notify-e2e/events.jsonl" >/dev/null
+grep -F '"type":"agent.dispatch.completed"' "$REPO/.lto/notify-e2e/events.jsonl" >/dev/null
 printf 'completion notification e2e: PASS\n'

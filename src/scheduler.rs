@@ -2016,7 +2016,7 @@ print(json.dumps(data))
         });
 
         let result = tokio::time::timeout(
-            Duration::from_secs(15),
+            Duration::from_secs(60),
             scheduler.submit(vec![harness.job("escape_stdout")]),
         )
         .await

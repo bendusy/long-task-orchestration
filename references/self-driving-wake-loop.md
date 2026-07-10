@@ -3,6 +3,8 @@
 > 状态：设计 spec，待实现。2026-06-20 写。
 > 来源：业界调研（hcom 343★ / Agent Room / Hook Shim Pattern）+ hcom 源码深调。
 > 决策：host 已裁 ① 传输层 = TCP connect-drop（抄 hcom）② 范围 = 完整四件套 ③ 跨 runtime 通用。
+>
+> **2026-07-10 现状修正**：本文保留为历史设计记录。Codex Stop 是 per-turn，不能代表 goal 完成；当前 waiter 使用 `agent.dispatch.completed`。Codex 只有在 transcript 出现真实 `update_goal complete` 时发该事件，pi/agy 使用 TUI 进程退出的真实 rc。下文把 Stop/`agent.turn.completed` 写成“任务完成”的段落不再是当前运行指引。
 
 ## 为什么做（第一性）
 

@@ -137,9 +137,9 @@ See also: lto dispatch-goal (goal-file dispatch), lto events --wait (await compl
     #[command(
         about = "Dispatch a goal file AND block until the agent completes (dispatch-goal + events --wait)",
         long_about = "One-step convenience: dispatch a goal to an external agent, then block until \
-its agent.turn.completed event fires (the mechanical completion hook installed by dispatch), and \
+its agent.dispatch.completed event fires (goal-state proof or process exit with a real rc), and \
 print a summary. Equivalent to `lto dispatch-goal ...` followed by `lto events --wait \
---event-type agent.turn.completed`, but in a single call.\n\
+--event-type agent.dispatch.completed`, but in a single call.\n\
 \n\
 Examples:\n  \
 lto dispatch-and-wait --runner codex --goal goal.md               # dispatch + wait (default 600s)\n  \
@@ -153,7 +153,7 @@ The single-step `lto dispatch-goal` and `lto events --wait` remain available for
         about = "Dispatch a goal file to codex, pi, or agy through tmux",
         long_about = "Dispatch a goal file to an external agent (codex/pi/agy) in a real tmux TUI. \
 With no --target/--new-window it opens a visible window in your current tmux session. \
-Installs the runner's completion hook so the agent wakes you when done.\n\
+Uses goal-state proof or a real process rc so the agent wakes you only when the dispatch is done.\n\
 \n\
 Examples:\n  \
 lto dispatch-goal --runner codex --goal goal.md          # dispatch into current tmux\n  \
@@ -381,7 +381,10 @@ lto prune --run-id <id> --yes     # prune one specific closed run"
         #[command(subcommand)]
         command: MemoryCommand,
     },
-    #[command(hide = true, about = "Emit an agent turn completion event from a hook")]
+    #[command(
+        hide = true,
+        about = "Route an agent lifecycle event from a hook or process wrapper"
+    )]
     AgentTurnCompleted(AgentTurnCompletedCommand),
     #[command(about = "Manage data-only plugins and eval packs")]
     Plugin {
@@ -533,6 +536,9 @@ pub struct DispatchGoalCommand {
     new_window: bool,
     #[arg(long = "window-name")]
     window_name: Option<String>,
+    /// Preserve an LTO-created window after successful completion.
+    #[arg(long = "keep-window")]
+    keep_window: bool,
     #[arg(long)]
     cwd: Option<PathBuf>,
     #[arg(long = "tmux-session")]
@@ -542,7 +548,7 @@ pub struct DispatchGoalCommand {
     #[arg(long = "ready-timeout")]
     ready_timeout: Option<u64>,
     /// Host notification command persisted on the run and executed when the
-    /// completion hook fires. Untrusted summary text is exposed via $LTO_SUMMARY.
+    /// dispatch completion fires. Untrusted summary text is exposed via $LTO_SUMMARY.
     #[arg(long = "notify-cmd")]
     notify_cmd: Option<String>,
     #[arg(long = "no-install-hooks")]
@@ -576,6 +582,9 @@ pub struct AgentTurnCompletedCommand {
     summary: Option<String>,
     #[arg(long)]
     rc: Option<i32>,
+    /// Immutable tmux window id inherited from dispatch-goal (for example @42).
+    #[arg(long = "window-id")]
+    window_id: Option<String>,
     #[arg(long, default_value = "hook")]
     source: String,
     /// Ring the terminal/tmux bell on completion (off by default).
@@ -1198,6 +1207,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     target: cmd.target,
                     new_window: cmd.new_window,
                     window_name: cmd.window_name,
+                    keep_window: cmd.keep_window,
                     cwd: cmd.cwd,
                     tmux_session: cmd.tmux_session,
                     tmux_bin: cmd.tmux_bin,
@@ -1225,6 +1235,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     target: d.target,
                     new_window: d.new_window,
                     window_name: d.window_name,
+                    keep_window: d.keep_window,
                     cwd: d.cwd,
                     tmux_session: d.tmux_session,
                     tmux_bin: d.tmux_bin,
@@ -1235,13 +1246,13 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 },
             )?;
             println!(
-                "\nwaiting up to {}s for agent.turn.completed on run {run_id} ...",
+                "\nwaiting up to {}s for agent.dispatch.completed on run {run_id} ...",
                 cmd.timeout
             );
             match crate::events::wait_for(
                 &args.repo,
                 &run_id,
-                "agent.turn.completed",
+                "agent.dispatch.completed",
                 None,
                 std::time::Duration::from_secs(cmd.timeout),
             )? {
@@ -1255,14 +1266,30 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                         .and_then(|f| f.get("runner"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("?");
-                    println!("DONE runner={runner} summary={summary}");
+                    let rc = event
+                        .get("fields")
+                        .and_then(|fields| fields.get("rc"))
+                        .and_then(|value| value.as_i64());
+                    if rc != Some(0) {
+                        anyhow::bail!(
+                            "dispatch completed without success (runner={runner}, rc={}); window retained for troubleshooting",
+                            rc.map(|value| value.to_string())
+                                .unwrap_or_else(|| "unknown".to_string())
+                        );
+                    }
+                    println!("DONE runner={runner} rc=0 summary={summary}");
                     println!(
                         "Register the reply as evidence with: lto collect-agent-run --run-id {run_id} --runner {runner} --reply <path>"
                     );
                 }
                 None => {
-                    println!(
-                        "TIMEOUT after {}s — the agent may still be running. Check with `lto events --wait --run-id {run_id}` or `tmux` directly.",
+                    crate::dispatch_goal::retain_latest_dispatch_window(
+                        &args.repo,
+                        &run_id,
+                        &format!("dispatch-and-wait timeout after {}s", cmd.timeout),
+                    );
+                    anyhow::bail!(
+                        "TIMEOUT after {}s; the agent may still be running and its window was retained. Check with `lto events --wait --run-id {run_id}` or `tmux` directly.",
                         cmd.timeout
                     );
                 }
@@ -1556,6 +1583,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     session_id: cmd.session_id,
                     summary: cmd.summary,
                     rc: cmd.rc,
+                    window_id: cmd.window_id,
                     source: cmd.source,
                     bell: cmd.bell,
                     notify_cmd: cmd.notify_cmd,

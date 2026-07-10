@@ -3,6 +3,7 @@
 > 状态：设计已对齐，待实现。2026-07-01。
 > 范围：一份 spec 统一解决两块系统性欠债——A=日志 retention（.lto 已 3.1G/44 run 零清理），B=命令 UX（agent 调错/不愿调，子代理实证 15 痛点）。
 > 决策已定：八项全做（A1-A3 + B1-B5）。
+> 2026-07-10 现状修正：本文的 `dispatch-and-wait` 设计段落保留为历史背景；当前等待事件是 `agent.dispatch.completed`，不是 per-turn 的 `agent.turn.completed`。
 
 ## 为什么做（第一性）
 

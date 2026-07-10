@@ -5,8 +5,7 @@ payload="${TMPDIR:-/tmp}/lto-codex-stop-$$.json"
 cat > "$payload" 2>/dev/null || true
 
 lto_bin="${LTO_BIN:-lto}"
-fallback_repo="${LTO_REPO_FALLBACK:-${LTO_REPO:-.}}"
-repo="$fallback_repo"
+repo="${LTO_REPO:-.}"
 if command -v python3 >/dev/null 2>&1; then
   detected_repo="$(python3 - "$payload" <<'PY' 2>/dev/null
 import json
@@ -39,6 +38,9 @@ fi
 args=(--repo "$repo" agent-turn-completed --runner codex --payload-file "$payload" --source codex-stop-hook --bell)
 if [ -n "${LTO_RUN_ID:-}" ]; then
   args+=(--run-id "$LTO_RUN_ID")
+fi
+if [ -n "${LTO_WINDOW_ID:-}" ]; then
+  args+=(--window-id "$LTO_WINDOW_ID")
 fi
 
 "$lto_bin" "${args[@]}" >/dev/null 2>&1 || true

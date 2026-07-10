@@ -175,6 +175,8 @@ pub struct LtoState {
     pub blocked_by: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_cmd: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dispatch_windows: Vec<DispatchWindowState>,
     #[serde(default)]
     pub artifacts: Value,
     #[serde(flatten)]
@@ -212,10 +214,26 @@ impl Default for LtoState {
             next_action: Value::Null,
             blocked_by: Value::Null,
             notify_cmd: None,
+            dispatch_windows: Vec::new(),
             artifacts: Value::Object(Map::new()),
             extra: Map::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchWindowState {
+    pub window_id: String,
+    pub target: String,
+    pub runner: String,
+    pub tmux_bin: String,
+    pub cleanup_on_success: bool,
+    pub status: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_reason: Option<String>,
 }
 
 pub fn iso_now() -> String {

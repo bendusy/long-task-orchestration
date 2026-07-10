@@ -26,6 +26,7 @@ additionally shows clap's built-in `help` pseudo-command; it is not listed here.
 | `resume` | Rust core | removed |
 | `preflight` | Rust core | removed |
 | `runner` | Rust core | removed |
+| `dispatch-and-wait` | Rust core | removed |
 | `judge` | Rust core | removed |
 | `hook` | Rust core | removed |
 | `self-test` | Rust core | removed |
@@ -39,6 +40,7 @@ additionally shows clap's built-in `help` pseudo-command; it is not listed here.
 | `run` | Rust core | removed |
 | `collect-agent-run` | Rust core | removed |
 | `runs` | Rust core | removed |
+| `prune` | Rust core | removed |
 | `memory` | Rust core | removed |
 | `plugin` | Rust core | removed |
 | `dispatch-goal` | Rust core | removed |

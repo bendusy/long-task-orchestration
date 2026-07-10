@@ -103,7 +103,7 @@ LTO 依赖的是**接口**，不是具体实现。每个插槽都有两档：不
 
 - codex 当宿主：默认沙箱会挡子 runner 写文件，triad 派工全 FAIL；需 `--dangerously-bypass-approvals-and-sandbox` 才可用，仅受控本机场景适用。更优解是给子 runner 专用可写 roots/HOME，最小放权，而非全盘 bypass。
 - pi / agy 当宿主：无需放开沙箱，默认可派工。
-- 任何宿主：pi/DeepSeek 审 16KB 内容耗时可达 170-200s，timeout 要给足 240s+；agy 交互式启动需带初始 prompt（`agy -i "..."`，不带会立即退出）。`lto dispatch-goal --runner agy` 为了拿到可靠的进程退出完成信号，使用 `--print` wrapper；`lto dispatch-goal --runner pi` 必须走真实 TUI，当前记录 `completion_mode=manual-pi-tui`，不伪造自动完成事件。
+- 任何宿主：pi/DeepSeek 审 16KB 内容耗时可达 170-200s，timeout 要给足 240s+；agy 交互式启动用 `agy -i ''` 拉起真实 TUI，长 prompt 随后 paste，不能退回只给方案的 `--print`。pi/agy 的 dispatch 完成由 TUI 进程退出 wrapper 读取真实 rc；Codex Stop 只代表一轮结束，只有 `/goal` 的 `update_goal complete` 证据才算 dispatch 完成。
 
 ---
 
@@ -137,6 +137,8 @@ LTO 的公开语义只是 artifact memory projection：导出 redacted run snaps
 
 **后台派工原则**（纯方法论，两档通用）：
 - 派出去就不要轮询，设长兜底心跳，等通知。
+- 等 `agent.dispatch.completed`，不要用 per-turn 的 `agent.turn.completed` 代替整个 goal 完成。
+- LTO 新建窗口按 `lto:<runner>:<goal-slug>` 展示、按不可变 `@window_id` 寻址；成功自动清理，失败/超时/`--keep-window` 保留。
 - 等待期挖下一步的事实地基（真实代码 / 真实分布 / 真实配置），不靠记忆。
 - 多批并行分批起，每批都完整深做，不为省时间砍深度。
 

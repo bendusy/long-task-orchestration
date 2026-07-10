@@ -1,6 +1,7 @@
 use crate::commands::util;
 use crate::events::{self, EventRecord};
-use crate::tmux_runner::{self, SkipPrompt, TmuxMode, TmuxRunnerConfig};
+use crate::state::DispatchWindowState;
+use crate::tmux_runner::{self, SkipPrompt, TmuxDispatchSafety, TmuxMode, TmuxRunnerConfig};
 use anyhow::{Context, anyhow};
 use serde_json::{Value, json};
 use std::fs;
@@ -9,9 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LTO_HOOK_MARKER: &str = "long-task-orchestration";
 const DEFAULT_COMPLETION_WAIT_SEC: u64 = 600;
+const DEFAULT_DISPATCH_READY_TIMEOUT_SEC: u64 = 60;
 const CODEX_STOP_HOOK: &str = include_str!("../scripts/hooks/codex-stop-notify.sh");
-const PI_AGENT_END_HOOK: &str = include_str!("../scripts/hooks/pi-agent-end-notify.ts");
-const GOAL_CONSTRAINT_SUMMARY: &str = "Use LTO discipline: keep LTO self-managed, run required redlines, and write the local commit when accepted while leaving release/tag/push to the host. For heterogeneous audit before closeout, you are a host: run `lto audit --auto-dispatch` (and `lto dispatch-goal --runner <name> --goal <file>` for sub-tasks), then block on `lto events --wait --event-type agent.turn.completed --timeout <sec>` to collect replies. NEVER impersonate another runner or hand-write reply-*.md yourself — that fabricates cross-family audit evidence; if no healthy heterogeneous runner is available, stop and report blocked rather than self-audit. For any external docs/API/tool-capability lookup, route through `hs` first (Hybrid Search) rather than raw web fetches, then confirm against the local `--help`/config/binary before acting — external sources can name the wrong project; local evidence decides.";
+const GOAL_CONSTRAINT_SUMMARY: &str = "Use LTO discipline: keep LTO self-managed, run required redlines, and write the local commit when accepted while leaving release/tag/push to the host. For heterogeneous audit before closeout, you are a host: run `lto audit --auto-dispatch` (and `lto dispatch-goal --runner <name> --goal <file>` for sub-tasks), then block on `lto events --wait --event-type agent.dispatch.completed --timeout <sec>` to collect replies. NEVER impersonate another runner or hand-write reply-*.md yourself — that fabricates cross-family audit evidence; if no healthy heterogeneous runner is available, stop and report blocked rather than self-audit. For any external docs/API/tool-capability lookup, route through `hs` first (Hybrid Search) rather than raw web fetches, then confirm against the local `--help`/config/binary before acting — external sources can name the wrong project; local evidence decides.";
 
 #[derive(Debug, Clone)]
 pub struct DispatchGoalOptions {
@@ -21,6 +22,7 @@ pub struct DispatchGoalOptions {
     pub target: Option<String>,
     pub new_window: bool,
     pub window_name: Option<String>,
+    pub keep_window: bool,
     pub cwd: Option<PathBuf>,
     pub tmux_session: Option<String>,
     pub tmux_bin: Option<String>,
@@ -84,20 +86,21 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
         }
     } else {
         match options.runner.as_str() {
-            // codex: ~/.codex Stop hook; agy: ~/.gemini SessionEnd hook. pi
-            // needs no install here — its agent_end extension is loaded via the
-            // launch command's `-e` flag (see runner_plan).
+            // Codex needs its Stop hook as a sampling point: the Rust handler
+            // only promotes a turn to dispatch-complete after transcript proof
+            // that the active /goal was marked complete. pi/agy use process-exit
+            // wrappers with a real rc and need no global completion hook.
             "codex" => install_codex_hook(repo).unwrap_or_else(degraded),
-            "agy" => install_agy_hook(repo).unwrap_or_else(degraded),
+            "agy" => uninstall_agy_hook(repo).unwrap_or_else(degraded),
             _ => HookStatus {
                 status: "skipped".to_string(),
-                detail: "runner installs completion hook inline (pi) or has none".to_string(),
+                detail: "runner completion uses the process-exit wrapper".to_string(),
                 script_path: None,
             },
         }
     };
 
-    let outcome = run_dispatch(repo, &ctx.run_id, &options, &goal_path, &cwd)?;
+    let outcome = run_dispatch(repo, &mut ctx, &options, &goal_path, &cwd)?;
     let dispatch_path = write_dispatch_record(
         &ctx.run_dir,
         &options,
@@ -120,6 +123,8 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
                 "runner": options.runner,
                 "goal": goal_path.display().to_string(),
                 "target": outcome.target,
+                "window_id": outcome.window_id,
+                "cleanup_on_success": !options.keep_window,
                 "completion_event": outcome.completion_event,
                 "completion_mode": outcome.completion_mode,
                 "turns_jsonl": false,
@@ -133,6 +138,10 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     println!("status=dispatched");
     println!("runner={}", options.runner);
     println!("target={}", outcome.target);
+    println!(
+        "window_id={}",
+        outcome.window_id.as_deref().unwrap_or("none")
+    );
     println!("dispatch_record={}", dispatch_path.display());
     println!(
         "completion_event={}",
@@ -156,9 +165,190 @@ fn persist_notify_cmd(ctx: &mut util::RunContext, notify_cmd: Option<&str>) -> a
     Ok(())
 }
 
+fn persist_dispatch_window(
+    ctx: &mut util::RunContext,
+    options: &DispatchGoalOptions,
+    config: &TmuxRunnerConfig,
+    target: &str,
+    window_id: &str,
+) -> anyhow::Result<()> {
+    if let Some(window) = ctx.state.dispatch_windows.iter_mut().rev().find(|window| {
+        window.window_id == window_id
+            && window.runner == options.runner
+            && window.status != "cleaned"
+    }) {
+        window.target = target.to_string();
+        window.tmux_bin = config.tmux_bin.clone();
+        window.cleanup_on_success = !options.keep_window;
+        window.status = "active".to_string();
+        window.finished_at = None;
+        window.retention_reason = None;
+        return util::save_run(ctx);
+    }
+    ctx.state.dispatch_windows.push(DispatchWindowState {
+        window_id: window_id.to_string(),
+        target: target.to_string(),
+        runner: options.runner.clone(),
+        tmux_bin: config.tmux_bin.clone(),
+        cleanup_on_success: !options.keep_window,
+        status: "active".to_string(),
+        created_at: crate::state::iso_now(),
+        finished_at: None,
+        retention_reason: None,
+    });
+    util::save_run(ctx)
+}
+
+fn dispatch_window_id(
+    ctx: &util::RunContext,
+    options: &DispatchGoalOptions,
+    target: &str,
+) -> Option<String> {
+    if options.target.is_none() {
+        return tmux_runner::window_id_from_target(target);
+    }
+    let target_window_id = tmux_runner::window_id_from_target(target);
+    ctx.state
+        .dispatch_windows
+        .iter()
+        .rev()
+        .find(|window| {
+            window.runner == options.runner
+                && window.status != "cleaned"
+                && (window.target == target
+                    || target_window_id.as_deref() == Some(window.window_id.as_str()))
+        })
+        .map(|window| window.window_id.clone())
+}
+
+fn retain_dispatch_window(
+    ctx: &mut util::RunContext,
+    window_id: &str,
+    reason: &str,
+) -> anyhow::Result<()> {
+    if let Some(window) = ctx
+        .state
+        .dispatch_windows
+        .iter_mut()
+        .rev()
+        .find(|window| window.window_id == window_id && window.status == "active")
+    {
+        window.status = "retained".to_string();
+        window.finished_at = Some(crate::state::iso_now());
+        window.retention_reason = Some(reason.to_string());
+        util::save_run(ctx)?;
+    }
+    Ok(())
+}
+
+fn dispatch_window_name(options: &DispatchGoalOptions, goal_path: &Path, run_id: &str) -> String {
+    options
+        .window_name
+        .clone()
+        .unwrap_or_else(|| goal_window_name(&options.runner, goal_path, run_id))
+}
+
+fn goal_window_name(runner: &str, goal_path: &Path, run_id: &str) -> String {
+    let stem = goal_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let mut source = if stem == "goal" {
+        ""
+    } else {
+        stem.strip_prefix("goal-").unwrap_or(stem)
+    };
+    if is_date_prefix(source.as_bytes()) {
+        source = &source[11..];
+    }
+
+    let mut slug = String::new();
+    let mut previous_dash = false;
+    for ch in source.chars() {
+        let normalized = ch.to_ascii_lowercase();
+        if normalized.is_ascii_lowercase() || normalized.is_ascii_digit() {
+            slug.push(normalized);
+            previous_dash = false;
+        } else if !previous_dash && !slug.is_empty() {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+    slug.truncate(20);
+    let slug = slug.trim_matches('-');
+    let fallback = run_id
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    let slug = if slug.is_empty() {
+        if fallback.is_empty() {
+            "window"
+        } else {
+            &fallback
+        }
+    } else {
+        slug
+    };
+    format!("lto:{runner}:{slug}")
+}
+
+fn is_date_prefix(bytes: &[u8]) -> bool {
+    bytes.len() >= 11
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+        && bytes[10] == b'-'
+}
+
+pub fn retain_latest_dispatch_window(repo: &Path, run_id: &str, reason: &str) {
+    let Ok(mut ctx) = util::load_run(repo, Some(run_id)) else {
+        return;
+    };
+    let window_id = ctx
+        .state
+        .dispatch_windows
+        .iter()
+        .rev()
+        .find(|window| window.status == "active")
+        .map(|window| window.window_id.clone());
+    if let Some(window_id) = window_id
+        && let Err(err) = retain_dispatch_window(&mut ctx, &window_id, reason)
+    {
+        eprintln!("warning: could not retain dispatch window {window_id}: {err}");
+    }
+}
+
+fn blocked_patterns(runner: &str) -> Vec<String> {
+    let mut patterns = vec!["Press enter to confirm".to_string()];
+    if runner == "codex" {
+        patterns.extend([
+            "Hooks need review".to_string(),
+            "hook needs review".to_string(),
+            "Trust all and continue".to_string(),
+            "Press t to trust all".to_string(),
+        ]);
+    }
+    patterns
+}
+
+fn blocked_prompt_hint(runner: &str) -> String {
+    if runner == "codex" {
+        "runner codex is blocked on an interactive trust prompt; select \"Trust all and continue\", then exit codex back to the shell"
+            .to_string()
+    } else {
+        format!("runner {runner} is blocked on an interactive prompt")
+    }
+}
+
 fn completion_wait_command(run_id: &str) -> String {
     format!(
-        "lto events --wait --event-type agent.turn.completed --run-id {run_id} --timeout {DEFAULT_COMPLETION_WAIT_SEC}"
+        "lto events --wait --event-type agent.dispatch.completed --run-id {run_id} --timeout {DEFAULT_COMPLETION_WAIT_SEC}"
     )
 }
 
@@ -172,27 +362,35 @@ fn dispatch_and_wait_command(options: &DispatchGoalOptions, run_id: &str) -> Str
 
 fn run_dispatch(
     repo: &Path,
-    run_id: &str,
+    ctx: &mut util::RunContext,
     options: &DispatchGoalOptions,
     goal_path: &Path,
     cwd: &Path,
 ) -> anyhow::Result<GoalDispatchOutcome> {
-    let plan = runner_plan(&options.runner, goal_path, run_id);
+    let run_id = ctx.run_id.clone();
+    let repo_path = absolutize(repo)?;
+    let plan = runner_plan(&options.runner, goal_path, &run_id);
     let config = TmuxRunnerConfig {
         mode: TmuxMode::Fire,
         target: options.target.clone(),
         session: options.tmux_session.clone(),
         new_window: options.new_window,
         new_session: false,
-        window_name: options
-            .window_name
-            .clone()
-            .unwrap_or_else(|| format!("lto-goal-{}", options.runner)),
+        window_name: dispatch_window_name(options, goal_path, &run_id),
         signal_name: "lto-dispatch-goal".to_string(),
         sentinel_path: None,
         ready_patterns: plan.ready_patterns.clone(),
         skip_prompts: default_skip_prompts(),
-        ready_timeout: Duration::from_secs(options.ready_timeout_sec.unwrap_or(20)),
+        dispatch_safety: TmuxDispatchSafety {
+            blocked_patterns: blocked_patterns(&options.runner),
+            blocked_prompt_hint: Some(blocked_prompt_hint(&options.runner)),
+            reject_busy_target: true,
+        },
+        ready_timeout: Duration::from_secs(
+            options
+                .ready_timeout_sec
+                .unwrap_or(DEFAULT_DISPATCH_READY_TIMEOUT_SEC),
+        ),
         poll_interval: Duration::from_millis(500),
         capture_lines: 80,
         tmux_bin: options
@@ -203,47 +401,82 @@ fn run_dispatch(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime
-        .block_on(async {
-            let target = tmux_runner::prepare_dispatch_target(&config).await?;
+    let mut created_window_id = None;
+    let result = runtime.block_on(async {
+        let target = tmux_runner::prepare_dispatch_target(&config).await?;
+        let window_id = dispatch_window_id(ctx, options, &target);
+        if let Some(window_id) = window_id.as_deref() {
+            persist_dispatch_window(ctx, options, &config, &target, window_id).map_err(|err| {
+                tmux_runner::TmuxRunnerError::Io(format!(
+                    "persist dispatch window {window_id}: {err}"
+                ))
+            })?;
+            created_window_id = Some(window_id.to_string());
             tmux_runner::send_dispatch_text(
                 &config,
                 &target,
-                &format!("cd {}", shell_single_quote(&cwd.display().to_string())),
+                &format!("export LTO_WINDOW_ID={}", shell_single_quote(window_id)),
             )
             .await?;
-            if let Some(launch) = &plan.launch {
-                tmux_runner::send_dispatch_text(&config, &target, launch).await?;
-                tmux_runner::wait_for_dispatch_ready(&config, &target).await?;
+        }
+        tmux_runner::send_dispatch_text(
+            &config,
+            &target,
+            &format!(
+                "export LTO_REPO={}",
+                shell_single_quote(&repo_path.display().to_string())
+            ),
+        )
+        .await?;
+        tmux_runner::send_dispatch_text(
+            &config,
+            &target,
+            &format!("cd {}", shell_single_quote(&cwd.display().to_string())),
+        )
+        .await?;
+        if let Some(launch) = &plan.launch {
+            tmux_runner::send_dispatch_text(&config, &target, launch).await?;
+            tmux_runner::wait_for_dispatch_ready(&config, &target).await?;
+        }
+        // When the launch line already carries the prompt (agy -i '<prompt>'),
+        // the prompt is submitted at startup — do NOT probe or re-send it, or
+        // it would be entered twice. codex/pi start a REPL first, so they
+        // probe then send the prompt on a separate line.
+        if !plan.launch_includes_prompt {
+            if plan.needs_probe {
+                let probe = format!("LTO_PROBE_{}", now_millis());
+                let _ = tmux_runner::confirm_tui_input(&config, &target, &probe).await?;
             }
-            // When the launch line already carries the prompt (agy -i '<prompt>'),
-            // the prompt is submitted at startup — do NOT probe or re-send it, or
-            // it would be entered twice. codex/pi start a REPL first, so they
-            // probe then send the prompt on a separate line.
-            if !plan.launch_includes_prompt {
-                if plan.needs_probe {
-                    let probe = format!("LTO_PROBE_{}", now_millis());
-                    let _ = tmux_runner::confirm_tui_input(&config, &target, &probe).await?;
-                }
-                tmux_runner::send_dispatch_text(&config, &target, &plan.prompt).await?;
-            }
-            let capture =
-                tmux_runner::wait_for_capture_patterns(&config, &target, &plan.confirm_patterns)
-                    .await?;
-            Ok::<_, tmux_runner::TmuxRunnerError>(GoalDispatchOutcome {
-                target,
-                capture,
-                repo: cwd.display().to_string(),
-                completion_event: plan.completion_event,
-                completion_mode: plan.completion_mode,
-            })
+            tmux_runner::send_dispatch_text(&config, &target, &plan.prompt).await?;
+        }
+        let capture =
+            tmux_runner::wait_for_capture_patterns(&config, &target, &plan.confirm_patterns)
+                .await?;
+        Ok::<_, tmux_runner::TmuxRunnerError>(GoalDispatchOutcome {
+            target,
+            window_id,
+            capture,
+            repo: cwd.display().to_string(),
+            completion_event: plan.completion_event,
+            completion_mode: plan.completion_mode,
         })
-        .map_err(|err| anyhow!("dispatch-goal tmux failure in {}: {err}", repo.display()))
+    });
+    result.map_err(|err| {
+        if let Some(window_id) = created_window_id.as_deref() {
+            let reason = format!("dispatch failed: {err}");
+            if let Err(save_err) = retain_dispatch_window(ctx, window_id, &reason) {
+                eprintln!("warning: could not persist retained window {window_id}: {save_err}");
+            }
+            eprintln!("dispatch failed; window {window_id} retained for troubleshooting");
+        }
+        anyhow!("dispatch-goal tmux failure in {}: {err}", repo.display())
+    })
 }
 
 #[derive(Debug, Clone)]
 struct GoalDispatchOutcome {
     target: String,
+    window_id: Option<String>,
     capture: String,
     repo: String,
     completion_event: Option<String>,
@@ -259,52 +492,28 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
             ready_patterns: vec!["gpt-".to_string()],
             confirm_patterns: vec!["Pursuing goal".to_string(), "Working".to_string()],
             needs_probe: true,
-            completion_event: Some("agent.turn.completed".to_string()),
-            completion_mode: "auto-event".to_string(),
+            completion_event: Some("agent.dispatch.completed".to_string()),
+            completion_mode: "codex-goal-state-hook".to_string(),
             // codex starts a REPL, then takes /goal on a later line.
             launch_includes_prompt: false,
         },
         "pi" => {
-            // pi runs in a real tmux TUI (never headless). Completion is
-            // mechanical, not self-report: an explicitly-loaded extension fires
-            // on `agent_end` and spawns `lto agent-turn-completed` (writes the
-            // event, wakes waiters, rings the tmux bell as a human fallback).
-            // `-e` still loads under `--no-extensions` ("explicit -e paths still
-            // work"), so we keep discovery disabled and load only our hook.
-            // The dispatcher `cd`s the pi pane into the repo before launch
-            // (see run_dispatch), so the extension resolves LTO_REPO from
-            // process.cwd() — no need to thread the path through here.
-            let hook = pi_hook_path();
-            let launch = match &hook {
-                Some(path) => format!(
-                    "LTO_RUN_ID={} pi --no-skills --no-context-files --no-extensions -e {}",
-                    shell_single_quote(run_id),
-                    shell_single_quote(&path.display().to_string()),
-                ),
-                // Hook install failed: fall back to the plain TUI. No mechanical
-                // completion event, but dispatch still works (degraded).
-                None => format!(
+            let launch = process_exit_wrapper(
+                &format!(
                     "LTO_RUN_ID={} pi --no-skills --no-context-files --no-extensions",
                     shell_single_quote(run_id)
                 ),
-            };
-            let has_hook = hook.is_some();
+                "pi",
+                run_id,
+            );
             GoalRunnerPlan {
                 launch: Some(launch),
                 prompt: goal_prompt(&goal),
                 ready_patterns: vec!["deepseek".to_string(), "ctx".to_string()],
                 confirm_patterns: vec!["Working".to_string()],
                 needs_probe: true,
-                completion_event: if has_hook {
-                    Some("agent.turn.completed".to_string())
-                } else {
-                    None
-                },
-                completion_mode: if has_hook {
-                    "pi-agent-end-hook".to_string()
-                } else {
-                    "manual-pi-tui".to_string()
-                },
+                completion_event: Some("agent.dispatch.completed".to_string()),
+                completion_mode: "pi-process-exit".to_string(),
                 // pi starts a REPL, then takes the prompt on a later line.
                 launch_includes_prompt: false,
             }
@@ -328,10 +537,14 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
             // real prompt we send next. An empty value leaves agy idle at the
             // input box, so the real prompt is its first and only instruction.
             GoalRunnerPlan {
-                launch: Some(format!(
-                    "LTO_RUN_ID={} agy -i {}",
-                    shell_single_quote(run_id),
-                    shell_single_quote("")
+                launch: Some(process_exit_wrapper(
+                    &format!(
+                        "LTO_RUN_ID={} agy -i {}",
+                        shell_single_quote(run_id),
+                        shell_single_quote("")
+                    ),
+                    "agy",
+                    run_id,
                 )),
                 prompt: goal_prompt(&goal),
                 // Readiness must key on a marker that appears ONLY once agy's TUI
@@ -342,16 +555,23 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
                 ready_patterns: vec!["? for shortcuts".to_string()],
                 confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
                 needs_probe: true,
-                // Mechanical completion via the ~/.gemini SessionEnd hook that
-                // cmd_dispatch_goal installs (like codex). The hook fires
-                // agent-turn-completed when the agy session ends.
-                completion_event: Some("agent.turn.completed".to_string()),
-                completion_mode: "agy-session-end-hook".to_string(),
+                completion_event: Some("agent.dispatch.completed".to_string()),
+                completion_mode: "agy-process-exit".to_string(),
                 launch_includes_prompt: false,
             }
         }
         _ => unreachable!("runner validated"),
     }
+}
+
+fn process_exit_wrapper(launch: &str, runner: &str, run_id: &str) -> String {
+    format!(
+        "{launch}; LTO_AGENT_RC=$?; {} --repo \"$LTO_REPO\" agent-turn-completed --run-id {} --runner {} --source {}-process-exit --rc \"$LTO_AGENT_RC\" --window-id \"$LTO_WINDOW_ID\" --bell",
+        shell_single_quote(&current_lto_bin()),
+        shell_single_quote(run_id),
+        shell_single_quote(runner),
+        runner,
+    )
 }
 
 fn goal_prompt(goal: &str) -> String {
@@ -377,6 +597,8 @@ fn write_dispatch_record(
         "goal": goal_path.display().to_string(),
         "cwd": cwd.display().to_string(),
         "target": outcome.target,
+        "window_id": outcome.window_id,
+        "cleanup_on_success": !options.keep_window,
         "repo": outcome.repo,
         "dispatched_at": crate::state::iso_now(),
         "completion_event": outcome.completion_event,
@@ -391,114 +613,6 @@ fn write_dispatch_record(
     });
     fs::write(&path, serde_json::to_string_pretty(&record)? + "\n")?;
     Ok(path)
-}
-
-/// Materialize the pi `agent_end` extension to a stable on-disk path and return
-/// it, so the pi launch command can load it with `-e`. Returns None on any
-/// failure (missing HOME, write error) — the caller then falls back to a plain
-/// pi TUI without the mechanical completion event. Best-effort by design: a
-/// notifier must never block dispatch.
-fn pi_hook_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let hooks_dir = home.join(".lto").join("hooks");
-    fs::create_dir_all(&hooks_dir).ok()?;
-    let path = hooks_dir.join("pi-agent-end-notify.ts");
-    // Rewrite only when content differs, so concurrent dispatches don't churn.
-    let needs_write = match fs::read_to_string(&path) {
-        Ok(existing) => existing != PI_AGENT_END_HOOK,
-        Err(_) => true,
-    };
-    if needs_write {
-        fs::write(&path, PI_AGENT_END_HOOK).ok()?;
-    }
-    Some(path)
-}
-
-const AGY_SESSION_END_HOOK: &str = include_str!("../scripts/hooks/agy-session-end-notify.sh");
-
-/// agy is Gemini-CLI based: its hooks live in `~/.gemini/settings.json` under
-/// `hooks.SessionEnd`, alongside the user's own settings. We merge (never
-/// overwrite) an LTO-marked SessionEnd entry that runs our notify script when
-/// the agy session ends. Idempotent; preserves all existing user hooks.
-fn install_agy_hook(repo: &Path) -> anyhow::Result<HookStatus> {
-    let Some(gemini_home) = gemini_home() else {
-        return Ok(HookStatus {
-            status: "skipped".to_string(),
-            detail: "HOME is not set".to_string(),
-            script_path: None,
-        });
-    };
-    install_agy_hook_at(repo, &gemini_home)
-}
-
-fn install_agy_hook_at(repo: &Path, gemini_home: &Path) -> anyhow::Result<HookStatus> {
-    fs::create_dir_all(gemini_home)?;
-    let hooks_dir = gemini_home.join("hooks");
-    fs::create_dir_all(&hooks_dir)?;
-    let script_path = hooks_dir.join("lto-agy-session-end-notify.sh");
-    fs::write(&script_path, AGY_SESSION_END_HOOK)?;
-    set_executable(&script_path)?;
-
-    let settings_path = gemini_home.join("settings.json");
-    let mut value = if settings_path.exists() {
-        let text = fs::read_to_string(&settings_path)?;
-        serde_json::from_str::<Value>(&text)
-            .with_context(|| format!("parse {}", settings_path.display()))?
-    } else {
-        json!({})
-    };
-    let repo_abs = absolutize(repo)?.display().to_string();
-    let lto_bin = current_lto_bin();
-    let command = format!(
-        "LTO_REPO_FALLBACK={} LTO_BIN={} bash {}",
-        shell_single_quote(&repo_abs),
-        shell_single_quote(&lto_bin),
-        shell_single_quote(&script_path.display().to_string())
-    );
-    let entries = session_end_hooks_mut(&mut value)?;
-    if let Some(existing) = entries
-        .iter_mut()
-        .find(|entry| entry.get("_lto_marker").and_then(Value::as_str) == Some(LTO_HOOK_MARKER))
-    {
-        if hook_command(existing).as_deref() == Some(command.as_str()) {
-            return Ok(HookStatus {
-                status: "already-installed".to_string(),
-                detail: settings_path.display().to_string(),
-                script_path: Some(script_path),
-            });
-        }
-        backup_hooks(&settings_path)?;
-        *existing = agy_session_end_hook_entry(&command, &repo_abs, &lto_bin);
-        fs::write(&settings_path, serde_json::to_string_pretty(&value)? + "\n")?;
-        return Ok(HookStatus {
-            status: "updated".to_string(),
-            detail: settings_path.display().to_string(),
-            script_path: Some(script_path),
-        });
-    }
-    backup_hooks(&settings_path)?;
-    session_end_hooks_mut(&mut value)?
-        .push(agy_session_end_hook_entry(&command, &repo_abs, &lto_bin));
-    fs::write(&settings_path, serde_json::to_string_pretty(&value)? + "\n")?;
-    Ok(HookStatus {
-        status: "installed".to_string(),
-        detail: settings_path.display().to_string(),
-        script_path: Some(script_path),
-    })
-}
-
-fn agy_session_end_hook_entry(command: &str, repo: &str, lto_bin: &str) -> Value {
-    json!({
-        "matcher": "*",
-        "_lto_marker": LTO_HOOK_MARKER,
-        "_lto_repo": repo,
-        "_lto_bin": lto_bin,
-        "hooks": [{
-            "type": "command",
-            "command": command,
-            "timeout": 10000
-        }]
-    })
 }
 
 /// Get a mutable handle to `hooks.SessionEnd` in a gemini settings object,
@@ -556,9 +670,21 @@ fn uninstall_agy_hook_at(gemini_home: &Path) -> anyhow::Result<HookStatus> {
         });
         before.saturating_sub(hooks.len())
     };
-    backup_hooks(&settings_path)?;
-    fs::write(&settings_path, serde_json::to_string_pretty(&value)? + "\n")?;
-    let _ = fs::remove_file(&script_path);
+    let script_existed = script_path.exists();
+    if removed == 0 && !script_existed {
+        return Ok(HookStatus {
+            status: "skipped".to_string(),
+            detail: "process-exit completion already has no global agy hook".to_string(),
+            script_path: Some(script_path),
+        });
+    }
+    if removed > 0 {
+        backup_hooks(&settings_path)?;
+        fs::write(&settings_path, serde_json::to_string_pretty(&value)? + "\n")?;
+    }
+    if script_existed {
+        let _ = fs::remove_file(&script_path);
+    }
     Ok(HookStatus {
         status: "uninstalled".to_string(),
         detail: format!("removed {removed} hook group(s)"),
@@ -584,6 +710,7 @@ fn install_codex_hook(repo: &Path) -> anyhow::Result<HookStatus> {
 }
 
 fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookStatus> {
+    let _ = repo;
     if !codex_home.exists() {
         return Ok(HookStatus {
             status: "skipped".to_string(),
@@ -606,11 +733,9 @@ fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookS
         json!({"hooks": {}})
     };
     ensure_hooks_shape(&mut value)?;
-    let repo_abs = absolutize(repo)?.display().to_string();
     let lto_bin = current_lto_bin();
     let command = format!(
-        "LTO_REPO_FALLBACK={} LTO_BIN={} bash {}",
-        shell_single_quote(&repo_abs),
+        "LTO_BIN={} bash {}",
         shell_single_quote(&lto_bin),
         shell_single_quote(&script_path.display().to_string())
     );
@@ -623,7 +748,7 @@ fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookS
             });
         }
         backup_hooks(&hooks_path)?;
-        *existing = codex_stop_hook_entry(&command, &repo_abs, &lto_bin);
+        *existing = codex_stop_hook_entry(&command, &lto_bin);
         fs::write(&hooks_path, serde_json::to_string_pretty(&value)? + "\n")?;
         return Ok(HookStatus {
             status: "updated".to_string(),
@@ -632,7 +757,7 @@ fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookS
         });
     }
     backup_hooks(&hooks_path)?;
-    stop_hooks_mut(&mut value)?.push(codex_stop_hook_entry(&command, &repo_abs, &lto_bin));
+    stop_hooks_mut(&mut value)?.push(codex_stop_hook_entry(&command, &lto_bin));
     fs::write(&hooks_path, serde_json::to_string_pretty(&value)? + "\n")?;
     Ok(HookStatus {
         status: "installed".to_string(),
@@ -641,11 +766,10 @@ fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookS
     })
 }
 
-fn codex_stop_hook_entry(command: &str, repo: &str, lto_bin: &str) -> Value {
+fn codex_stop_hook_entry(command: &str, lto_bin: &str) -> Value {
     json!({
         "matcher": "",
         "_lto_marker": LTO_HOOK_MARKER,
-        "_lto_repo": repo,
         "_lto_bin": lto_bin,
         "hooks": [{
             "type": "command",
@@ -764,18 +888,6 @@ fn default_skip_prompts() -> Vec<SkipPrompt> {
             key: "n".to_string(),
         },
         SkipPrompt {
-            pattern: "Hooks need review".to_string(),
-            key: "t".to_string(),
-        },
-        SkipPrompt {
-            pattern: "hook needs review".to_string(),
-            key: "t".to_string(),
-        },
-        SkipPrompt {
-            pattern: "Press t to trust all".to_string(),
-            key: "t".to_string(),
-        },
-        SkipPrompt {
             // agy (Gemini CLI) prompts this on first entry to a new project.
             // The default selection is "Yes, I trust this folder", so Enter
             // confirms it and lets dispatch proceed unattended.
@@ -861,6 +973,7 @@ mod tests {
             target: None,
             new_window: false,
             window_name: None,
+            keep_window: false,
             cwd: None,
             tmux_session: None,
             tmux_bin: None,
@@ -899,11 +1012,118 @@ mod tests {
     }
 
     #[test]
+    fn wait_timeout_marks_latest_window_retained() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join(".lto").join("r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        crate::state::save_state(
+            run_dir.join("state.json"),
+            &crate::state::LtoState {
+                run_id: "r1".to_string(),
+                dispatch_windows: vec![DispatchWindowState {
+                    window_id: "@9".to_string(),
+                    target: "@9.0".to_string(),
+                    runner: "codex".to_string(),
+                    tmux_bin: "tmux".to_string(),
+                    cleanup_on_success: true,
+                    status: "active".to_string(),
+                    created_at: crate::state::iso_now(),
+                    finished_at: None,
+                    retention_reason: None,
+                }],
+                ..crate::state::LtoState::default()
+            },
+        )
+        .unwrap();
+
+        retain_latest_dispatch_window(tmp.path(), "r1", "wait timeout");
+
+        let persisted = crate::state::load_state(run_dir.join("state.json")).unwrap();
+        assert_eq!(persisted.dispatch_windows[0].status, "retained");
+        assert_eq!(
+            persisted.dispatch_windows[0].retention_reason.as_deref(),
+            Some("wait timeout")
+        );
+    }
+
+    #[test]
+    fn goal_window_name_is_stable_and_human_readable() {
+        assert_eq!(
+            goal_window_name(
+                "codex",
+                Path::new("goal-2026-07-10-invocation-ux.md"),
+                "run-12345678",
+            ),
+            "lto:codex:invocation-ux"
+        );
+        assert_eq!(
+            goal_window_name(
+                "codex",
+                Path::new("goal-2026-07-10-phase3-tmux-window.md"),
+                "run-12345678",
+            ),
+            "lto:codex:phase3-tmux-window"
+        );
+        assert_eq!(
+            goal_window_name("codex", Path::new("goal.md"), "run-12345678"),
+            "lto:codex:12345678"
+        );
+        assert_eq!(
+            goal_window_name(
+                "codex",
+                Path::new("goal-2026-07-10-Foo___Bar!!.md"),
+                "run-12345678",
+            ),
+            "lto:codex:foo-bar"
+        );
+        assert_eq!(
+            goal_window_name(
+                "codex",
+                Path::new("goal-2026-07-10-中文 Foo.md"),
+                "run-12345678",
+            ),
+            "lto:codex:foo"
+        );
+    }
+
+    #[test]
+    fn goal_window_name_truncates_slug_without_trailing_dash() {
+        let name = goal_window_name(
+            "agy",
+            Path::new("goal-2026-07-10-abcdefghijklmnopqrs-more.md"),
+            "run-12345678",
+        );
+        let slug = name.rsplit(':').next().unwrap();
+        assert!(slug.len() <= 20);
+        assert!(!slug.ends_with('-'));
+        assert_eq!(name, "lto:agy:abcdefghijklmnopqrs");
+    }
+
+    #[test]
+    fn explicit_window_name_is_preserved_verbatim() {
+        let mut options = test_options(Path::new("goal-2026-07-10-x.md"));
+        options.window_name = Some("Host Chosen / Name".to_string());
+        assert_eq!(
+            dispatch_window_name(&options, &options.goal, "run-12345678"),
+            "Host Chosen / Name"
+        );
+    }
+
+    #[test]
+    fn dispatch_ready_defaults_and_blocked_patterns_match_contract() {
+        assert_eq!(DEFAULT_DISPATCH_READY_TIMEOUT_SEC, 60);
+        let patterns = blocked_patterns("codex");
+        assert!(patterns.iter().any(|item| item == "Hooks need review"));
+        assert!(patterns.iter().any(|item| item == "Trust all and continue"));
+        assert!(patterns.iter().any(|item| item == "Press enter to confirm"));
+    }
+
+    #[test]
     fn completion_commands_are_ready_to_copy() {
         let options = test_options(Path::new("goal with space.md"));
         assert_eq!(
             completion_wait_command("r1"),
-            "lto events --wait --event-type agent.turn.completed --run-id r1 --timeout 600"
+            "lto events --wait --event-type agent.dispatch.completed --run-id r1 --timeout 600"
         );
         assert_eq!(
             dispatch_and_wait_command(&options, "r1"),
@@ -914,8 +1134,16 @@ mod tests {
     #[test]
     fn all_completion_hooks_request_a_bell() {
         assert!(CODEX_STOP_HOOK.contains("--source codex-stop-hook --bell"));
-        assert!(PI_AGENT_END_HOOK.contains("--bell"));
-        assert!(include_str!("../scripts/hooks/agy-session-end-notify.sh").contains("--bell"));
+        assert!(!CODEX_STOP_HOOK.contains("--rc 0"));
+        assert!(CODEX_STOP_HOOK.contains("--window-id"));
+        for runner in ["pi", "agy"] {
+            let plan = runner_plan(runner, Path::new("/tmp/goal.md"), "r1");
+            let launch = plan.launch.as_deref().unwrap();
+            assert!(launch.contains("--repo \"$LTO_REPO\""));
+            assert!(launch.contains("--rc \"$LTO_AGENT_RC\""));
+            assert!(launch.contains("--window-id \"$LTO_WINDOW_ID\""));
+            assert!(launch.contains("--bell"));
+        }
     }
 
     #[test]
@@ -943,7 +1171,7 @@ mod tests {
         );
         assert_eq!(
             runner_plan("codex", goal, "r1").completion_event.as_deref(),
-            Some("agent.turn.completed")
+            Some("agent.dispatch.completed")
         );
         assert!(
             runner_plan("pi", goal, "r1")
@@ -970,23 +1198,15 @@ mod tests {
                 .contains(GOAL_CONSTRAINT_SUMMARY)
         );
         assert!(runner_plan("pi", goal, "r1").needs_probe);
-        // pi now gets a mechanical completion event via the agent_end extension
-        // hook loaded with `-e`. When the hook materializes (HOME writable, the
-        // normal case) the plan reports the event + hook mode and the launch
-        // command loads the extension; if it can't, it degrades to manual.
         let pi_plan = runner_plan("pi", goal, "r1");
         let pi_launch = pi_plan.launch.as_deref().unwrap();
-        if pi_launch.contains(" -e ") {
-            assert_eq!(
-                pi_plan.completion_event.as_deref(),
-                Some("agent.turn.completed")
-            );
-            assert_eq!(pi_plan.completion_mode, "pi-agent-end-hook");
-        } else {
-            // Degraded fallback: still a valid plain-TUI dispatch.
-            assert_eq!(pi_plan.completion_event, None);
-            assert_eq!(pi_plan.completion_mode, "manual-pi-tui");
-        }
+        assert!(!pi_launch.contains(" -e "));
+        assert!(pi_launch.contains("pi-process-exit"));
+        assert_eq!(
+            pi_plan.completion_event.as_deref(),
+            Some("agent.dispatch.completed")
+        );
+        assert_eq!(pi_plan.completion_mode, "pi-process-exit");
         // agy must use the interactive entrypoint (`agy -i`), not `--print`
         // which only prints a plan without executing (bug #5/#6).
         assert!(
@@ -1031,7 +1251,11 @@ mod tests {
             !launch.contains("Read the file"),
             "the long goal prompt must NOT be in the launch line (truncation risk): {launch}"
         );
-        assert!(launch.len() < 120, "agy launch must stay short: {launch}");
+        assert!(
+            launch.split(';').next().unwrap().len() < 120,
+            "agy agent launch must stay short: {launch}"
+        );
+        assert!(launch.contains("agy-process-exit"));
         // agy takes the real prompt on a later line, like codex/pi.
         assert!(!agy.launch_includes_prompt);
         assert!(!runner_plan("codex", goal, "r1").launch_includes_prompt);
@@ -1041,66 +1265,15 @@ mod tests {
     }
 
     #[test]
-    fn agy_hook_merges_and_preserves_user_settings() {
-        let tmp = tempfile::tempdir().unwrap();
-        let gemini = tmp.path().join(".gemini");
-        fs::create_dir_all(&gemini).unwrap();
-        // Pre-existing user settings: an unrelated key AND a user SessionEnd hook.
-        fs::write(
-            gemini.join("settings.json"),
-            r#"{"theme":"dark","hooks":{"SessionEnd":[{"matcher":"*","hooks":[{"type":"command","command":"echo user"}]}]}}"#,
-        )
-        .unwrap();
-        let status = install_agy_hook_at(tmp.path(), &gemini).unwrap();
-        assert_eq!(status.status, "installed");
-        let value: Value =
-            serde_json::from_str(&fs::read_to_string(gemini.join("settings.json")).unwrap())
-                .unwrap();
-        // Unrelated key preserved.
-        assert_eq!(value["theme"], "dark");
-        let se = value["hooks"]["SessionEnd"].as_array().unwrap();
-        // User hook kept, LTO hook appended.
-        assert_eq!(se.len(), 2);
-        assert!(se[0].to_string().contains("echo user"));
-        assert!(se[1].to_string().contains(LTO_HOOK_MARKER));
-        // The command runs our notify script (which calls agent-turn-completed).
-        assert!(se[1].to_string().contains("lto-agy-session-end-notify.sh"));
-
-        // Idempotent: installing again must not add a duplicate.
-        let again = install_agy_hook_at(tmp.path(), &gemini).unwrap();
-        assert_eq!(again.status, "already-installed");
-        let value2: Value =
-            serde_json::from_str(&fs::read_to_string(gemini.join("settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(value2["hooks"]["SessionEnd"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn agy_hook_install_into_fresh_gemini_home() {
-        // No settings.json yet: install must create it with just our hook.
-        let tmp = tempfile::tempdir().unwrap();
-        let gemini = tmp.path().join(".gemini");
-        let status = install_agy_hook_at(tmp.path(), &gemini).unwrap();
-        assert_eq!(status.status, "installed");
-        let value: Value =
-            serde_json::from_str(&fs::read_to_string(gemini.join("settings.json")).unwrap())
-                .unwrap();
-        let se = value["hooks"]["SessionEnd"].as_array().unwrap();
-        assert_eq!(se.len(), 1);
-        assert!(se[0].to_string().contains(LTO_HOOK_MARKER));
-    }
-
-    #[test]
     fn agy_hook_uninstall_removes_only_lto_entry() {
         let tmp = tempfile::tempdir().unwrap();
         let gemini = tmp.path().join(".gemini");
         fs::create_dir_all(&gemini).unwrap();
         fs::write(
             gemini.join("settings.json"),
-            r#"{"hooks":{"SessionEnd":[{"matcher":"*","hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+            r#"{"hooks":{"SessionEnd":[{"matcher":"*","hooks":[{"type":"command","command":"echo user"}]},{"_lto_marker":"long-task-orchestration","hooks":[{"type":"command","command":"old lto-agy-session-end-notify.sh"}]}]}}"#,
         )
         .unwrap();
-        install_agy_hook_at(tmp.path(), &gemini).unwrap();
         let status = uninstall_agy_hook_at(&gemini).unwrap();
         assert_eq!(status.status, "uninstalled");
         let value: Value =
@@ -1111,37 +1284,6 @@ mod tests {
         assert_eq!(se.len(), 1);
         assert!(se[0].to_string().contains("echo user"));
         assert!(!se[0].to_string().contains(LTO_HOOK_MARKER));
-    }
-
-    #[test]
-    fn pi_hook_materializes_and_launch_loads_it() {
-        // pi_hook_path writes the extension under $HOME/.lto/hooks and the pi
-        // plan loads exactly that file via `-e`, so completion is mechanical.
-        let Some(path) = pi_hook_path() else {
-            // No HOME in this environment: the plan must degrade cleanly.
-            let plan = runner_plan("pi", Path::new("/tmp/goal.md"), "r1");
-            assert_eq!(plan.completion_event, None);
-            return;
-        };
-        assert!(path.ends_with("pi-agent-end-notify.ts"));
-        let contents = std::fs::read_to_string(&path).unwrap();
-        // The extension must fire on agent_end and call agent-turn-completed
-        // with the human-visible bell fallback.
-        assert!(contents.contains("agent_end"));
-        assert!(contents.contains("agent-turn-completed"));
-        assert!(contents.contains("--bell"));
-
-        let plan = runner_plan("pi", Path::new("/tmp/goal.md"), "r1");
-        let launch = plan.launch.as_deref().unwrap();
-        assert!(launch.contains(&format!(
-            "-e {}",
-            shell_single_quote(&path.display().to_string())
-        )));
-        assert_eq!(
-            plan.completion_event.as_deref(),
-            Some("agent.turn.completed")
-        );
-        assert_eq!(plan.completion_mode, "pi-agent-end-hook");
     }
 
     #[test]
@@ -1186,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn hook_install_updates_lto_marker_for_new_repo() {
+    fn hook_install_is_repo_neutral_across_dispatches() {
         let tmp = tempfile::tempdir().unwrap();
         let codex = tmp.path().join(".codex");
         fs::create_dir_all(&codex).unwrap();
@@ -1203,10 +1345,15 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(codex.join("hooks.json")).unwrap()).unwrap();
         let stop = value["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 1);
-        assert_eq!(stop[0]["_lto_repo"], repo.display().to_string());
+        assert!(stop[0].get("_lto_repo").is_none());
         let command = stop[0]["hooks"][0]["command"].as_str().unwrap();
-        assert!(command.contains("LTO_REPO_FALLBACK="));
+        assert!(!command.contains("LTO_REPO_FALLBACK="));
         assert!(!command.contains("LTO_REPO="));
-        assert!(command.contains(repo.to_str().unwrap()));
+        assert!(!command.contains(repo.to_str().unwrap()));
+
+        let other_repo = tmp.path().join("other-repo");
+        fs::create_dir_all(&other_repo).unwrap();
+        let again = install_codex_hook_at(&other_repo, &codex).unwrap();
+        assert_eq!(again.status, "already-installed");
     }
 }

@@ -207,7 +207,7 @@ pub struct CrossRunMiningEntry {
     pub avg_elapsed_sec: Option<f64>,
     pub avg_retry: Option<f64>,
     pub avg_audit_rounds: Option<f64>,
-    pub agent_turn_completed: usize,
+    pub agent_dispatch_completed: usize,
     pub distinct_runs: usize,
     pub subjective_non_measurement: bool,
 }
@@ -274,9 +274,9 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
                     mined_run_ids.insert(run_id.clone());
                     record_runner_finished(&mut slots, run_id, &event);
                 }
-                "agent.turn.completed" => {
+                "agent.dispatch.completed" => {
                     mined_run_ids.insert(run_id.clone());
-                    record_agent_turn_completed(&mut slots, run_id, &event, &model_hints);
+                    record_agent_dispatch_completed(&mut slots, run_id, &event, &model_hints);
                 }
                 _ => {}
             }
@@ -319,7 +319,7 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
                 } else {
                     Some(total_audit_rounds as f64 / dispatches as f64)
                 },
-                agent_turn_completed: slot.completed_runs.len(),
+                agent_dispatch_completed: slot.completed_runs.len(),
                 distinct_runs: dispatches,
                 subjective_non_measurement: !slot.subjective_runs.is_empty(),
             }
@@ -380,7 +380,7 @@ fn record_runner_finished(
     }
 }
 
-fn record_agent_turn_completed(
+fn record_agent_dispatch_completed(
     slots: &mut BTreeMap<(String, String, String, String), CrossRunSlot>,
     run_id: &str,
     event: &Value,
@@ -820,7 +820,7 @@ mod tests {
             repo,
             "r2",
             EventRecord {
-                event_type: "agent.turn.completed".to_string(),
+                event_type: "agent.dispatch.completed".to_string(),
                 actor_kind: "runner".to_string(),
                 actor_id: Some("codex".to_string()),
                 task_id: Some("L3".to_string()),
@@ -840,7 +840,7 @@ mod tests {
         assert_eq!(entry.distinct_runs, 2);
         assert_eq!(entry.failed, 2);
         assert_eq!(entry.ok, 2);
-        assert_eq!(entry.agent_turn_completed, 1);
+        assert_eq!(entry.agent_dispatch_completed, 1);
         assert_eq!(entry.avg_retry, Some(1.0));
     }
 
@@ -931,7 +931,7 @@ mod tests {
             repo,
             "r1",
             EventRecord {
-                event_type: "agent.turn.completed".to_string(),
+                event_type: "agent.dispatch.completed".to_string(),
                 actor_kind: "runner".to_string(),
                 actor_id: Some("codex".to_string()),
                 task_id: Some("L3".to_string()),
@@ -951,7 +951,7 @@ mod tests {
                     entry.model.as_str(),
                     entry.ok,
                     entry.failed,
-                    entry.agent_turn_completed,
+                    entry.agent_dispatch_completed,
                 )
             })
             .collect::<Vec<_>>();
@@ -993,7 +993,7 @@ mod tests {
             repo,
             "r1",
             EventRecord {
-                event_type: "agent.turn.completed".to_string(),
+                event_type: "agent.dispatch.completed".to_string(),
                 actor_kind: "runner".to_string(),
                 actor_id: Some("codex".to_string()),
                 task_id: Some("L3".to_string()),
@@ -1013,7 +1013,7 @@ mod tests {
                     entry.model.as_str(),
                     entry.ok,
                     entry.failed,
-                    entry.agent_turn_completed,
+                    entry.agent_dispatch_completed,
                 )
             })
             .collect::<Vec<_>>();
@@ -1047,7 +1047,7 @@ mod tests {
             repo,
             "r1",
             EventRecord {
-                event_type: "agent.turn.completed".to_string(),
+                event_type: "agent.dispatch.completed".to_string(),
                 actor_kind: "runner".to_string(),
                 actor_id: Some("pi".to_string()),
                 phase: Some("implementation".to_string()),
@@ -1067,7 +1067,7 @@ mod tests {
         assert_eq!(entry.task_type, "implementation");
         assert_eq!(entry.distinct_runs, 1);
         assert_eq!(entry.failed, 1);
-        assert_eq!(entry.agent_turn_completed, 1);
+        assert_eq!(entry.agent_dispatch_completed, 1);
     }
 
     #[test]

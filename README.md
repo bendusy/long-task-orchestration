@@ -37,7 +37,7 @@ $L runner --task-id T1 --kind test --command "pytest tests/test_auth.py -x" --no
 
 # 3. 派外部 agent 跑长任务，别轮询——阻塞等完成事件（v0.6.1+）
 $L dispatch-goal --runner codex --goal goal.md   # 默认在当前 tmux 会话开窗，不用传 --new-window
-$L events --wait --event-type agent.turn.completed --timeout 1800   # 干完自动唤醒
+$L events --wait --event-type agent.dispatch.completed --timeout 1800   # goal/进程真完成后唤醒
 
 # 4. 迷路时看事实简报
 $L next
@@ -54,6 +54,8 @@ $L closeout --summary "登录重构完成，测试和异构审计已收敛"
 ```
 
 `audit` 当前命令面是 `--auto-dispatch`、`--discover-risks`、`--allow-same-family`、`--prefer-runner`。历史文档里出现过的 `audit --collect <dir>` 不是当前 Rust CLI 命令；已有回复应通过当前 `runner`/`collect-agent-run`/artifact 机制登记。
+
+`dispatch-goal` 新建的窗口默认命名为 `lto:<runner>:<goal-slug>`，程序寻址与清理只使用 tmux 不可变 `@window_id`。成功完成后自动清理；非零 rc、超时、交互阻塞或 `--keep-window` 都保留现场。Codex 的 Stop hook 只是每轮结束：普通 Stop 只写 `agent.turn.completed`，只有 transcript 中存在真实 `update_goal complete` 证据才写 `agent.dispatch.completed`；pi/agy 则由 TUI 进程退出 wrapper 传真实 rc。不要再用 turn 事件判断整个 goal 完成。
 
 ## 架构全貌
 
@@ -91,7 +93,7 @@ optional sinks: am memory publish/resume, release docs, changelog
 |---|---|---|---|
 | **L1 Agent** | model 调 tool 循环到完成 | `runner` / `scheduler` / `agent_job`（dumb loop，智能在 model/host） | ✅ |
 | **L2 Verification** | grader 检查输出、不达标反馈 | `audit --auto-dispatch`（**跨族异构** runner 互审）+ `judge` + `check` gate | ✅ **差异化**：业界多用单模型 LLM-as-judge，LTO 用异构 runner 跨族互审，抗同族盲区 |
-| **L3 Event-driven** | 事件触发 agent 后台跑，非手动调 | `events.jsonl` 结构化事件总线 + `dispatch-goal` 派工；codex/agy 自动完成通知，pi TUI 完成暂需人工/后续 hook | ✅ 已实现 |
+| **L3 Event-driven** | 事件触发 agent 后台跑，非手动调 | `events.jsonl` + `dispatch-goal`；turn 与 dispatch 完成分事件，codex 用 goal-state proof，pi/agy 用真实进程 rc | ✅ 已实现 |
 | **L4 Hill-climbing** | 扫历史 trace、改进 harness 自身 | 跨 run 数据挖掘（按 runner 模型 × 任务 × 时间聚合，只读喂回 host 出 tuning brief） | ✅ 已实现（`recap --mine`） |
 
 **贯穿原则——薄 harness + 人在环**：LTO 赌「模型变强、harness 变薄」（primitive 不硬路由、preset 是 host playbook 不是固定菜单）。L4 与业界关键分歧是：LTO 挖掘出的是**证据和 brief**，喂 host 决策，**绝不自动改写 harness / 自动 promote**——所有路线判断和敏感操作（`git push`、closeout）都回到 host 和人。这与 Anthropic「薄 harness」、各家「human oversight at every level」一致，LTO 把人在环守得更严。

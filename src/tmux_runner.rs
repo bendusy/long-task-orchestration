@@ -63,9 +63,17 @@ pub struct TmuxRunnerConfig {
     pub sentinel_path: Option<PathBuf>,
     pub ready_patterns: Vec<String>,
     pub skip_prompts: Vec<SkipPrompt>,
+    pub dispatch_safety: TmuxDispatchSafety,
     pub ready_timeout: Duration,
     pub poll_interval: Duration,
     pub capture_lines: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TmuxDispatchSafety {
+    pub blocked_patterns: Vec<String>,
+    pub blocked_prompt_hint: Option<String>,
+    pub reject_busy_target: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -147,6 +155,7 @@ impl TmuxRunnerConfig {
             sentinel_path,
             ready_patterns: meta_string_list(meta, &["tmux_ready_patterns", "ready_patterns"]),
             skip_prompts: skip_prompts(meta),
+            dispatch_safety: TmuxDispatchSafety::default(),
             ready_timeout: Duration::from_secs(
                 meta_u64(meta, &["tmux_ready_timeout_sec", "ready_timeout_sec"])
                     .unwrap_or(DEFAULT_READY_TIMEOUT_SEC),
@@ -386,7 +395,7 @@ async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerE
             config.window_name.clone(),
             "-P".to_string(),
             "-F".to_string(),
-            "#{session_name}:#{window_index}.#{pane_index}".to_string(),
+            "#{window_id}.#{pane_index}".to_string(),
         ];
         return match tmux_output(&config.tmux_bin, &args).await {
             Ok(target) => Ok(target.trim().to_string()),
@@ -408,6 +417,9 @@ async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerE
     }
 
     if let Some(target) = &config.target {
+        if config.dispatch_safety.reject_busy_target {
+            ensure_target_is_idle_shell(config, target).await?;
+        }
         return Ok(target.clone());
     }
 
@@ -428,7 +440,7 @@ async fn new_window_in_session(
         "new-window".to_string(),
         "-P".to_string(),
         "-F".to_string(),
-        "#{session_name}:#{window_index}.#{pane_index}".to_string(),
+        "#{window_id}.#{pane_index}".to_string(),
         "-n".to_string(),
         config.window_name.clone(),
     ];
@@ -439,6 +451,46 @@ async fn new_window_in_session(
     tmux_output(&config.tmux_bin, &args)
         .await
         .map(|target| target.trim().to_string())
+}
+
+pub fn window_id_from_target(target: &str) -> Option<String> {
+    let window_id = target.split('.').next()?.trim();
+    if window_id.starts_with('@')
+        && window_id.len() > 1
+        && window_id[1..].chars().all(|ch| ch.is_ascii_digit())
+    {
+        Some(window_id.to_string())
+    } else {
+        None
+    }
+}
+
+async fn ensure_target_is_idle_shell(
+    config: &TmuxRunnerConfig,
+    target: &str,
+) -> Result<(), TmuxRunnerError> {
+    let command = tmux_output(
+        &config.tmux_bin,
+        &[
+            "display-message".to_string(),
+            "-p".to_string(),
+            "-t".to_string(),
+            target.to_string(),
+            "#{pane_current_command}".to_string(),
+        ],
+    )
+    .await?;
+    let command = command.trim().trim_start_matches('-');
+    let command = Path::new(command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(command);
+    if matches!(command, "bash" | "zsh" | "fish" | "sh") {
+        return Ok(());
+    }
+    Err(TmuxRunnerError::Config(format!(
+        "target pane busy: {target} is running {command:?}; choose an idle bash/zsh/fish/sh pane"
+    )))
 }
 
 async fn current_session(tmux_bin: &str) -> Result<Option<String>, TmuxRunnerError> {
@@ -507,6 +559,21 @@ async fn wait_until_ready(config: &TmuxRunnerConfig, target: &str) -> Result<(),
     let mut skipped = BTreeSet::new();
     loop {
         let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
+        if let Some(pattern) = config
+            .dispatch_safety
+            .blocked_patterns
+            .iter()
+            .find(|pattern| contains_case_insensitive(&capture, pattern))
+        {
+            let hint = config
+                .dispatch_safety
+                .blocked_prompt_hint
+                .as_deref()
+                .unwrap_or("runner is blocked on an interactive prompt");
+            return Err(TmuxRunnerError::Config(format!(
+                "{hint} in {target} (matched {pattern:?}); resolve it in tmux, then re-dispatch with --target {target}"
+            )));
+        }
         if apply_skip_prompts(config, target, &capture, &mut skipped).await? {
             sleep(config.poll_interval).await;
             continue;
@@ -1211,10 +1278,10 @@ if args and args[0] == "capture-pane":
     print(capture.read_text())
     sys.exit(0)
 if args and args[0] in ("new-window", "new-session"):
-    print("sess:9.0")
+    print("@42.0")
     sys.exit(0)
 if args and args[0] == "display-message":
-    print("sess")
+    print("zsh" if any("pane_current_command" in arg for arg in args) else "sess")
     sys.exit(0)
 if args and args[0] == "paste-buffer" and sentinel:
     pathlib.Path(sentinel).write_text("done")
@@ -1243,7 +1310,7 @@ if args and args[0] == "new-session":
     print("duplicate session: sess", file=sys.stderr)
     sys.exit(1)
 if args and args[0] == "new-window":
-    print("sess:2.0")
+    print("@43.0")
     sys.exit(0)
 if args and args[0] == "capture-pane":
     print("ready")
@@ -1347,7 +1414,8 @@ sys.exit(0)
             sentinel_path: None,
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
-            ready_timeout: Duration::from_secs(5),
+            dispatch_safety: TmuxDispatchSafety::default(),
+            ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };
@@ -1414,7 +1482,8 @@ sys.exit(0)
             sentinel_path: None,
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
-            ready_timeout: Duration::from_secs(5),
+            dispatch_safety: TmuxDispatchSafety::default(),
+            ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };
@@ -1453,6 +1522,7 @@ sys.exit(0)
             sentinel_path: Some(sentinel.clone()),
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
+            dispatch_safety: TmuxDispatchSafety::default(),
             ready_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
@@ -1489,6 +1559,7 @@ sys.exit(0)
             sentinel_path: Some(sentinel),
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
+            dispatch_safety: TmuxDispatchSafety::default(),
             ready_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
@@ -1517,6 +1588,7 @@ sys.exit(0)
             sentinel_path: Some(tmp.path().join("missing.sentinel")),
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
+            dispatch_safety: TmuxDispatchSafety::default(),
             ready_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
@@ -1543,7 +1615,7 @@ sys.exit(0)
             ),
             ("tmux_mode".to_string(), serde_json::json!("fire")),
             ("tmux_target".to_string(), serde_json::json!("sess:1.0")),
-            ("tmux_ready_timeout_sec".to_string(), serde_json::json!(5)),
+            ("tmux_ready_timeout_sec".to_string(), serde_json::json!(15)),
             ("tmux_poll_interval_ms".to_string(), serde_json::json!(1)),
         ]));
 
@@ -1574,7 +1646,8 @@ sys.exit(0)
             sentinel_path: None,
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
-            ready_timeout: Duration::from_secs(5),
+            dispatch_safety: TmuxDispatchSafety::default(),
+            ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };
@@ -1615,6 +1688,7 @@ sys.exit(0)
             sentinel_path: None,
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
+            dispatch_safety: TmuxDispatchSafety::default(),
             ready_timeout: Duration::from_secs(1),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
@@ -1648,7 +1722,8 @@ sys.exit(0)
             sentinel_path: None,
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
-            ready_timeout: Duration::from_secs(5),
+            dispatch_safety: TmuxDispatchSafety::default(),
+            ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };
@@ -1699,7 +1774,8 @@ sys.exit(0)
             sentinel_path: None,
             ready_patterns: Vec::new(),
             skip_prompts: Vec::new(),
-            ready_timeout: Duration::from_secs(5),
+            dispatch_safety: TmuxDispatchSafety::default(),
+            ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };
@@ -1707,7 +1783,7 @@ sys.exit(0)
             .await
             .unwrap();
 
-        assert_eq!(summary.target, "sess:2.0");
+        assert_eq!(summary.target, "@43.0");
         let log = read_log(tmp.path());
         assert!(
             log.iter()
@@ -1717,6 +1793,152 @@ sys.exit(0)
             log.iter()
                 .any(|args| args.first().map(String::as_str) == Some("new-window"))
         );
+    }
+
+    #[tokio::test]
+    async fn ready_wait_fails_fast_on_interactive_blocker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_tmux(
+            tmp.path(),
+            "Hooks need review\nTrust all and continue",
+            None,
+        );
+        let config = TmuxRunnerConfig {
+            tmux_bin: bin.display().to_string(),
+            mode: TmuxMode::Fire,
+            target: Some("sess:1.0".to_string()),
+            session: None,
+            new_window: false,
+            new_session: false,
+            window_name: "lto:codex:test".to_string(),
+            signal_name: "done".to_string(),
+            sentinel_path: None,
+            ready_patterns: vec!["gpt-".to_string()],
+            skip_prompts: Vec::new(),
+            dispatch_safety: TmuxDispatchSafety {
+                blocked_patterns: vec![
+                    "Hooks need review".to_string(),
+                    "Trust all and continue".to_string(),
+                ],
+                blocked_prompt_hint: Some(
+                    "runner codex is blocked on an interactive trust prompt; select \"Trust all and continue\""
+                        .to_string(),
+                ),
+                reject_busy_target: false,
+            },
+            ready_timeout: Duration::from_secs(60),
+            poll_interval: Duration::from_secs(30),
+            capture_lines: 20,
+        };
+
+        let err = wait_until_ready(&config, "@42.0").await.unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("runner codex is blocked"), "{message}");
+        assert!(message.contains("Trust all and continue"), "{message}");
+        assert!(message.contains("--target @42.0"), "{message}");
+        assert!(!matches!(err, TmuxRunnerError::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn explicit_busy_target_is_rejected_before_dispatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("tmux-busy");
+        std_fs::write(
+            &bin,
+            "#!/bin/sh\nif [ \"$1\" = display-message ]; then echo codex; fi\n",
+        )
+        .unwrap();
+        make_executable(&bin);
+        let config = TmuxRunnerConfig {
+            tmux_bin: bin.display().to_string(),
+            mode: TmuxMode::Fire,
+            target: Some("sess:1.0".to_string()),
+            session: None,
+            new_window: false,
+            new_session: false,
+            window_name: "lto:codex:test".to_string(),
+            signal_name: "done".to_string(),
+            sentinel_path: None,
+            ready_patterns: Vec::new(),
+            skip_prompts: Vec::new(),
+            dispatch_safety: TmuxDispatchSafety {
+                reject_busy_target: true,
+                ..TmuxDispatchSafety::default()
+            },
+            ready_timeout: Duration::from_secs(1),
+            poll_interval: Duration::from_millis(1),
+            capture_lines: 20,
+        };
+
+        let err = prepare_dispatch_target(&config).await.unwrap_err();
+
+        assert!(err.to_string().contains("target pane busy"), "{err}");
+        assert!(err.to_string().contains("codex"), "{err}");
+    }
+
+    #[test]
+    fn canonical_window_id_survives_tmux_index_drift() {
+        if std::process::Command::new("tmux")
+            .arg("-V")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let socket = tmp.path().join("tmux.sock");
+        let tmux = |args: &[&str]| {
+            std::process::Command::new("tmux")
+                .arg("-S")
+                .arg(&socket)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(
+            tmux(&["new-session", "-d", "-s", "lto-test", "-n", "anchor"])
+                .status
+                .success()
+        );
+        let first = tmux(&[
+            "new-window",
+            "-P",
+            "-F",
+            "#{window_id}.#{pane_index}",
+            "-t",
+            "lto-test",
+            "-n",
+            "first",
+        ]);
+        let second = tmux(&[
+            "new-window",
+            "-P",
+            "-F",
+            "#{window_id}.#{pane_index}",
+            "-t",
+            "lto-test",
+            "-n",
+            "second",
+        ]);
+        let first_target = String::from_utf8_lossy(&first.stdout).trim().to_string();
+        let second_target = String::from_utf8_lossy(&second.stdout).trim().to_string();
+        let first_id = window_id_from_target(&first_target).unwrap();
+        let second_id = window_id_from_target(&second_target).unwrap();
+        assert!(tmux(&["kill-window", "-t", &first_id]).status.success());
+        let lookup = tmux(&["display-message", "-p", "-t", &second_id, "#{window_name}"]);
+        let _ = tmux(&["kill-server"]);
+
+        assert!(lookup.status.success());
+        assert_eq!(String::from_utf8_lossy(&lookup.stdout).trim(), "second");
+        assert_ne!(first_id, second_id);
+    }
+
+    #[test]
+    fn window_id_parser_rejects_mutable_targets() {
+        assert_eq!(window_id_from_target("@42.0").as_deref(), Some("@42"));
+        assert_eq!(window_id_from_target("sess:9.0"), None);
+        assert_eq!(window_id_from_target("@bad.0"), None);
     }
 
     #[test]

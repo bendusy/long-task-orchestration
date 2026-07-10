@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **tmux 窗口可辨识且按不可变 ID 寻址**：`dispatch-goal` 默认窗口名改为 `lto:<runner>:<goal-slug>`，run state 记录 LTO 自建窗口的 `@window_id`；index 漂移不影响发键、抓屏或清理，显式用户窗口不会被误杀。
+- **完成事件纠正为 dispatch 语义**：Codex Stop 仍记录 `agent.turn.completed`，但不再唤醒成“goal 完成”；只有 transcript 中真实的 `update_goal complete` 才发 `agent.dispatch.completed`。pi/agy 由进程退出 wrapper 传真实 rc，移除会伪造完成的全局 hook 路径；`dispatch-and-wait` 只等 dispatch 事件，失败和 timeout 返回非零。
+- **成功清理、失败保留**：默认仅在可信 dispatch 完成且 rc=0 时 `kill-window -t @id` 并发 `runner.window.cleaned`；非零/未知 rc、`--keep-window`、派工失败和 timeout 均保留现场。
+- **ready 阻塞 fail-fast**：dispatch 默认 ready timeout 从 20s 调到 60s；Codex hook trust 等交互提示命中 blocked patterns 后立即报错并给出 tmux 处理/重派指引，不再空等到超时。显式 `--target` 若不是 bash/zsh/fish/sh 空闲 pane 会以 `target pane busy` 拒绝。
+- **Codex 全局 hook repo-neutral**：LTO Stop hook 不再把某次派工 repo 固化进 `~/.codex/hooks.json`，每次按 hook payload 的 cwd 路由，消除跨项目串台。
 - **headless 写权限默认 fail-closed**：`lto runner` 的非 tmux job 只要请求 `workspace-write` 或 `danger-full-access`，必须显式使用 `--allow-headless-write`，否则错误信息引导改用可见的 `dispatch-goal` TUI 路径。只读 headless audit 保持不变。
 - **delegate 写模式改为显式逃生口**：`scripts/delegate/delegate.sh` 默认按只读评审运行；只有 `--write` 才放开写档，并在 stderr 提示优先使用 `lto dispatch-goal`。
 - **完成通知闭环**：codex/pi/agy 三家 completion hook 全部携带 `--bell`；`dispatch-goal --notify-cmd` 会把 host notifier 存入 run state，完成事件沿用注入安全的 `$LTO_SUMMARY` 管道执行。
