@@ -31,7 +31,7 @@ LTO 就是帮你解决这三个问题的。它**不替你写代码，也不替�
 - **覆盖四层 loop**：业界把 harness 看成可叠加四层 loop（loop engineering / loopcraft）。LTO 是覆盖 L1–L4 的长任务 harness——L1 agent loop（runner/scheduler）、**L2 verification（`audit` 跨族异构互审，比单模型 LLM-judge 抗盲区，是差异化）**、L3 event-driven（`events.jsonl` 事件总线就绪，tmux 派工+完成通知补触发层）、L4 hill-climbing（跨 run 挖掘喂 host，**只出 brief 不自动改写 harness**）。详见 README「放到业界 loop 工程坐标里看 LTO」。
 - **自动化是梯度**：brief → supervised → sandboxed auto-exec → human gate。每一级都必须保留证据、可恢复状态和人工刹车。
 - **派外部 agent 首选 tmux 真 TUI**：跨 runtime 派 codex/pi/agy 等外部 agent，**默认走 `lto dispatch-goal`（tmux 真 TUI 会话）或 `runner --runner tmux`**——agent 在 attached 会话里可见可监督，**codex/pi/agy 三家都能机制级自动检测完成（v0.8.0+）**。headless delegate（`scripts/delegate/runners/*.sh`）只用于 shell 证据采集、只读审计派工，以及 tmux 不可用/headless CI 的兜底。不要默认退回 headless print（agy 的 `--print` 只出方案不执行，是假成功陷阱）。
-- **派工完成自动唤醒，别轮询（v0.6.1+，pi/agy 补齐于 v0.8.0）**：派工出去后不要反复 `capture-pane`/手动盯。用 `lto events --wait --event-type agent.turn.completed --timeout <秒>` 阻塞等完成事件——runner 跑完时 `agent-turn-completed` 会通过本地 TCP 立刻唤醒你。三家 runner 各用自己的官方机制触发（都不靠 agent 自觉汇报）：**codex** 走 `~/.codex` notify hook；**pi** 走 `pi -e` 加载的 `agent_end` 扩展（`~/.lto/hooks/`）；**agy** 走 merge 进 `~/.gemini/settings.json` 的 SessionEnd hook。三者都带 `--bell` 兜底（响 tmux 铃提示盯屏的人，机制级 wake 断了也有人工兜底）；`dispatch-goal` 自动装/复用这些 hook，`--uninstall-hooks` 移除，`--no-install-hooks` 跳过。还可选 `--notify-cmd '<命令>'`（host 自配远程通知，如发飞书；不可信文本走 `$LTO_SUMMARY` 环境变量，不硬编码任何通知工具）。**想一步到位**就用 `lto dispatch-and-wait --runner <r> --goal <f> [--timeout <秒>]`——派工 + 阻塞等完成 + 打印摘要合一步，省得手动串 dispatch-goal 再 events --wait。
+- **派工完成自动唤醒，别轮询（v0.6.1+，pi/agy 补齐于 v0.8.0）**：派工出去后不要反复 `capture-pane`/手动盯。主 agent **派完必须立即在后台挂** `lto events --wait --event-type agent.turn.completed --run-id <run-id> --timeout <秒>`，runner 跑完时 `agent-turn-completed` 会通过本地 TCP 立刻唤醒它。三家 runner 各用自己的官方机制触发（都不靠 agent 自觉汇报）：**codex** 走 `~/.codex` notify hook；**pi** 走 `pi -e` 加载的 `agent_end` 扩展（`~/.lto/hooks/`）；**agy** 走 merge 进 `~/.gemini/settings.json` 的 SessionEnd hook。三者都带 `--bell` 兜底（响 tmux 铃提示盯屏的人，机制级 wake 断了也有人工兜底）；`dispatch-goal` 自动装/复用这些 hook，`--uninstall-hooks` 移除，`--no-install-hooks` 跳过。还可选 `--notify-cmd '<命令>'`（存入 run state；host 自配远程通知，如发飞书；不可信文本走 `$LTO_SUMMARY` 环境变量，不硬编码任何通知工具）。**想一步到位**就用 `lto dispatch-and-wait --runner <r> --goal <f> [--timeout <秒>]`——派工 + 阻塞等完成 + 打印摘要合一步。
 - **审计派工可控优先级（v0.6.1+）**：`lto audit --auto-dispatch --prefer-runner codex --prefer-runner agy` 限定并排序审计 runner 池，把慢的 pi 挪出收口关键路径，避免卡 timeout。host 可控旋钮，不按历史 telemetry 自动路由。
 - **运行中可见、用量可查**：每个派工的输出边跑边写进 `.lto/<run-id>/live/<job-id>.log`，卡住时 `tail` 就能看；tmux 派工在 attached 会话里直接切窗观察。token 用量按 runner 计量（四家 runner 中 codex/pi/claude 有真实计量，agy 无 CLI 用量诚实标 unmetered），`recap`/`closeout` 汇总「这次 run 烧了多少 token」。
 - **日志清理（v0.9.0+，手动不自动删）**：`.lto/<run-id>/live/` 会攒很大（单个 run 可达数百 MB）。用 `lto runs` 看每个 run 的 phase + 磁盘占用，`lto prune` 回收——它只清 **closed** 且 **超 30 天**（`--older-than` 覆盖）run 的大件（events.jsonl/live/audit/dispatch），**保留** state.json/run-state.md 轻量索引，active/未完成 run 永不动。**默认 dry-run**，`--yes` 才真删，`--keep-last N` 再保最近几个。closeout/preflight 会在 `.lto` 超阈值（>1G 或 >30 closed run）时提醒你 prune，但绝不自动删（守「不静默删数据」铁律）。
@@ -149,6 +149,11 @@ $LTO collect-agent-run --task-id T1 --runner agy --reply 回复-agy.md
 > # 不带 --target/--new-window 即默认：自动在你当前 attached 的会话（如 cc）开可见窗口
 > # 派 codex/pi/agy，host 不用记得传参就不会退回游离/无头；三家干完各自的机制级 hook 自动触发完成
 > $LTO dispatch-goal --runner codex --goal goal.md
+> # Claude Code / Codex host：分步派工后立刻挂后台 waiter；run-id 用 dispatch 输出的真实值
+> $LTO events --wait --event-type agent.turn.completed --run-id <run-id> --timeout 600 &
+> LTO_WAIT_PID=$!
+> # 或直接一步阻塞等待
+> $LTO dispatch-and-wait --runner codex --goal goal.md --timeout 600
 > ```
 
 **拿到结果后做什么**：

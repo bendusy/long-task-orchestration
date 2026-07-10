@@ -173,6 +173,8 @@ pub struct LtoState {
     pub next_action: Value,
     #[serde(default)]
     pub blocked_by: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_cmd: Option<String>,
     #[serde(default)]
     pub artifacts: Value,
     #[serde(flatten)]
@@ -209,6 +211,7 @@ impl Default for LtoState {
             user_decisions: Value::Array(Vec::new()),
             next_action: Value::Null,
             blocked_by: Value::Null,
+            notify_cmd: None,
             artifacts: Value::Object(Map::new()),
             extra: Map::new(),
         }

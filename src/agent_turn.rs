@@ -40,7 +40,15 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         println!("agent.turn.completed ignored: no matching LTO run");
         return Ok(());
     };
-    let phase = current_phase(repo, &run_id);
+    let run_state = load_run_state(repo, &run_id);
+    let phase = run_state
+        .as_ref()
+        .map(|state| state.current_phase.clone())
+        .filter(|phase| !phase.trim().is_empty());
+    let notify_cmd = options
+        .notify_cmd
+        .clone()
+        .or_else(|| run_state.and_then(|state| state.notify_cmd));
 
     let payload_hash = if payload_text.trim().is_empty() {
         None
@@ -89,7 +97,7 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         let _ = std::io::stdout().flush();
     }
     // 3. Run the host-supplied notifier, e.g. iaf (machine -> remote human).
-    if let Some(template) = options.notify_cmd.as_deref() {
+    if let Some(template) = notify_cmd.as_deref() {
         run_notify_cmd(template, &run_id, &runner_name, &summary_text, options.rc);
     }
     Ok(())
@@ -126,12 +134,9 @@ fn run_notify_cmd(template: &str, run_id: &str, runner: &str, summary: &str, rc:
     }
 }
 
-fn current_phase(repo: &Path, run_id: &str) -> Option<String> {
+fn load_run_state(repo: &Path, run_id: &str) -> Option<state::LtoState> {
     let path = repo.join(".lto").join(run_id).join("state.json");
-    state::load_state(path)
-        .ok()
-        .map(|state| state.current_phase)
-        .filter(|phase| !phase.trim().is_empty())
+    state::load_state(path).ok()
 }
 
 fn read_payload(path: Option<&Path>) -> anyhow::Result<String> {
@@ -271,6 +276,7 @@ mod tests {
         let repo = tmp.path();
         let run_id = "r1";
         let run_dir = repo.join(".lto").join(run_id);
+        let notified = repo.join("notified.txt");
         fs::create_dir_all(&run_dir).unwrap();
         fs::write(repo.join(".lto").join("current"), format!("{run_id}\n")).unwrap();
         let state = LtoState {
@@ -280,6 +286,10 @@ mod tests {
                 repo_root: repo.display().to_string(),
                 ..WorkspaceSnapshot::default()
             },
+            notify_cmd: Some(format!(
+                "printf '%s' \"$LTO_SUMMARY\" > {}",
+                notified.display()
+            )),
             ..LtoState::default()
         };
         state::save_state(run_dir.join("state.json"), &state).unwrap();
@@ -306,6 +316,7 @@ mod tests {
         assert_eq!(events[0]["phase"], "implementation");
         assert_eq!(events[0]["fields"]["runner"], "codex");
         assert_eq!(events[0]["fields"]["session_id"], "s1");
+        assert_eq!(fs::read_to_string(notified).unwrap(), "done");
     }
 
     #[test]

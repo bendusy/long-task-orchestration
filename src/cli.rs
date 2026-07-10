@@ -19,6 +19,7 @@ pub const COMMANDS: &[&str] = &[
     "resume",
     "preflight",
     "runner",
+    "dispatch-and-wait",
     "dispatch-goal",
     "judge",
     "hook",
@@ -33,6 +34,7 @@ pub const COMMANDS: &[&str] = &[
     "run",
     "collect-agent-run",
     "runs",
+    "prune",
     "memory",
     "agent-turn-completed",
     "plugin",
@@ -539,6 +541,10 @@ pub struct DispatchGoalCommand {
     tmux_bin: Option<String>,
     #[arg(long = "ready-timeout")]
     ready_timeout: Option<u64>,
+    /// Host notification command persisted on the run and executed when the
+    /// completion hook fires. Untrusted summary text is exposed via $LTO_SUMMARY.
+    #[arg(long = "notify-cmd")]
+    notify_cmd: Option<String>,
     #[arg(long = "no-install-hooks")]
     no_install_hooks: bool,
     #[arg(long = "uninstall-hooks")]
@@ -1196,6 +1202,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     tmux_session: cmd.tmux_session,
                     tmux_bin: cmd.tmux_bin,
                     ready_timeout_sec: cmd.ready_timeout,
+                    notify_cmd: cmd.notify_cmd,
                     no_install_hooks: cmd.no_install_hooks,
                     uninstall_hooks: cmd.uninstall_hooks,
                 },
@@ -1222,6 +1229,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     tmux_session: d.tmux_session,
                     tmux_bin: d.tmux_bin,
                     ready_timeout_sec: d.ready_timeout,
+                    notify_cmd: d.notify_cmd,
                     no_install_hooks: d.no_install_hooks,
                     uninstall_hooks: d.uninstall_hooks,
                 },
@@ -2337,7 +2345,7 @@ mod tests {
     #[test]
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
-        assert_eq!(COMMANDS.len(), 24);
+        assert_eq!(COMMANDS.len(), 26);
     }
 
     #[test]
@@ -2698,8 +2706,11 @@ mod tests {
         let doc =
             std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("COMMANDS.md"))
                 .unwrap();
-        assert!(doc.contains("Command count: 25."));
-        assert!(doc.contains("24 Rust-owned business"));
+        // Derived from COMMANDS so adding a command does not require editing two
+        // hardcoded numbers here and in COMMANDS.md independently.
+        let business = COMMANDS.len();
+        assert!(doc.contains(&format!("Command count: {}.", business + 1)));
+        assert!(doc.contains(&format!("{business} Rust-owned business")));
         assert!(doc.contains("clap built-in `help`"));
         for command in COMMANDS {
             assert!(

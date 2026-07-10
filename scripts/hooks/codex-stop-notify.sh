@@ -36,7 +36,7 @@ PY
   fi
 fi
 
-args=(--repo "$repo" agent-turn-completed --runner codex --payload-file "$payload" --source codex-stop-hook)
+args=(--repo "$repo" agent-turn-completed --runner codex --payload-file "$payload" --source codex-stop-hook --bell)
 if [ -n "${LTO_RUN_ID:-}" ]; then
   args+=(--run-id "$LTO_RUN_ID")
 fi

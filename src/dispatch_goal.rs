@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LTO_HOOK_MARKER: &str = "long-task-orchestration";
+const DEFAULT_COMPLETION_WAIT_SEC: u64 = 600;
 const CODEX_STOP_HOOK: &str = include_str!("../scripts/hooks/codex-stop-notify.sh");
 const PI_AGENT_END_HOOK: &str = include_str!("../scripts/hooks/pi-agent-end-notify.ts");
 const GOAL_CONSTRAINT_SUMMARY: &str = "Use LTO discipline: keep LTO self-managed, run required redlines, and write the local commit when accepted while leaving release/tag/push to the host. For heterogeneous audit before closeout, you are a host: run `lto audit --auto-dispatch` (and `lto dispatch-goal --runner <name> --goal <file>` for sub-tasks), then block on `lto events --wait --event-type agent.turn.completed --timeout <sec>` to collect replies. NEVER impersonate another runner or hand-write reply-*.md yourself — that fabricates cross-family audit evidence; if no healthy heterogeneous runner is available, stop and report blocked rather than self-audit. For any external docs/API/tool-capability lookup, route through `hs` first (Hybrid Search) rather than raw web fetches, then confirm against the local `--help`/config/binary before acting — external sources can name the wrong project; local evidence decides.";
@@ -24,6 +25,7 @@ pub struct DispatchGoalOptions {
     pub tmux_session: Option<String>,
     pub tmux_bin: Option<String>,
     pub ready_timeout_sec: Option<u64>,
+    pub notify_cmd: Option<String>,
     pub no_install_hooks: bool,
     pub uninstall_hooks: bool,
 }
@@ -65,7 +67,8 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     }
     validate_dispatch_target(options.target.as_deref(), options.new_window)?;
 
-    let ctx = util::load_run(repo, options.run_id.as_deref())?;
+    let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
+    persist_notify_cmd(&mut ctx, options.notify_cmd.as_deref())?;
     let goal_path = absolutize(&options.goal)?;
     let cwd = options.cwd.clone().unwrap_or_else(|| repo.to_path_buf());
     let degraded = |err: anyhow::Error| HookStatus {
@@ -137,7 +140,34 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     );
     println!("completion_mode={}", outcome.completion_mode);
     println!("hook_status={} {}", hook_status.status, hook_status.detail);
+    println!("wait_command={}", completion_wait_command(&ctx.run_id));
+    println!(
+        "dispatch_and_wait={}",
+        dispatch_and_wait_command(&options, &ctx.run_id)
+    );
     Ok(())
+}
+
+fn persist_notify_cmd(ctx: &mut util::RunContext, notify_cmd: Option<&str>) -> anyhow::Result<()> {
+    if let Some(notify_cmd) = notify_cmd {
+        ctx.state.notify_cmd = Some(notify_cmd.to_string());
+        util::save_run(ctx)?;
+    }
+    Ok(())
+}
+
+fn completion_wait_command(run_id: &str) -> String {
+    format!(
+        "lto events --wait --event-type agent.turn.completed --run-id {run_id} --timeout {DEFAULT_COMPLETION_WAIT_SEC}"
+    )
+}
+
+fn dispatch_and_wait_command(options: &DispatchGoalOptions, run_id: &str) -> String {
+    format!(
+        "lto dispatch-and-wait --runner {} --goal {} --run-id {run_id} --timeout {DEFAULT_COMPLETION_WAIT_SEC}",
+        options.runner,
+        shell_single_quote(&options.goal.display().to_string())
+    )
 }
 
 fn run_dispatch(
@@ -822,6 +852,71 @@ fn now_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_options(goal: &Path) -> DispatchGoalOptions {
+        DispatchGoalOptions {
+            run_id: Some("r1".to_string()),
+            runner: "codex".to_string(),
+            goal: goal.to_path_buf(),
+            target: None,
+            new_window: false,
+            window_name: None,
+            cwd: None,
+            tmux_session: None,
+            tmux_bin: None,
+            ready_timeout_sec: None,
+            notify_cmd: None,
+            no_install_hooks: false,
+            uninstall_hooks: false,
+        }
+    }
+
+    #[test]
+    fn persists_notify_cmd_in_run_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join(".lto").join("r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        let state_path = run_dir.join("state.json");
+        crate::state::save_state(
+            &state_path,
+            &crate::state::LtoState {
+                run_id: "r1".to_string(),
+                ..crate::state::LtoState::default()
+            },
+        )
+        .unwrap();
+        let mut ctx = util::RunContext {
+            run_id: "r1".to_string(),
+            run_dir,
+            state_path: state_path.clone(),
+            state: crate::state::load_state(&state_path).unwrap(),
+        };
+
+        persist_notify_cmd(&mut ctx, Some("notify $LTO_SUMMARY")).unwrap();
+
+        let persisted = crate::state::load_state(state_path).unwrap();
+        assert_eq!(persisted.notify_cmd.as_deref(), Some("notify $LTO_SUMMARY"));
+    }
+
+    #[test]
+    fn completion_commands_are_ready_to_copy() {
+        let options = test_options(Path::new("goal with space.md"));
+        assert_eq!(
+            completion_wait_command("r1"),
+            "lto events --wait --event-type agent.turn.completed --run-id r1 --timeout 600"
+        );
+        assert_eq!(
+            dispatch_and_wait_command(&options, "r1"),
+            "lto dispatch-and-wait --runner codex --goal 'goal with space.md' --run-id r1 --timeout 600"
+        );
+    }
+
+    #[test]
+    fn all_completion_hooks_request_a_bell() {
+        assert!(CODEX_STOP_HOOK.contains("--source codex-stop-hook --bell"));
+        assert!(PI_AGENT_END_HOOK.contains("--bell"));
+        assert!(include_str!("../scripts/hooks/agy-session-end-notify.sh").contains("--bell"));
+    }
 
     #[test]
     fn dispatch_target_defaults_to_auto_detect() {

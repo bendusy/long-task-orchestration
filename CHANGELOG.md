@@ -4,6 +4,8 @@
 
 - **headless 写权限默认 fail-closed**：`lto runner` 的非 tmux job 只要请求 `workspace-write` 或 `danger-full-access`，必须显式使用 `--allow-headless-write`，否则错误信息引导改用可见的 `dispatch-goal` TUI 路径。只读 headless audit 保持不变。
 - **delegate 写模式改为显式逃生口**：`scripts/delegate/delegate.sh` 默认按只读评审运行；只有 `--write` 才放开写档，并在 stderr 提示优先使用 `lto dispatch-goal`。
+- **完成通知闭环**：codex/pi/agy 三家 completion hook 全部携带 `--bell`；`dispatch-goal --notify-cmd` 会把 host notifier 存入 run state，完成事件沿用注入安全的 `$LTO_SUMMARY` 管道执行。
+- **派工后等待入口可复制**：`dispatch-goal` 输出带真实 run-id 的 `events --wait` 命令与 `dispatch-and-wait` 提示；新增隔离 tmux E2E 覆盖事件唤醒、notify sentinel 和 codex hook bell 参数。
 
 ## v0.9.2 — 压测根治 agy 派工两个时序 bug（2026-07-01）
 
