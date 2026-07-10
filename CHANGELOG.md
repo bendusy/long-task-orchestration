@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.3 — tmux 调用层：可辨识窗口 + 完成事件语义纠正 + headless 写闸门（2026-07-11）
+
 - **tmux 窗口可辨识且按不可变 ID 寻址**：`dispatch-goal` 默认窗口名改为 `lto:<runner>:<goal-slug>`，run state 记录 LTO 自建窗口的 `@window_id`；index 漂移不影响发键、抓屏或清理，显式用户窗口不会被误杀。
 - **完成事件纠正为 dispatch 语义**：Codex Stop 仍记录 `agent.turn.completed`，但不再唤醒成“goal 完成”；只有 transcript 中真实的 `update_goal complete` 才发 `agent.dispatch.completed`。pi/agy 由进程退出 wrapper 传真实 rc，移除会伪造完成的全局 hook 路径；`dispatch-and-wait` 只等 dispatch 事件，失败和 timeout 返回非零。
 - **成功清理、失败保留**：默认仅在可信 dispatch 完成且 rc=0 时 `kill-window -t @id` 并发 `runner.window.cleaned`；非零/未知 rc、`--keep-window`、派工失败和 timeout 均保留现场。
