@@ -1048,6 +1048,10 @@ fn permission_snapshot(policy: &PermissionPolicy) -> BTreeMap<String, serde_json
         ("sandbox".to_string(), json!(policy.sandbox.as_str())),
         ("reason".to_string(), json!(policy.reason)),
         ("user_approved".to_string(), json!(policy.user_approved)),
+        (
+            "allow_headless_write".to_string(),
+            json!(policy.allow_headless_write),
+        ),
     ])
 }
 
@@ -1366,6 +1370,7 @@ mod tests {
                 } else {
                     String::new()
                 },
+                allow_headless_write: matches!(runner, "agy" | "gemini"),
                 ..PermissionPolicy::default()
             },
             isolation: "none".to_string(),
@@ -1522,6 +1527,7 @@ print(json.dumps(data))
             sandbox: Sandbox::WorkspaceWrite,
             reason: "implementation write task".to_string(),
             user_approved: true,
+            allow_headless_write: true,
             tools: Vec::new(),
         };
         job.task_type = Some("write".to_string());
@@ -1952,6 +1958,7 @@ print(json.dumps(data))
             sandbox: Sandbox::WorkspaceWrite,
             reason: "user approved implementation job".to_string(),
             user_approved: true,
+            allow_headless_write: true,
             tools: Vec::new(),
         };
         let result = harness.scheduler().submit(vec![env_job]).await.unwrap();
@@ -2123,6 +2130,7 @@ print(json.dumps(data))
             sandbox: Sandbox::WorkspaceWrite,
             reason: "tmux cannot enforce read-only".to_string(),
             user_approved: false,
+            allow_headless_write: false,
             tools: Vec::new(),
         };
         job.needs_worktree = true;
@@ -2142,6 +2150,7 @@ print(json.dumps(data))
             sandbox: Sandbox::WorkspaceWrite,
             reason: "tmux cannot enforce read-only".to_string(),
             user_approved: false,
+            allow_headless_write: false,
             tools: Vec::new(),
         };
         job.meta
@@ -2226,6 +2235,7 @@ print(json.dumps(data))
             sandbox: Sandbox::DangerFullAccess,
             reason: "test only".to_string(),
             user_approved: false,
+            allow_headless_write: false,
             tools: Vec::new(),
         };
         assert!(matches!(
@@ -2241,6 +2251,7 @@ print(json.dumps(data))
             sandbox: Sandbox::WorkspaceWrite,
             reason: "conflicting env test".to_string(),
             user_approved: true,
+            allow_headless_write: true,
             tools: Vec::new(),
         };
         assert!(matches!(

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **headless 写权限默认 fail-closed**：`lto runner` 的非 tmux job 只要请求 `workspace-write` 或 `danger-full-access`，必须显式使用 `--allow-headless-write`，否则错误信息引导改用可见的 `dispatch-goal` TUI 路径。只读 headless audit 保持不变。
+- **delegate 写模式改为显式逃生口**：`scripts/delegate/delegate.sh` 默认按只读评审运行；只有 `--write` 才放开写档，并在 stderr 提示优先使用 `lto dispatch-goal`。
+
 ## v0.9.2 — 压测根治 agy 派工两个时序 bug（2026-07-01）
 
 多轮压测（agy×3 + pi×3）揪出 v0.9.1 里两个单次测试发现不了的 agy 派工缺陷，agy 每次首轮必失败。均已根治，修复后压测 6/6 全过、零失败、零串台。

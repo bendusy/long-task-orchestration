@@ -141,8 +141,10 @@ wait  # 等它们都跑完
 $LTO collect-agent-run --task-id T1 --runner agy --reply 回复-agy.md
 ```
 
-> headless delegate 只适合**只读、一次性**的评审派工。**开发型派工**（让外部 agent 真改代码）
-> 必须走 tmux 真 TUI，否则 agy `--print` 只出方案不执行（假成功）；走 tmux TUI 时三家都装了机制级完成 hook（v0.8.0+），干完自动唤醒你：
+> headless delegate 只适合**只读、一次性**的评审派工。工具层已强制：写档权限的非 tmux
+> runner 会 fail-closed。**开发型派工**（让外部 agent 真改代码）必须走 tmux 真 TUI，
+> 否则 agy `--print` 只出方案不执行（假成功）；仅在 tmux 不可用且 host 明确接受风险时，
+> 才用 `lto runner --allow-headless-write`（或 `delegate.sh --write`）逃生口。走 tmux TUI 时三家都装了机制级完成 hook（v0.8.0+），干完自动唤醒你：
 > ```bash
 > # 不带 --target/--new-window 即默认：自动在你当前 attached 的会话（如 cc）开可见窗口
 > # 派 codex/pi/agy，host 不用记得传参就不会退回游离/无头；三家干完各自的机制级 hook 自动触发完成

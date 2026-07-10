@@ -4,13 +4,14 @@
 # Usage:
 #   delegate.sh -a <agent> -p <prompt_file> -o <reply_file> [-t <timeout_sec>]
 #               [--headless] [-s <tmux_session>] [--keep-window]
+#               [--write]
 #               [--sandbox <read-only|workspace-write|danger-full-access>]
 #
 # Agents: codex | claude | pi | agy | gemini
 # --sandbox: only codex honors it (maps to CODEX_SANDBOX). Default read-only.
-#   Pass workspace-write for tasks that must edit files; otherwise codex can
-#   only read and will (correctly) report it cannot write. Ignored for non-codex
-#   agents with a stderr notice.
+# --write: explicit escape hatch for write-capable delegation. Prefer
+#   `lto dispatch-goal --runner <agent> --goal <file>` for development work.
+#   --sandbox workspace-write/danger-full-access also requires --write.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,6 +24,7 @@ TIMEOUT_SEC=900
 FORCE_HEADLESS=0
 SESSION=""
 KEEP_WINDOW=0
+WRITE=0
 AD_CALL_DEPTH="${AD_CALL_DEPTH:-0}"
 AD_MAX_CALL_DEPTH="${AD_MAX_CALL_DEPTH:-2}"
 AD_HOST_AGENT="${AD_HOST_AGENT:-}"
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --headless) FORCE_HEADLESS=1; shift ;;
     -s) SESSION="$2"; shift 2 ;;
     --keep-window) KEEP_WINDOW=1; shift ;;
+    --write) WRITE=1; shift ;;
     --sandbox) SANDBOX="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown option: $1" >&2; usage ;;
@@ -70,6 +73,23 @@ if [[ -n "$AD_HOST_AGENT" && "$AD_HOST_AGENT" == "$AGENT" ]]; then
   exit 65
 fi
 NEXT_CALL_DEPTH=$((AD_CALL_DEPTH + 1))
+
+# Default mode is one-shot read-only review. Write-capable delegation requires
+# an explicit escape hatch and points callers to the observable TUI path.
+if [[ "$WRITE" -eq 0 ]]; then
+  if [[ -n "$SANDBOX" && "$SANDBOX" != "read-only" ]]; then
+    echo "--sandbox $SANDBOX requires explicit --write" >&2
+    exit 64
+  fi
+  [[ "$AGENT" == "codex" && -z "$SANDBOX" ]] && SANDBOX="read-only"
+else
+  if [[ "$SANDBOX" == "read-only" ]]; then
+    echo "--write conflicts with --sandbox read-only" >&2
+    exit 64
+  fi
+  [[ -z "$SANDBOX" ]] && SANDBOX="workspace-write"
+  echo "[$AGENT] warning: headless write enabled; prefer lto dispatch-goal --runner $AGENT --goal <file>" >&2
+fi
 
 # Sandbox: only codex consumes CODEX_SANDBOX. Validate + map; warn for others.
 if [[ -n "$SANDBOX" ]]; then

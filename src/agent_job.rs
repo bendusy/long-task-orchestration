@@ -21,6 +21,10 @@ pub enum AgentJobError {
     MissingDangerReason,
     #[error("danger-full-access requires user_approved=true")]
     MissingDangerApproval,
+    #[error(
+        "headless runner {runner} cannot use {sandbox} by default; use `lto dispatch-goal --runner {runner} --goal <file>` or pass `--allow-headless-write`"
+    )]
+    HeadlessWriteDenied { runner: String, sandbox: Sandbox },
     #[error("CODEX_SANDBOX conflicts with permission_policy.sandbox ({actual} != {expected})")]
     CodexSandboxConflict { actual: String, expected: String },
     #[error("{runner} cannot enforce read-only; defer it for read-only jobs")]
@@ -182,6 +186,8 @@ pub struct PermissionPolicy {
     #[serde(default)]
     pub user_approved: bool,
     #[serde(default)]
+    pub allow_headless_write: bool,
+    #[serde(default)]
     pub tools: Vec<String>,
 }
 
@@ -191,6 +197,7 @@ impl Default for PermissionPolicy {
             sandbox: Sandbox::ReadOnly,
             reason: String::new(),
             user_approved: false,
+            allow_headless_write: false,
             tools: Vec::new(),
         }
     }
@@ -219,6 +226,13 @@ impl PermissionPolicy {
                 return Err(AgentJobError::MissingDangerApproval);
             }
             Sandbox::DangerFullAccess => {}
+        }
+
+        if self.sandbox != Sandbox::ReadOnly && runner != "tmux" && !self.allow_headless_write {
+            return Err(AgentJobError::HeadlessWriteDenied {
+                runner: runner.to_string(),
+                sandbox: self.sandbox,
+            });
         }
 
         match runner {
@@ -285,6 +299,10 @@ pub fn readonly_intent_to_policy(runner: &str) -> PermissionPolicy {
             sandbox: Sandbox::WorkspaceWrite,
             reason: reason.to_string(),
             user_approved: false,
+            // This helper represents an explicitly read-only intent. agy cannot
+            // enforce it, so its honest permission snapshot is write capable
+            // while the one-shot review path remains allowed.
+            allow_headless_write: runner == "agy",
             tools: Vec::new(),
         };
     }
@@ -508,6 +526,7 @@ mod tests {
         let policy = readonly_intent_to_policy("agy");
         assert_eq!(policy.sandbox, Sandbox::WorkspaceWrite);
         assert!(policy.reason.contains("no read-only"));
+        assert!(policy.allow_headless_write);
         assert!(policy.validate_for_runner("agy", &BTreeMap::new()).is_ok());
 
         let tmux = readonly_intent_to_policy("tmux");
@@ -542,11 +561,59 @@ mod tests {
             sandbox: Sandbox::DangerFullAccess,
             reason: "release publish".to_string(),
             user_approved: false,
+            allow_headless_write: false,
             tools: Vec::new(),
         };
         assert_eq!(
             policy.validate_for_runner("codex", &BTreeMap::new()),
             Err(AgentJobError::MissingDangerApproval)
+        );
+    }
+
+    #[test]
+    fn headless_workspace_write_requires_explicit_override() {
+        let policy = PermissionPolicy {
+            sandbox: Sandbox::WorkspaceWrite,
+            reason: "implementation task".to_string(),
+            ..PermissionPolicy::default()
+        };
+        let err = policy
+            .validate_for_runner("codex", &BTreeMap::new())
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(matches!(
+            err,
+            AgentJobError::HeadlessWriteDenied {
+                runner,
+                sandbox: Sandbox::WorkspaceWrite,
+            } if runner == "codex"
+        ));
+        assert!(message.contains("lto dispatch-goal --runner codex"));
+        assert!(message.contains("--allow-headless-write"));
+    }
+
+    #[test]
+    fn explicit_override_allows_headless_workspace_write() {
+        let policy = PermissionPolicy {
+            sandbox: Sandbox::WorkspaceWrite,
+            reason: "implementation task".to_string(),
+            allow_headless_write: true,
+            ..PermissionPolicy::default()
+        };
+        assert!(
+            policy
+                .validate_for_runner("codex", &BTreeMap::new())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn readonly_headless_behavior_is_unchanged() {
+        let policy = PermissionPolicy::default();
+        assert!(
+            policy
+                .validate_for_runner("codex", &BTreeMap::new())
+                .is_ok()
         );
     }
 

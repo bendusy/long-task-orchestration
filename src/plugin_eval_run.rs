@@ -428,6 +428,7 @@ fn make_job(
             format!("eval-run mount-approved sandbox for case {case_id}")
         },
         user_approved: sandbox == Sandbox::DangerFullAccess,
+        allow_headless_write: false,
         tools: Vec::new(),
     };
     let mut meta = BTreeMap::from([

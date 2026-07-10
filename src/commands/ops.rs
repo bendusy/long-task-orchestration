@@ -59,6 +59,7 @@ pub struct RunnerOptions {
     pub note: Option<String>,
     pub status_on_fail: String,
     pub runner: String,
+    pub allow_headless_write: bool,
     pub prompt: Option<String>,
     pub prompt_file: Option<PathBuf>,
     pub job_file: Option<PathBuf>,
@@ -985,7 +986,12 @@ fn non_empty_file(path: &Path) -> bool {
 
 pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
-        let jobs = load_jobs(job_file)?;
+        let mut jobs = load_jobs(job_file)?;
+        if options.allow_headless_write {
+            for job in &mut jobs {
+                job.permission_policy.allow_headless_write = true;
+            }
+        }
         let run_id = job_file_run_id(repo, options.run_id.as_deref(), &jobs)?;
         if let Some(run_id) = &run_id {
             crate::event_emit::emit_runner_started_jobs(
@@ -1045,6 +1051,10 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
                 None
             }
         });
+        let mut permission_policy = readonly_intent_to_policy(&options.runner);
+        if options.allow_headless_write {
+            permission_policy.allow_headless_write = true;
+        }
         let job = AgentJob {
             job_id: options
                 .job_id
@@ -1063,7 +1073,7 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
             prompt_is_inline: inline_prompt.is_some(),
             model: None,
             env: BTreeMap::new(),
-            permission_policy: readonly_intent_to_policy(&options.runner),
+            permission_policy,
             isolation: "none".to_string(),
             output_schema: None,
             parent_pattern: Pattern::Linear,
@@ -3481,6 +3491,7 @@ fn run_many_task_commands(repo: &Path, options: ParallelOptions) -> anyhow::Resu
             note: None,
             status_on_fail: "blocked".to_string(),
             runner: "codex".to_string(),
+            allow_headless_write: false,
             prompt: None,
             prompt_file: None,
             job_file: None,
@@ -3552,6 +3563,7 @@ fn run_pipeline_task_commands(repo: &Path, options: PipelineOptions) -> anyhow::
                 note: Some(format!("stage {idx}")),
                 status_on_fail: "blocked".to_string(),
                 runner: "codex".to_string(),
+                allow_headless_write: false,
                 prompt: None,
                 prompt_file: None,
                 job_file: None,
@@ -4134,6 +4146,7 @@ mod tests {
                 note: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
+                allow_headless_write: false,
                 prompt: None,
                 prompt_file: None,
                 job_file: None,
@@ -4405,6 +4418,7 @@ mod tests {
                     note: None,
                     status_on_fail: "blocked".into(),
                     runner: "codex".into(),
+                    allow_headless_write: false,
                     prompt: None,
                     prompt_file: None,
                     job_file: None,
@@ -4461,6 +4475,7 @@ mod tests {
                 note: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
+                allow_headless_write: false,
                 prompt: None,
                 prompt_file: None,
                 job_file: None,
@@ -4510,6 +4525,7 @@ mod tests {
                 note: None,
                 status_on_fail: "blocked".into(),
                 runner: "tmux".into(),
+                allow_headless_write: false,
                 prompt: None,
                 prompt_file: None,
                 job_file: None,
@@ -4614,6 +4630,27 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
         path
     }
 
+    fn write_workspace_codex_job_file(repo: &Path, job_id: &str) -> PathBuf {
+        let path = repo.join(format!("{job_id}.json"));
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "job_id": job_id,
+                "runner": "codex",
+                "prompt_ref": format!("prompt for {job_id}"),
+                "prompt_is_inline": true,
+                "permission_policy": {
+                    "sandbox": "workspace-write",
+                    "reason": "test implementation"
+                },
+                "task_type": "implementation"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
     #[test]
     fn autopilot_tmux_worker_runs_pending_tasks_and_uses_contracts() {
         let h = Harness::new();
@@ -4710,6 +4747,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 note: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
+                allow_headless_write: false,
                 prompt: Some("hello from prompt".into()),
                 prompt_file: None,
                 job_id: Some("prompt-job".into()),
@@ -4742,6 +4780,56 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
     }
 
     #[test]
+    fn cmd_runner_job_file_requires_headless_write_override() {
+        let h = Harness::new();
+        h.init_git();
+        h.write_state(base_state());
+        write_ok_healthcheck(&h.repo);
+        write_fake_codex_runner(&h.repo);
+        let job_file = write_workspace_codex_job_file(&h.repo, "write-job-file");
+
+        let options = RunnerOptions {
+            run_id: Some("r1".into()),
+            task_id: None,
+            kind: "manual".into(),
+            command: None,
+            cwd: None,
+            timeout: 5,
+            touch: Vec::new(),
+            note: None,
+            status_on_fail: "blocked".into(),
+            runner: "codex".into(),
+            allow_headless_write: false,
+            prompt: None,
+            prompt_file: None,
+            job_file: Some(job_file.clone()),
+            job_id: None,
+            tmux_target: None,
+            tmux_mode: None,
+            tmux_sentinel: None,
+            tmux_session: None,
+            tmux_new_window: false,
+            tmux_new_session: false,
+            tmux_window_name: None,
+            tmux_ready_patterns: Vec::new(),
+            tmux_skip_prompts: Vec::new(),
+            tmux_ready_timeout_sec: None,
+            tmux_bin: None,
+        };
+        let err = cmd_runner(&h.repo, options.clone()).unwrap_err();
+        assert!(err.to_string().contains("lto dispatch-goal --runner codex"));
+
+        cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                allow_headless_write: true,
+                ..options
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn job_file_scheduler_paths_record_agent_runs_with_explicit_run_id() {
         let h = Harness::new();
         h.write_state(base_state());
@@ -4762,6 +4850,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 note: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
+                allow_headless_write: false,
                 prompt: None,
                 prompt_file: None,
                 job_id: None,
@@ -5244,6 +5333,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 note: Some("unit smoke".into()),
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
+                allow_headless_write: false,
                 prompt: None,
                 prompt_file: None,
                 job_file: None,
@@ -5284,6 +5374,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 note: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
+                allow_headless_write: false,
                 prompt: None,
                 prompt_file: None,
                 job_file: None,

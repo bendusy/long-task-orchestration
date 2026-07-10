@@ -477,6 +477,10 @@ pub struct RunnerCommand {
         value_parser = ["codex", "pi", "agy", "gemini", "claude", "tmux"]
     )]
     runner: String,
+    /// Explicitly allow a write-capable non-tmux runner. Prefer dispatch-goal
+    /// for development work so the TUI remains visible and observable.
+    #[arg(long)]
+    allow_headless_write: bool,
     #[arg(long)]
     prompt: Option<String>,
     #[arg(long)]
@@ -1159,6 +1163,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     note: cmd.note,
                     status_on_fail: cmd.status_on_fail,
                     runner: cmd.runner,
+                    allow_headless_write: cmd.allow_headless_write,
                     prompt: cmd.prompt,
                     prompt_file: cmd.prompt_file,
                     job_file: cmd.job_file,

@@ -337,6 +337,7 @@ mod tests {
         assert_eq!(jobs[0].output_schema, Some(auto_dispatch_output_schema()));
         assert_eq!(jobs[0].permission_policy.sandbox, Sandbox::ReadOnly);
         assert_eq!(jobs[1].permission_policy.sandbox, Sandbox::WorkspaceWrite);
+        assert!(jobs.iter().all(|job| job.validate().is_ok()));
         assert_eq!(jobs[1].parent_pattern, Pattern::Adversarial);
         // backlog ⑪: audit jobs carry LTO_LEAN_CONTEXT so runner.sh skips the
         // heavy skill/context cold-load (~40k→~400 tokens on pi).
