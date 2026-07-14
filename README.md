@@ -85,18 +85,25 @@ optional sinks: am memory publish/resume, release docs, changelog
 - **runner/audit/worktree 是 affordance**。它们提供派工、异构检查和可弃沙箱，不改变最终责任归属。
 - **macOS/Linux 优先**。Windows native support 暂停；当前内置 runner 协议依赖 `scripts/delegate/runners/*.sh` 和 `healthcheck.sh`，WSL/Unix-like shell 属于用户侧环境验证。
 
-### 放到业界 loop 工程坐标里看 LTO
+### 六域操作坐标（host 怎么用它）
 
-业界把 agent harness 看成可叠加的四层 loop（LangChain "loop engineering" / swyx "loopcraft"）。LTO 是一个**覆盖 L1–L4 的长任务 harness**，各层状态如下：
+运行时拓扑（上图）之外，host 侧的使用动线按六域路由——详表唯一真源是
+[references/INDEX.md](references/INDEX.md)，SKILL.md 的 ROUTER 用同一套域名：
 
-| Loop 层 | 是什么 | LTO 落点 | 状态 |
-|---|---|---|---|
-| **L1 Agent** | model 调 tool 循环到完成 | `runner` / `scheduler` / `agent_job`（dumb loop，智能在 model/host） | ✅ |
-| **L2 Verification** | grader 检查输出、不达标反馈 | `audit --auto-dispatch`（**跨族异构** runner 互审）+ `judge` + `check` gate | ✅ **差异化**：业界多用单模型 LLM-as-judge，LTO 用异构 runner 跨族互审，抗同族盲区 |
-| **L3 Event-driven** | 事件触发 agent 后台跑，非手动调 | `events.jsonl` + `dispatch-goal`；turn 与 dispatch 完成分事件，codex 用 goal-state proof，pi/agy 用真实进程 rc | ✅ 已实现 |
-| **L4 Hill-climbing** | 扫历史 trace、改进 harness 自身 | 跨 run 数据挖掘（按 runner 模型 × 任务 × 时间聚合，只读喂回 host 出 tuning brief） | ✅ 已实现（`recap --mine`） |
+| 域 | 核心动作 | 主 reference |
+|---|---|---|
+| Ⅰ 接管与恢复 | runs/resume/recap/check | onboarding、long-loop-state |
+| Ⅱ 立项与契约 | start/task/preflight/delivery contract | run-state-workflow |
+| Ⅲ 执行与派工 | runner/dispatch-goal/events/autopilot | execution-loop |
+| Ⅳ 验证与收敛 | audit/judge/check/ledger | audit-convergence、playbooks/review |
+| Ⅴ 交付与发布 | 部署实测/closeout/release | deploy-sequencing、release-workflow |
+| Ⅵ 学习与维护 | decision/memory/telemetry/prune | decision-logging、events-telemetry-contract |
 
-**贯穿原则——薄 harness + 人在环**：LTO 赌「模型变强、harness 变薄」（primitive 不硬路由、preset 是 host playbook 不是固定菜单）。L4 与业界关键分歧是：LTO 挖掘出的是**证据和 brief**，喂 host 决策，**绝不自动改写 harness / 自动 promote**——所有路线判断和敏感操作（`git push`、closeout）都回到 host 和人。这与 Anthropic「薄 harness」、各家「human oversight at every level」一致，LTO 把人在环守得更严。
+放到业界 loop 工程坐标（L1 agent loop / L2 verification / L3 event-driven /
+L4 hill-climbing）里，LTO 四层全覆盖；差异化在 L2 用**跨族异构 runner 互审**抗同族盲区，
+L4 挖掘只出证据和 brief 喂 host 决策、**绝不自动改写 harness / 自动 promote**——薄
+harness + 人在环。控制回路细节见
+[references/control-loop-harness.md](references/control-loop-harness.md)。
 
 ## 插件系统怎么用
 
