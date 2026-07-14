@@ -4,7 +4,7 @@
 
 - **审计 ledger 统一由 Rust 判定**：`lto check --ledger <path> [--strict]` 成为唯一 evaluator；空 ledger 明确为 `NO_OBSERVATIONS`，高风险 run 不再把无观测误判为收敛，历史 `[1,2,0]` 仍保持 `CONVERGED`。
 - **增加全序列稳定性 diagnostics**：check/closeout 旁路展示样本充分性、末值、方向、振荡和峰值包络；缺少 auditor/coverage lineage 时明确降为 low-confidence advisory，诊断不参与 promote、route 或 closeout 硬闸门。
-- **纠正审计事件与兼容路径**：新写入使用 `audit.round.recorded` 和 `audit.ledger.evaluated`，telemetry 对新旧事件按轮去重；`scripts/audit_ledger_check.py` 暂留一版本 exec proxy，并由共享 golden fixtures 锁定与 Rust 相同的 verdict 和退出码。
+- **纠正审计事件与兼容路径**：新写入使用 `audit.round.recorded` 和 `audit.ledger.evaluated`，telemetry 对新旧事件按轮去重；collector 把结构化 `[]` 视为明确的零 findings，不再从解释文字中的 `high`/`critical` 词频制造 blocker；`scripts/audit_ledger_check.py` 暂留一版本 exec proxy，并由共享 golden fixtures 锁定与 Rust 相同的 verdict 和退出码。
 
 ## v0.9.3 — tmux 调用层：可辨识窗口 + 完成事件语义纠正 + headless 写闸门（2026-07-11）
 

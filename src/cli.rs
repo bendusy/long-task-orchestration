@@ -1974,12 +1974,11 @@ struct SeverityCounts {
 
 impl SeverityCounts {
     fn add_reply(&mut self, text: &str) {
-        let findings = parse_findings_or_empty(text);
-        if findings.is_empty() {
+        let Some(findings) = parse_structured_findings(text) else {
             self.high += text.matches("high").count() as u64;
             self.critical += text.matches("critical").count() as u64;
             return;
-        }
+        };
         for finding in findings {
             match finding
                 .get("severity")
@@ -2006,13 +2005,19 @@ struct AuditLedgerRoundInput<'a> {
 }
 
 fn parse_findings_or_empty(text: &str) -> Vec<Value> {
+    parse_structured_findings(text).unwrap_or_default()
+}
+
+fn parse_structured_findings(text: &str) -> Option<Vec<Value>> {
     if let Some(findings) = crate::audit::parse_findings_text(text) {
-        return findings
-            .into_iter()
-            .filter_map(|finding| serde_json::to_value(finding).ok())
-            .collect();
+        return Some(
+            findings
+                .into_iter()
+                .filter_map(|finding| serde_json::to_value(finding).ok())
+                .collect(),
+        );
     }
-    parse_json_findings(text).unwrap_or_default()
+    parse_json_findings(text)
 }
 
 fn parse_json_findings(text: &str) -> Option<Vec<Value>> {
@@ -2409,6 +2414,24 @@ mod tests {
     fn audit_flags_are_registered() {
         Args::try_parse_from(["lto-rs", "audit", "--auto-dispatch"]).unwrap();
         Args::try_parse_from(["lto-rs", "audit", "--discover-risks"]).unwrap();
+    }
+
+    #[test]
+    fn audit_empty_findings_do_not_fall_back_to_prose_severity_words() {
+        let mut counts = SeverityCounts::default();
+        counts.add_reply("```json\n[]\n```\nThe `critical` column precedes `high`.");
+        assert_eq!(counts.high, 0);
+        assert_eq!(counts.critical, 0);
+        assert_eq!(counts.minor, 0);
+    }
+
+    #[test]
+    fn audit_unstructured_legacy_reply_keeps_severity_word_fallback() {
+        let mut counts = SeverityCounts::default();
+        counts.add_reply("high issue and critical issue");
+        assert_eq!(counts.high, 1);
+        assert_eq!(counts.critical, 1);
+        assert_eq!(counts.minor, 0);
     }
 
     #[test]
