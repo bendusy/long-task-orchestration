@@ -215,6 +215,16 @@ fn parse_ledger_supports_mixed_rows_after_header_upgrade() {
 }
 
 #[test]
+fn parse_ledger_uses_reordered_legacy_header_for_same_width_rows() {
+    let text = "## Round Summary\n| round | artifact | auditors | critical | high | minor | trend | status |\n|---|---|---|---:|---:|---:|---|---|\n| R1 | old | pi | 1 | 2 | 0 | start | open |";
+    let round = parse_ledger(text).unwrap().remove(0);
+    assert_eq!(round.high, 2);
+    assert_eq!(round.critical, 1);
+    assert_eq!(round.auditors.as_deref(), Some("pi"));
+    assert_eq!(round.coverage, None);
+}
+
+#[test]
 fn diagnostics_summary_and_enum_strings_are_stable() {
     let result = diagnostics(&[5, 4, 3]);
     assert_eq!(

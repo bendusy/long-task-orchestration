@@ -179,14 +179,13 @@ pub fn parse_ledger(text: &str) -> anyhow::Result<Vec<LedgerRound>> {
             continue;
         }
         if is_header_row(&cells) {
-            columns = SummaryColumns::from_header(&cells);
+            columns = SummaryColumns::from_header(&cells).map(|columns| (cells.len(), columns));
             continue;
         }
-        let columns = if cells.len() >= 9 {
-            columns.unwrap_or_else(|| SummaryColumns::for_width(cells.len()))
-        } else {
-            SummaryColumns::for_width(cells.len())
-        };
+        let columns = columns
+            .filter(|(header_width, _)| *header_width == cells.len())
+            .map(|(_, columns)| columns)
+            .unwrap_or_else(|| SummaryColumns::for_width(cells.len()));
         let label = cells.first().cloned().unwrap_or_default();
         let high_raw = cells.get(columns.high).cloned().unwrap_or_default();
         let critical_raw = cells.get(columns.critical).cloned().unwrap_or_default();
