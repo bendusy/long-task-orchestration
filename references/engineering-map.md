@@ -49,7 +49,7 @@
 
 | 脚本 | 职责 | 输入 | 输出 | 运行 |
 |---|---|---|---|---|
-| `lto start` | 建状态文件（state.json + run-state.md；audit/deploy 加 audit-ledger；deploy 再落 preflight 快照） | `--goal --host --profile{minimal\|audit\|deploy}` [--with-audit] | `.lto/<run-id>/` | `lto start --goal X` |
+| `lto start` | 建状态文件（state.json + run-state.md；audit-ledger 由 `lto audit` 首轮生成；preflight 快照走 `lto preflight --record`） | `--goal --host --why --done-when` + 契约四件套 | `.lto/<run-id>/` | `lto start --goal X` |
 | `lto resume` | 跨 session 断点恢复 | `[--run-id]` | 上下文胶囊 + state.json 更新 | `lto resume` |
 | `lto check` | 校验状态完整+git 锚定+收敛趋势；可附 phase-entry 证据报告 | `[--run-id] [--strict] [--to implementation\|closed] [--json]` | WARN/ERROR + `OK <dir>`；phase evidence；rc 0/1 | `lto check --to implementation --strict` |
 | `write_decision.py` | 生成 ADR 决策记录，更新 state.user_decisions，并登记 `decision_record` artifact | `--repo --run-id --title --context --decision --consequences [--slug]` | `docs/decisions/YYYY-MM-DD-<slug>.md` + manifest entry | `python3 scripts/write_decision.py --run-id <id> --title "..." ...` |

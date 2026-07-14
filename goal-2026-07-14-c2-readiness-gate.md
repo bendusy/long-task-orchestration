@@ -47,6 +47,9 @@ LTO 现状违反这条：
 3. **typed update 入口**：新增 `lto contract set [--run-id] --target ... --constraint ...
    --instrument ... --entropy-check ...`（可只补缺项；重复 flag 追加，与 start 一致）——
    服务旧 run / 后补契约；partial 已在 start 被拒，update 入口写盘前同样做 completeness 校验。
+   **instrument 支持可选显式 label**：`--instrument "<label>::<cmd>"`（`::` 分隔，无 `::`
+   则整串为 cmd、label 缺省）——这是 C4 可观性「label 优先」引用键的参数面入口（异构评审
+   R5-F2：没有 CLI 入口 label 优先就是空中楼阁），start 与 contract set 同语法。
 4. **preflight 解耦**：`preflight` 主职责仍是环境健康；有显式 `--run-id` 或 active run 时，
    增加独立子结果 `run_readiness`（ok/missing 列表），与 `--record`（`ops.rs:328-343`）解耦
    ——不带 `--record` 也报告 readiness；显式给了 `--run-id` 但 run 不存在必须报错不静默。

@@ -32,8 +32,8 @@ decision 拍板即落盘（见 decision-logging.md），不是只在收尾才记
 
 | 状态 | 含义 | 文件 |
 |---|---|---|
-| active/current | 当前口径，ROUTER 可落地 | onboarding、run-state-workflow、execution-loop、workflow-playbook（总纲）、playbooks/*（11 个场景先验）、control-loop-harness、events-telemetry-contract、audit-convergence、long-loop-state、decision-logging、release-workflow、deploy-sequencing、hooks、sharing-guide、cross-runtime-host-notes、hs-as-core-tool、plugin-boundary、rust-migration-release |
-| design/future | 设计目标，未实现，不得当现状引用 | specs/*、backlog.md、control-loop-roadmap.md、plugin-real-eval-runner.md（含 future 段）、self-driving-wake-loop.md |
+| active/current | 当前口径，ROUTER 可落地 | onboarding、run-state-workflow、execution-loop、workflow-playbook（总纲）、playbooks/*（11 个场景先验）、control-loop-harness、events-telemetry-contract、audit-convergence、long-loop-state、decision-logging、release-workflow、deploy-sequencing、hooks、sharing-guide、cross-runtime-host-notes、hs-as-core-tool、plugin-boundary、rust-migration-release、runner-readonly-contract、protocol-and-language-strategy、open-source-delivery-requirements、engineering-map |
+| design/future | 设计目标，未实现，不得当现状引用 | specs/*、backlog.md、control-loop-roadmap.md、plugin-real-eval-runner.md（含 future 段）、self-driving-wake-loop.md、dev-workflow-spec.md、am-integration-requirements.md |
 | historical/dated | 历史证据，只证明当时 | validation-log.md、python-rust-ownership.md、2026-06-17-rust-inheritance-and-architecture-review.md、agent-runs-decoupling-diagnosis.md、codex-cli-control.md、decision-logging 之外的 dated 材料 |
 | external/inspiration | 独立外部 skill/灵感源，不属于 LTO 文档面，不进 ACTIVE_DOCS/CI 校验，有自己的生命周期 | `../engineering-cybernetics-essence/`（工程控制论推理引擎 skill，2026-07-14 改造的元结构来源） |
 

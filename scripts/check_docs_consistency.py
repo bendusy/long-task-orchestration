@@ -64,6 +64,10 @@ ACTIVE_DOCS = [
     "references/hs-as-core-tool.md",
     "references/plugin-boundary.md",
     "references/rust-migration-release.md",
+    "references/runner-readonly-contract.md",
+    "references/protocol-and-language-strategy.md",
+    "references/open-source-delivery-requirements.md",
+    "references/engineering-map.md",
 ]
 
 STALE_FLAG_DENYLIST = [
