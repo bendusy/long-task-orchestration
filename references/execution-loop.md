@@ -142,6 +142,34 @@ runner / judge / parallel / pipeline / closeout **从不 git commit**——只�
 提交权在 host 手里（历史上的 auto-commit 选项已随 Rust 迁移移除）。`.lto` 默认
 不入库；CHANGELOG.md 等用户真实产物由 host 显式提交。
 
+## 派外部 agent：tmux 真 TUI 优先（dispatch-goal）
+
+跨 runtime 派 codex/pi/agy 等外部 agent，**默认走 `lto dispatch-goal`（tmux 真 TUI
+会话）**——agent 在 attached 会话里可见可监督，codex/pi/agy 三家都能机制级自动检测
+完成（v0.8.0+）。headless delegate（`scripts/delegate/runners/*.sh`）只用于 shell
+证据采集、只读审计派工和 tmux 不可用/headless CI 的兜底；**开发型派工（真改代码）
+必须走 tmux**——agy 的 `--print` 只出方案不执行，是假成功陷阱。工具层已强制：写档
+权限的非 tmux runner 会 fail-closed；仅在 tmux 不可用且 host 明确接受风险时才用
+`lto runner --allow-headless-write`（或 `delegate.sh --write`）逃生口。
+
+```bash
+# 不带 --target/--new-window 即默认在你当前 attached 的会话开可见窗口
+lto dispatch-goal --runner codex --goal goal.md
+# 派完挂 waiter 等真实完成事件（别轮询、别把 turn 当 goal 完成）
+lto events --wait --event-type agent.dispatch.completed --run-id <run-id> --timeout 600
+# 或一步阻塞等待
+lto dispatch-and-wait --runner codex --goal goal.md --timeout 600
+```
+
+**完成语义**：Codex Stop 是每轮结束，普通 Stop 只写 `agent.turn.completed`；只有
+transcript 中真实的 `update_goal complete` 才升级为 dispatch 完成。pi/agy 由 TUI
+进程退出 wrapper 传真实 rc。成功按 run state 记录的 `@window_id` 清理窗口；失败、
+超时、交互阻塞和 `--keep-window` 保留现场。可选 `--notify-cmd` 只在 dispatch 真完成
+时执行。
+
+**运行中可见**：每个派工的输出边跑边写 `.lto/<run-id>/live/<job-id>.log`，卡住时
+`tail -f` 就能看；tmux 派工直接切窗观察（`tmux capture-pane` 救援见 goal blocked 场景）。
+
 ## Agent 执行层（harness primitive）
 
 shell 层（上面）编排 shell 命令；agent 层编排带独立 context 的隔离 agent。

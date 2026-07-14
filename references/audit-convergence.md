@@ -38,7 +38,26 @@
 - 修 A 又冒出 B（计数反弹）→ **暂停，回退 debug，重审上一轮**。不靠「再硬修一版」推。
 - 连续 2 轮不降 → 怀疑审计标准或需求本身，回头质疑前提，别在错误前提上继续修。
 
-## 四、预埋待审点（自我证伪）
+## 四、机器判收敛（脚本算，不手判）
+
+每轮填完 Round Summary 后让脚本判收敛：
+
+```bash
+python3 scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
+```
+
+它打出一行 `verdict:`——降到 0 是 **CONVERGED**（可收尾）；还在降是 **CONVERGING**
+（继续修）；反弹是 **REBOUND**、原地不动（`--strict`）是 **STALLED**，这俩会喊停。
+Rust 权威实现在 `lto check`（`src/commands/util.rs` 的 `evaluate_ledger`）：check 下
+反弹/停滞默认 WARN、`--strict` 才 ERROR；**closeout 只要 ledger 有轮次且未降到 0
+（CONVERGING/REBOUND/STALLED）会直接拒绝收尾**（除非 `--force` 显式越过）——脚本算的
+Round Summary 收敛是收尾硬条件，手填的 Closure Gate 字段只是辅助记录，骗不过闸门。
+
+**审计派工可控优先级**：`lto audit --auto-dispatch --prefer-runner codex --prefer-runner agy`
+限定并排序审计 runner 池，把慢的重 thinking runner（pi）挪出收口关键路径。这是 host
+可控旋钮，不按历史 telemetry 自动路由。
+
+## 五、预埋待审点（自我证伪）
 
 起草 spec 时，把自己嗅到「可能空转 / 可能接不上」的点，显式写进 spec 的「待审点」清单，让三方**严判**而不是替自己圆场。
 
