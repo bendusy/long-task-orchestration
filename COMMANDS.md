@@ -18,7 +18,7 @@ aliases do not appear in the public help table below.
 | Command | Summary | Required | Optional |
 |---|---|---|---|
 | `start` | Create a new Rust v2 run directory and current marker. | None | `--run-id`, `--goal`, `--why`, `--done-when`, `--host`, `--target`, `--constraint`, `--instrument`, `--entropy-check`, `--force` |
-| `check` | Read a run and report phase/goal, optionally as JSON. | None | `--run-id`, `--strict`, `--to`, `--json` |
+| `check` | Check a run's gates/phase evidence and ledger, or evaluate one standalone ledger with the Rust evaluator. Run-mode text and JSON include verdict plus five-dimensional diagnostics; advisory fields never gate. | None | Run mode: `--run-id`, `--strict`, `--to`, `--json`; standalone mode: `--ledger <path> [--strict]` (`--ledger` conflicts with `--run-id`, `--to`, and `--json`) |
 | `closeout` | Gate closeout, update state/run-state, write handoff and changelog. | `--summary` | `--run-id`, `--next-action`, `--blocked-by`, `--allow-dirty`, `--no-changelog`, `--force` |
 | `resume` | Print an active-session capsule and detect HEAD drift. | None | `--run-id` |
 | `preflight` | Check write access, git repo status, delegate runner health, and an advisory `tool:hs` probe (present→OK, absent→INFO; never gates). | None | `--run-id`, `--record` |
@@ -43,3 +43,9 @@ aliases do not appear in the public help table below.
 | `dispatch-and-wait` | Dispatch a goal and block for `agent.dispatch.completed` (Codex goal-state proof or pi/agy process exit with real rc), then print a success/failure summary. | `--runner <runner> --goal <path>` | all dispatch-goal options + `--timeout <secs>` (default 600) |
 | `agent-turn-completed` | Route a hook/process lifecycle signal as turn, session, or dispatch completion; only dispatch completion wakes goal waiters and may clean an owned window. | None | `--run-id`, `--runner`, `--payload-file`, `--cwd`, `--session-id`, `--summary`, `--rc`, `--window-id`, `--source`, `--bell` (effective only for dispatch completion), `--notify-cmd` (host notifier template; trusted fields via `{run_id}`/`{runner}`/`{rc}`, untrusted summary via `$LTO_SUMMARY` env to avoid shell injection, e.g. an iaf call) |
 | `events` | Block until a matching run event appears. | None | `--run-id`, `--wait`, `--event-type`, `--after`, `--timeout`, `--json` |
+
+Ledger verdicts come only from `src/ledger.rs`. `check --ledger` exits 0 for
+`NO_OBSERVATIONS`, `CONVERGED`, or `CONVERGING`; 1 for `REBOUND` or strict
+`STALLED`; and 2 for usage/read/parse errors. `scripts/audit_ledger_check.py`
+is a one-release compatibility proxy that `exec`s this command and preserves
+its output and exit code.

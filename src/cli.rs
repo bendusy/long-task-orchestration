@@ -1,7 +1,7 @@
 use crate::audit_dispatch;
 use crate::audit_ledger;
 use crate::budget;
-use crate::commands::{closeout, ops, recap, resume, util};
+use crate::commands::{closeout, ledger_check, ops, recap, resume, util};
 use crate::plugin;
 use crate::plugin_eval_run;
 use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
@@ -80,6 +80,12 @@ pub enum Commands {
     Check {
         #[arg(long)]
         run_id: Option<String>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with_all = ["run_id", "to_phase", "json"]
+        )]
+        ledger: Option<PathBuf>,
         #[arg(long)]
         strict: bool,
         #[arg(long = "to", value_parser = ["implementation", "closed"])]
@@ -810,19 +816,36 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
         }
         Commands::Check {
             run_id,
+            ledger,
             strict,
             to_phase,
             json,
         } => {
-            ops::cmd_check(
-                &args.repo,
-                ops::CheckOptions {
-                    run_id,
-                    strict,
-                    to_phase,
-                    json,
-                },
-            )?;
+            if let Some(path) = ledger {
+                match ledger_check::evaluate_path(&path, strict) {
+                    Ok(report) => {
+                        print!("{}", report.render());
+                        let exit_code = report.exit_code();
+                        if exit_code != 0 {
+                            std::process::exit(exit_code);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("ERROR {err:#}");
+                        std::process::exit(2);
+                    }
+                }
+            } else {
+                ops::cmd_check(
+                    &args.repo,
+                    ops::CheckOptions {
+                        run_id,
+                        strict,
+                        to_phase,
+                        json,
+                    },
+                )?;
+            }
         }
         Commands::Budget {
             command: BudgetCommand::Check { run_id, tokens },
@@ -2488,7 +2511,22 @@ mod tests {
     fn check_flags_are_registered() {
         Args::try_parse_from(["lto-rs", "check", "--strict", "--to", "closed", "--json"]).unwrap();
         Args::try_parse_from(["lto-rs", "check", "--to", "implementation"]).unwrap();
+        Args::try_parse_from(["lto-rs", "check", "--ledger", "ledger.md", "--strict"]).unwrap();
         assert!(Args::try_parse_from(["lto-rs", "check", "--to", "deploy"]).is_err());
+        for conflict in ["--run-id", "--to", "--json"] {
+            let mut argv = vec!["lto-rs", "check", "--ledger", "ledger.md", conflict];
+            if conflict != "--json" {
+                argv.push(if conflict == "--run-id" {
+                    "r1"
+                } else {
+                    "closed"
+                });
+            }
+            assert!(
+                Args::try_parse_from(argv).is_err(),
+                "{conflict} must conflict with --ledger"
+            );
+        }
     }
 
     #[test]

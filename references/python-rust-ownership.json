@@ -35,6 +35,15 @@
     {"command": "pipeline", "owner": "rust-core", "python_role": "removed", "replacement": "run pipeline"},
     {"command": "agent-turn-completed", "owner": "rust-core", "python_role": "removed", "replacement": "agent-turn-completed"}
   ],
+  "python_compatibility_proxies": [
+    {
+      "path": "scripts/audit_ledger_check.py",
+      "owner": "rust-core",
+      "python_role": "exec-proxy",
+      "replacement": "lto check --ledger",
+      "compatibility_window": "one-version"
+    }
+  ],
   "plugin_subcommands": [
     {"command": "list", "owner": "rust-core", "python_role": "removed"},
     {"command": "validate", "owner": "rust-core", "python_role": "removed"},

@@ -53,6 +53,11 @@ fn fixed_legacy_run_fixture_is_readable_by_rust_recap_resume_and_check() {
     assert_eq!(json["run_id"], "legacy-fixture-run");
     assert!(json["check"]["errors"].as_array().unwrap().is_empty());
     assert!(json["check"]["warnings"].is_array());
+    assert_eq!(json["ledger"]["verdict"], "CONVERGED");
+    assert_eq!(
+        json["ledger"]["diagnostics"]["confidence"],
+        "low (no lineage)"
+    );
 }
 
 fn init_git_repo(repo: &Path) {
@@ -95,6 +100,11 @@ fn install_legacy_fixture(repo: &Path, run_id: &str) {
     fs::write(
         run_dir.join("state.json"),
         fixture.replace("__HEAD__", &git_head(repo)),
+    )
+    .unwrap();
+    fs::write(
+        run_dir.join("audit-ledger.md"),
+        include_str!("fixtures/legacy-run/audit-ledger.md"),
     )
     .unwrap();
 }

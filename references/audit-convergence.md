@@ -38,20 +38,37 @@
 - 修 A 又冒出 B（计数反弹）→ **暂停，回退 debug，重审上一轮**。不靠「再硬修一版」推。
 - 连续 2 轮不降 → 怀疑审计标准或需求本身，回头质疑前提，别在错误前提上继续修。
 
-## 四、机器判收敛（脚本算，不手判）
+## 四、机器判收敛（Rust core 算，不手判）
 
-每轮填完 Round Summary 后让脚本判收敛：
+每轮填完 Round Summary 后调用唯一 evaluator：
 
 ```bash
-python3 scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
+lto check --ledger .lto/<run-id>/audit-ledger.md
+lto check --ledger .lto/<run-id>/audit-ledger.md --strict
 ```
 
-它打出一行 `verdict:`——降到 0 是 **CONVERGED**（可收尾）；还在降是 **CONVERGING**
-（继续修）；反弹是 **REBOUND**、原地不动（`--strict`）是 **STALLED**，这俩会喊停。
-Rust 权威实现在 `lto check`（`src/commands/util.rs` 的 `evaluate_ledger`）：check 下
-反弹/停滞默认 WARN、`--strict` 才 ERROR；**closeout 只要 ledger 有轮次且未降到 0
-（CONVERGING/REBOUND/STALLED）会直接拒绝收尾**（除非 `--force` 显式越过）——脚本算的
-Round Summary 收敛是收尾硬条件，手填的 Closure Gate 字段只是辅助记录，骗不过闸门。
+权威实现是 `src/ledger.rs`。输出的硬 verdict 为：无已填轮次 **NO_OBSERVATIONS**；末轮
+降到 0 **CONVERGED**；仍在下降但非零 **CONVERGING**；出现上升 **REBOUND**；非零平轮在
+`--strict` 下为 **STALLED**。run 模式的反弹/停滞默认 WARN、`--strict` 才 ERROR；高风险
+closeout 要求有真实轮次且末轮为 0，除非人显式 `--force` 越过。Closure Gate 手填字段只是
+辅助记录，不能替代 Round Summary 的机器判定。
+
+同一解析还输出五个正交 diagnostics：
+
+```text
+sample_sufficiency: insufficient | sufficient
+terminal:           zero | nonzero
+direction:          improving | flat | worsening | mixed
+oscillation:        none | single_rebound | alternating
+envelope:           shrinking | flat | expanding | unknown
+```
+
+diagnostics 只提示 host，不改变 verdict、phase gate、route 或 promote。轮次缺 `auditors` 或
+`coverage` lineage 时 confidence 为 `low (no lineage)`；样本足够且出现交替振荡或非收缩包络时，
+`lto check` 可展示 delivery contract 的 `forced_entropy` advisory，但仍由 host/human 决定是否换假设。
+
+`scripts/audit_ledger_check.py` 仅为一个版本的兼容薄壳：它解析旧参数后 `exec` 到
+`lto check --ledger`，原样继承 Rust 输出和退出码，不含第二份 parser/evaluator。
 
 **审计派工可控优先级**：`lto audit --auto-dispatch --prefer-runner codex --prefer-runner agy`
 限定并排序审计 runner 池，把慢的重 thinking runner（pi）挪出收口关键路径。这是 host

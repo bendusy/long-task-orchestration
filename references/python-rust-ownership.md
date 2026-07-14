@@ -15,8 +15,9 @@ added, add it to this manifest and expose it through the Rust CLI.
 
 ## Visible Top-Level Commands
 
-All 23 visible top-level business commands are Rust-owned. `lto-rs --help`
-additionally shows clap's built-in `help` pseudo-command; it is not listed here.
+Every visible top-level business command is Rust-owned. The machine-readable
+command list is checked against `lto-rs --help`; clap's built-in `help`
+pseudo-command is intentionally not part of the ownership manifest.
 
 | Command | Owner | Python Role |
 |---|---|---|
@@ -62,12 +63,19 @@ a second implementation path.
 | `pipeline` | `run pipeline` | Rust core | removed |
 | `agent-turn-completed` | `agent-turn-completed` | Rust core | removed |
 
-## Preserved Python Helpers
+## Preserved Python Helper And Compatibility Proxy
 
 `scripts/write_decision.py` is intentionally preserved as a standalone
 repository helper for ADR creation and artifact registration. It is not a CLI
 fallback, does not route `lto` commands, and must not import the retired
 `scripts/lto/` package.
+
+`scripts/audit_ledger_check.py` is preserved for one version only as an
+`exec-proxy`. It may resolve legacy argv, run IDs, and ledger paths, then must
+replace itself with `lto check --ledger` through `os.execvp`. Rust owns ledger
+parsing, evaluation, verdicts, and their exit codes; the proxy must not retain
+any of that logic. Remove the proxy after the compatibility window instead of
+extending it into a second evaluator.
 
 ## Plugin Subcommands
 
@@ -108,7 +116,11 @@ The Python fallback was removed only after the staged transfer completed:
 - Rust help exposes a top-level command missing from the ownership manifest.
 - A hidden compatibility command stops parsing through Rust.
 - Rust plugin help exposes a subcommand not marked `rust-core`.
-- Any manifest entry still claims an active Python role.
+- Any business command entry still claims an active Python implementation role;
+  the declared one-version `exec-proxy` is the only compatibility exception.
+- The one-version audit-ledger proxy is missing, stops delegating through
+  `os.execvp` to `lto check --ledger`, reads ledger contents, or reintroduces
+  parser/evaluator functions, verdict constants, or verdict exit-code mapping.
 - This Markdown document stops naming a manifest entry.
 
 This is deliberately stricter than a prose review. If a new command appears,

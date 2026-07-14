@@ -32,8 +32,8 @@
 | S2 | spec | 需求 | 方案 md + 待审点清单 | ❌ 创作 | SKILL §六阶段 P2；`references/decision-logging.md` |
 | S3a | audit·派工 | 方案 md + auditors | 各 runner 的回复 md | ✅ 全 | `agent-delegate` runners |
 | S3b | audit·健康 | runner 名单 | 每 runner exit/elapsed/bytes/verdict | ✅ 全 | `lto preflight` + `scripts/delegate/runners/healthcheck.sh` |
-| S3c | audit·记账 | 每轮 blocker 计数 | `audit-ledger.md` 表格 | 🟡 半 | `templates/audit-ledger.md`（人填表） |
-| S3d | audit·收敛判定 | `audit-ledger.md` | CONVERGED / CONVERGING / REBOUND / STALLED + rc | ✅ **新脚本** | `scripts/audit_ledger_check.py` |
+| S3c | audit·记账 | 每轮 blocker 计数 + auditors/coverage lineage | `audit-ledger.md` 表格 | 🟡 半 | `templates/audit-ledger.md` + `src/audit_ledger.rs` |
+| S3d | audit·收敛判定 | `audit-ledger.md` | 硬 verdict + 五维 diagnostics + rc | ✅ Rust core | `src/ledger.rs` + `lto check --ledger` |
 | S3e | audit·逐条核验 | 每条 blocker claim | 采纳(怎么修)/否决(证伪依据) | ❌ 判断 | `references/audit-convergence.md` §二 |
 | G1 | 写码闸 | 收敛状态 + entry evidence | 证据报告 + 人「可以写代码了」| 🟡 证据脚本化 / 人拍板 | `lto check --to implementation` + SKILL §刹车3 |
 | S4 | implementation | 方案 | 代码 + 代码审计 | ❌ 创作（审同 S3） | SKILL P4 |
@@ -51,7 +51,7 @@
 |---|---|---|---|---|
 | `lto start` | 建状态文件（state.json + run-state.md；audit-ledger 由 `lto audit` 首轮生成；preflight 快照走 `lto preflight --record`） | `--goal --host --why --done-when` + 契约四件套 | `.lto/<run-id>/` | `lto start --goal X` |
 | `lto resume` | 跨 session 断点恢复 | `[--run-id]` | 上下文胶囊 + state.json 更新 | `lto resume` |
-| `lto check` | 校验状态完整+git 锚定+收敛趋势；可附 phase-entry 证据报告 | `[--run-id] [--strict] [--to implementation\|closed] [--json]` | WARN/ERROR + `OK <dir>`；phase evidence；rc 0/1 | `lto check --to implementation --strict` |
+| `lto check` | run 模式校验状态/git/phase/ledger；standalone 模式调用唯一 Rust ledger evaluator | run: `[--run-id] [--strict] [--to implementation\|closed] [--json]`；standalone: `--ledger <path> [--strict]` | 硬 verdict + 五维 diagnostics；advisory 不进 gate；rc 0/1/2 | `lto check --ledger .lto/<id>/audit-ledger.md --strict` |
 | `write_decision.py` | 生成 ADR 决策记录，更新 state.user_decisions，并登记 `decision_record` artifact | `--repo --run-id --title --context --decision --consequences [--slug]` | `docs/decisions/YYYY-MM-DD-<slug>.md` + manifest entry | `python3 scripts/write_decision.py --run-id <id> --title "..." ...` |
 | `lto preflight` | 即时探活 stdout | `[--record]` | 环境健康报告 | `lto preflight` |
 | `lto task add` | 给当前 run 加一个 task（runner/next/audit 的操作对象） | `--task-id --title [--phase] [--command]` | state.json tasks 追加 + commands_run 记录 | `lto task add --task-id T1 --title "..."` |
@@ -59,9 +59,8 @@
 | `lto judge` | 只读审查+YAML verdict | `[--phase] [--task-id] [--rerun-tests]` | `.lto/<id>/judge/*.yaml` | `lto judge --phase implementation` |
 | `lto hook` | 外部边界闸门 | `pre-commit\|pre-deploy\|pre-closeout [--force --reason]` | rc 0/1 | `lto hook pre-commit` |
 | `lto closeout` | 标 closed + 出 handoff，默认写 CHANGELOG；`--no-changelog` 用于已提交后的行政收尾 | `--summary [--next-action] [--force] [--no-changelog]` | `handoff.md`；rc 0/非0 | `lto closeout --summary "…"` |
-| `audit_ledger_check.py` | 判 blocker 单调收敛 | `<ledger.md>` 或 `--run-id` `[--strict]` | verdict + rc 0/1/2 | `python3 scripts/audit_ledger_check.py .lto/<id>/audit-ledger.md` |
+| `audit_ledger_check.py` | 一版兼容 exec proxy，不含判定逻辑 | `<ledger.md>` 或 `--run-id` `[--strict]` | 原样继承 `lto check --ledger` 输出与 rc | `python3 scripts/audit_ledger_check.py .lto/<id>/audit-ledger.md` |
 | `lto self-test` | 离线自检 start→resume→check→closeout→hook | — | `SELFTEST OK`；rc 0/1 | `lto self-test` |
-| `audit_ledger_check.py self-test` | 离线自检四档收敛 | — | `LEDGERCHECK SELFTEST OK`；rc 0/1 | `python3 scripts/audit_ledger_check.py self-test` |
 | `lto run parallel` | 并发批量跑多 task 的 shell 校验命令 | `--phase\|--task-ids [--concurrency] [--command]` | evidence + state.json | `lto run parallel --phase impl --concurrency 4` |
 | `lto run pipeline` | 每 task 串行过多 stage（item 并发） | `--stages "..." [--phase] [--concurrency]` | evidence + state.json | `lto run pipeline --stages "lint {task_id}" "test {task_id}"` |
 | `lto audit` | 对抗审计编排+风险发现 | `[--auto-dispatch\|--discover-risks\|--allow-same-family]` | 审计简报 + audit-ledger/risk evidence | `lto audit --auto-dispatch` |
@@ -72,7 +71,7 @@
 | `scripts/install.sh` | 安装 skill 软链，并生成/检查全局 `lto` wrapper | `[--check] [target]` + `LTO_BIN_DIR` | skill links + sentinel-managed wrapper；冲突 rc 2 | `bash scripts/install.sh --check` |
 
 **harness primitive 底层模块**（不直接走 CLI，是 host agent 可组合的能力）：
-`src/agent_job.rs`（AgentJob/AgentResult 数据合同）/ `src/scheduler.rs`（并发+退出码三元判定+退避+healthcheck）/ `src/worktree.rs`（autopilot 沙箱）/ `src/dispatch.rs`（推进/派工 affordance）/ `src/decision.rs`（双轨收敛引擎：direction 投票 / review union 合并；当前未接到 `autopilot` CLI）。
+`src/agent_job.rs`（AgentJob/AgentResult 数据合同）/ `src/scheduler.rs`（并发+退出码三元判定+退避+healthcheck）/ `src/worktree.rs`（autopilot 沙箱）/ `src/dispatch.rs`（推进/派工 affordance）/ `src/decision.rs`（双轨收敛引擎：direction 投票 / review union 合并；当前未接到 `autopilot` CLI）/ `src/ledger.rs`（ledger parser、唯一硬 verdict evaluator、五维 diagnostics）。
 
 host agent 在 CLI 命令之外高频用到的模块：`src/audit_dispatch.rs`（readonly_intent_policy / 异构 auditor 选择）/ `src/state.rs`（所有命令的状态层）/ `src/llm_judge.rs`（judge 底层）/ `src/commands/util.rs`（artifact 真源 helper）/ `src/events.rs`+`src/telemetry.rs`（Phase 1 事件层）/ `src/budget.rs`（run 级预算契约纯计量层，autopilot 调它硬刹车、next/recap 调它软警告）。
 

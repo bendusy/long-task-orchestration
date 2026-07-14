@@ -230,7 +230,8 @@ Known event types:
 | `artifact.registered` | artifact manifest changes |
 | `audit.dispatched` | audit prepare, auto-dispatch, or risk discovery selects auditors |
 | `audit.finding` | structured audit finding summary is parsed; claim text stays out of event fields |
-| `audit.converged` | audit ledger round is recorded with blocker counts |
+| `audit.round.recorded` | a ledger round is appended; carries round and blocker counts |
+| `audit.ledger.evaluated` | the Rust evaluator runs after append; carries verdict, terminal, oscillation, strict mode, and source |
 | `gate.evaluated` | check/judge/closeout gate evaluates structured checks |
 | `gate.blocked` | check/closeout gate blocks progress |
 | `budget.warned` | budget check crosses warning threshold |
@@ -239,6 +240,9 @@ Known event types:
 | `judge.skipped` | LLM judge dispatch is skipped with a structured reason |
 | `decision.voted` | judge/decision path records a structured vote or verdict summary |
 | `decision.escalated` | decision/judge path needs host intervention |
+
+`audit.converged` is a historical read-only event name. New code never writes it; readers map it to the
+same logical round stream as `audit.round.recorded` so old runs remain usable.
 
 Deferred event types:
 
@@ -260,6 +264,9 @@ Path:
 ```
 
 Derived from `state.json`, `artifacts.json`, `events.jsonl`, and git status. It can be rebuilt.
+`audit_rounds` combines historical `audit.converged` and current `audit.round.recorded` events, then
+deduplicates the same normalized round id within a run (latest event wins). `audit.ledger.evaluated`
+is not a round and is never counted.
 
 ```json
 {
@@ -293,4 +300,3 @@ Telemetry is derived signal only. It must not persist `control_recommendations` 
 - Exporters must run the same privacy scan as `privacy_self_check.sh` patterns.
 - `telemetry.json` should be safe to include in handoff after redaction.
 - Cleanup remains per-item confirmed; no telemetry auto-deletion.
-

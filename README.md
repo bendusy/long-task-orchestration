@@ -48,12 +48,17 @@ $L recap
 $L audit --auto-dispatch --prefer-runner codex --prefer-runner agy
 $L audit --discover-risks
 
+# 独立检查一份 ledger（Rust 是唯一 evaluator；--strict 把非零平轮判 STALLED）
+$L check --ledger .lto/<run-id>/audit-ledger.md --strict
+
 # 6. 收尾前硬检查，再 closeout
 $L check --to closed --strict
 $L closeout --summary "登录重构完成，测试和异构审计已收敛"
 ```
 
 `audit` 当前命令面是 `--auto-dispatch`、`--discover-risks`、`--allow-same-family`、`--prefer-runner`。历史文档里出现过的 `audit --collect <dir>` 不是当前 Rust CLI 命令；已有回复应通过当前 `runner`/`collect-agent-run`/artifact 机制登记。
+
+普通 `lto check` 的文本和 `--json` 输出都包含 ledger 硬 verdict 与五维 diagnostics（样本充分性、终态、方向、振荡、包络）；diagnostics 及可能出现的 `forced_entropy` advisory 不进入 phase/closeout gate。`scripts/audit_ledger_check.py` 只保留一个版本的兼容入口，并原样 `exec` 到 `lto check --ledger`，不再实现第二套判定逻辑。
 
 `dispatch-goal` 新建的窗口默认命名为 `lto:<runner>:<goal-slug>`，程序寻址与清理只使用 tmux 不可变 `@window_id`。成功完成后自动清理；非零 rc、超时、交互阻塞或 `--keep-window` 都保留现场。Codex 的 Stop hook 只是每轮结束：普通 Stop 只写 `agent.turn.completed`，只有 transcript 中存在真实 `update_goal complete` 证据才写 `agent.dispatch.completed`；pi/agy 则由 TUI 进程退出 wrapper 传真实 rc。不要再用 turn 事件判断整个 goal 完成。
 
@@ -80,7 +85,7 @@ optional sinks: am memory publish/resume, release docs, changelog
 
 核心边界：
 
-- **Rust v2 是唯一支持的 CLI runtime**。Python fallback 已在 v0.5.0 删除；保留的 `scripts/*.py` 是文档检查、ledger 检查、ADR 写入等维护工具，不是运行时 fallback。
+- **Rust v2 是唯一支持的 CLI runtime**。Python fallback 已在 v0.5.0 删除；保留的 `scripts/*.py` 是文档检查、ADR 写入等维护工具，`audit_ledger_check.py` 也只是临时 exec proxy，不是 evaluator 或运行时 fallback。
 - **LTO 是 harness，不是 planner**。`next`、`recap`、`autopilot --supervised` 只整理事实；路线判断仍由 host agent 和人决定。
 - **runner/audit/worktree 是 affordance**。它们提供派工、异构检查和可弃沙箱，不改变最终责任归属。
 - **macOS/Linux 优先**。Windows native support 暂停；当前内置 runner 协议依赖 `scripts/delegate/runners/*.sh` 和 `healthcheck.sh`，WSL/Unix-like shell 属于用户侧环境验证。
