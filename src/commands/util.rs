@@ -57,13 +57,6 @@ pub struct GitStatus {
     pub dirty: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LedgerRound {
-    pub label: String,
-    pub high: u64,
-    pub critical: u64,
-}
-
 #[derive(Debug, Clone)]
 pub struct ArtifactMeta<'a> {
     pub kind: &'a str,
@@ -71,25 +64,6 @@ pub struct ArtifactMeta<'a> {
     pub state: &'a LtoState,
     pub summary: &'a str,
     pub tags: &'a [&'a str],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LedgerVerdict {
-    Converged,
-    Converging,
-    Rebound,
-    Stalled,
-}
-
-impl LedgerVerdict {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Converged => "CONVERGED",
-            Self::Converging => "CONVERGING",
-            Self::Rebound => "REBOUND",
-            Self::Stalled => "STALLED",
-        }
-    }
 }
 
 pub fn resolve_run_id(repo: &Path, run_id: Option<&str>) -> anyhow::Result<String> {
@@ -646,113 +620,6 @@ pub fn append_to_object_array(root: &mut Value, key: &str, value: Value) {
     json_array_mut(array).push(value);
 }
 
-pub fn parse_ledger(text: &str) -> anyhow::Result<Vec<LedgerRound>> {
-    let mut rounds = Vec::new();
-    let mut in_summary = false;
-    for line in text.lines() {
-        if line.starts_with("## ") {
-            in_summary = line.trim().eq_ignore_ascii_case("## Round Summary");
-            continue;
-        }
-        if !in_summary || !line.contains('|') {
-            continue;
-        }
-        let cells = split_cells(line);
-        if cells.len() <= 4 || is_separator_row(&cells) || is_header_row(&cells) {
-            continue;
-        }
-        let label = cells.first().cloned().unwrap_or_default();
-        let high_raw = cells.get(3).cloned().unwrap_or_default();
-        let critical_raw = cells.get(4).cloned().unwrap_or_default();
-        if high_raw.is_empty() && critical_raw.is_empty() {
-            continue;
-        }
-        let high = parse_count(&high_raw, &label, "high")?;
-        let critical = parse_count(&critical_raw, &label, "critical")?;
-        rounds.push(LedgerRound {
-            label,
-            high,
-            critical,
-        });
-    }
-    Ok(rounds)
-}
-
-pub fn evaluate_ledger(rounds: &[LedgerRound], strict: bool) -> LedgerVerdict {
-    if rounds.is_empty() {
-        return LedgerVerdict::Converged;
-    }
-    let blockers = rounds
-        .iter()
-        .map(|round| round.high.saturating_add(round.critical))
-        .collect::<Vec<_>>();
-    if blockers.last().copied().unwrap_or_default() == 0 {
-        return LedgerVerdict::Converged;
-    }
-    for idx in 1..blockers.len() {
-        if blockers[idx] > blockers[idx - 1] {
-            return LedgerVerdict::Rebound;
-        }
-        if strict && blockers[idx] == blockers[idx - 1] && blockers[idx] > 0 {
-            return LedgerVerdict::Stalled;
-        }
-    }
-    LedgerVerdict::Converging
-}
-
-pub fn ledger_sequence(rounds: &[LedgerRound]) -> String {
-    rounds
-        .iter()
-        .map(|round| {
-            format!(
-                "{}={}",
-                round.label,
-                round.high.saturating_add(round.critical)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" -> ")
-}
-
-pub fn has_real_ledger_rounds(text: &str) -> bool {
-    parse_ledger(text)
-        .map(|rounds| !rounds.is_empty())
-        .unwrap_or(false)
-}
-
-fn split_cells(line: &str) -> Vec<String> {
-    line.trim()
-        .trim_start_matches('|')
-        .trim_end_matches('|')
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect()
-}
-
-fn is_separator_row(cells: &[String]) -> bool {
-    let joined = cells.join("");
-    !joined.is_empty() && joined.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
-}
-
-fn is_header_row(cells: &[String]) -> bool {
-    cells.iter().any(|cell| cell.eq_ignore_ascii_case("round"))
-}
-
-fn parse_count(raw: &str, label: &str, column: &str) -> anyhow::Result<u64> {
-    let mut total = 0_u64;
-    for part in raw
-        .split('+')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        let value = part
-            .parse::<u64>()
-            .with_context(|| format!("non-numeric {column} count in {label}: {raw:?}"))?;
-        total = total.saturating_add(value);
-    }
-    Ok(total)
-}
-
 pub fn now_for_filename() -> String {
     Local::now().format("%Y-%m-%dT%H-%M-%S").to_string()
 }
@@ -828,106 +695,6 @@ mod tests {
         assert_eq!(loaded.run_id, "r1");
         assert_eq!(loaded.state.goal, "load me");
         assert_eq!(loaded.state_path, run_dir.join("state.json"));
-    }
-
-    #[test]
-    fn parse_and_evaluate_ledger_rounds_cover_all_verdicts() {
-        let text = r#"
-## Round Summary
-
-| Round | Total | Medium | High | Critical |
-|---|---:|---:|---:|---:|
-| r1 | 3 | 1 | 1+1 | 0 |
-| r2 | 0 | 0 | 0 | 0 |
-"#;
-        let rounds = parse_ledger(text).unwrap();
-        assert_eq!(rounds.len(), 2);
-        assert_eq!(rounds[0].high, 2);
-        assert_eq!(evaluate_ledger(&rounds, false), LedgerVerdict::Converged);
-
-        assert_eq!(
-            evaluate_ledger(
-                &[
-                    LedgerRound {
-                        label: "r1".into(),
-                        high: 2,
-                        critical: 0
-                    },
-                    LedgerRound {
-                        label: "r2".into(),
-                        high: 1,
-                        critical: 0
-                    },
-                ],
-                false,
-            ),
-            LedgerVerdict::Converging
-        );
-        assert_eq!(
-            evaluate_ledger(
-                &[
-                    LedgerRound {
-                        label: "r1".into(),
-                        high: 1,
-                        critical: 0
-                    },
-                    LedgerRound {
-                        label: "r2".into(),
-                        high: 2,
-                        critical: 0
-                    },
-                ],
-                false,
-            ),
-            LedgerVerdict::Rebound
-        );
-        assert_eq!(
-            evaluate_ledger(
-                &[
-                    LedgerRound {
-                        label: "r1".into(),
-                        high: 1,
-                        critical: 0
-                    },
-                    LedgerRound {
-                        label: "r2".into(),
-                        high: 2,
-                        critical: 0
-                    },
-                    LedgerRound {
-                        label: "r3".into(),
-                        high: 0,
-                        critical: 0
-                    },
-                ],
-                true,
-            ),
-            LedgerVerdict::Converged
-        );
-        assert_eq!(
-            evaluate_ledger(
-                &[
-                    LedgerRound {
-                        label: "r1".into(),
-                        high: 1,
-                        critical: 0
-                    },
-                    LedgerRound {
-                        label: "r2".into(),
-                        high: 1,
-                        critical: 0
-                    },
-                ],
-                true,
-            ),
-            LedgerVerdict::Stalled
-        );
-        assert!(
-            parse_ledger(
-                "## Round Summary\n| Round | Total | Medium | High | Critical |\n|---|---:|---:|---:|---:|\n| r1 | x | 0 | nope | 0 |",
-            )
-            .is_err()
-        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ use crate::agent_job::{
 };
 use crate::budget::{self, BudgetStatus};
 use crate::commands::util;
+use crate::ledger::{self, LedgerVerdict};
 use crate::llm_judge;
 use crate::scheduler::Scheduler;
 use crate::worktree;
@@ -42,7 +43,7 @@ pub(crate) struct CheckOutcome {
 #[derive(Debug, Clone)]
 struct LedgerCheck {
     has_rounds: bool,
-    verdict: Option<util::LedgerVerdict>,
+    verdict: Option<LedgerVerdict>,
     sequence: Option<String>,
     error: Option<String>,
 }
@@ -558,7 +559,7 @@ fn collect_ledger_check(
     }
     let status = match fs::read_to_string(&ledger_path)
         .map_err(anyhow::Error::from)
-        .and_then(|text| util::parse_ledger(&text))
+        .and_then(|text| ledger::parse_ledger(&text))
     {
         Ok(rounds) => {
             if rounds.is_empty() {
@@ -569,8 +570,8 @@ fn collect_ledger_check(
                     error: None,
                 }
             } else {
-                let verdict = util::evaluate_ledger(&rounds, strict);
-                let sequence = util::ledger_sequence(&rounds);
+                let verdict = ledger::evaluate_ledger(&rounds, strict);
+                let sequence = ledger::ledger_sequence(&rounds);
                 LedgerCheck {
                     has_rounds: true,
                     verdict: Some(verdict),
@@ -598,7 +599,7 @@ fn collect_ledger_check(
         (None, None, false) => outcome
             .warnings
             .push("ledger exists but has no filled rounds".to_string()),
-        (None, Some(verdict), true) if *verdict != util::LedgerVerdict::Converged => {
+        (None, Some(verdict), true) if *verdict != LedgerVerdict::Converged => {
             let msg = match status.sequence.as_deref() {
                 Some(sequence) => {
                     format!("ledger not converged: {} ({sequence})", verdict.as_str())
@@ -849,7 +850,7 @@ fn add_ledger_phase_check(
         Some(LedgerCheck {
             verdict: Some(verdict),
             ..
-        }) if *verdict == util::LedgerVerdict::Converged => {
+        }) if *verdict == LedgerVerdict::Converged => {
             ("ok", "audit-ledger.md: CONVERGED".to_string())
         }
         Some(LedgerCheck {

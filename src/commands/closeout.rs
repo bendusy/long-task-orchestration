@@ -1,4 +1,5 @@
 use crate::commands::util;
+use crate::ledger::{self, LedgerVerdict};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -157,10 +158,13 @@ fn enforce_gates(
     let ledger_path = ctx.run_dir.join("audit-ledger.md");
     if ledger_path.exists() && !options.force {
         let text = fs::read_to_string(&ledger_path)?;
-        let rounds = util::parse_ledger(&text)?;
-        let verdict = util::evaluate_ledger(&rounds, false);
-        if verdict != util::LedgerVerdict::Converged {
-            let sequence = util::ledger_sequence(&rounds);
+        let rounds = ledger::parse_ledger(&text)?;
+        let verdict = ledger::evaluate_ledger(&rounds, false);
+        if !matches!(
+            verdict,
+            LedgerVerdict::Converged | LedgerVerdict::NoObservations
+        ) {
+            let sequence = ledger::ledger_sequence(&rounds);
             emit_closeout_gate_blocked(
                 repo,
                 &ctx.run_id,
@@ -261,7 +265,7 @@ fn enforce_gates(
             );
         }
         let text = fs::read_to_string(&ledger_path)?;
-        if !util::has_real_ledger_rounds(&text) {
+        if !ledger::has_real_ledger_rounds(&text) {
             emit_closeout_gate_blocked(
                 repo,
                 &ctx.run_id,
@@ -642,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn enforce_gates_rejects_high_risk_task_without_real_audit_rounds() {
+    fn enforce_gates_rejects_high_risk_missing_or_empty_ledger() {
         let tmp = tempfile::tempdir().unwrap();
         let mut ctx = ctx(tmp.path());
         ctx.state.tasks = json!([{"id": "T1", "title": "deploy database migration"}]);
@@ -652,6 +656,19 @@ mod tests {
         fs::write(ctx.run_dir.join("audit-ledger.md"), "## Round Summary\n").unwrap();
         let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
         assert!(err.to_string().contains("empty audit ledger"));
+    }
+
+    #[test]
+    fn enforce_gates_allows_low_risk_empty_ledger() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx(tmp.path());
+        fs::write(
+            ctx.run_dir.join("audit-ledger.md"),
+            "## Round Summary\n| Round | Total | Medium | High | Critical |\n|---|---:|---:|---:|---:|\n",
+        )
+        .unwrap();
+
+        enforce_gates(tmp.path(), &ctx, &options(false)).unwrap();
     }
 
     #[test]
