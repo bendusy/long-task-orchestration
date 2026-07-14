@@ -10,7 +10,7 @@
 | Ⅰ 接管与恢复 | `runs`/`resume`/`recap`/`check` | [onboarding.md](onboarding.md)、[long-loop-state.md](long-loop-state.md) | 进入陌生项目 / compact 后恢复 | 新 run 立项（→Ⅱ） |
 | Ⅱ 立项与契约 | 适用性判断/`start`/`task`/`preflight`/开发四证据 | [run-state-workflow.md](run-state-workflow.md) | 决定开新 run、写 delivery contract | 已有 active run 的恢复（→Ⅰ） |
 | Ⅲ 执行与派工 | `runner`/`dispatch-goal`/`events`/`autopilot` | [execution-loop.md](execution-loop.md)、[cross-runtime-host-notes.md](cross-runtime-host-notes.md) | 派外部 agent、等完成事件 | 确定性本地命令直接跑（runner 记证据即可） |
-| Ⅳ 验证与收敛 | `audit`/`judge`/`check`/ledger | [audit-convergence.md](audit-convergence.md)、[workflow-playbook.md](workflow-playbook.md) | 多模型对抗审、判收敛 | 确定性测试（直接跑，不需异构审） |
+| Ⅳ 验证与收敛 | `audit`/`judge`/`check`/ledger | [audit-convergence.md](audit-convergence.md)、[playbooks/review.md](playbooks/review.md) | 多模型对抗审、判收敛 | 确定性测试（直接跑，不需异构审） |
 | Ⅴ 交付与发布 | 部署实测（真实用户路径）/`closeout`/`release` | [deploy-sequencing.md](deploy-sequencing.md)、[release-workflow.md](release-workflow.md) | 上线、发版、收尾 | 未过Ⅳ收敛闸门时 |
 | Ⅵ 学习与维护 | decision/memory/telemetry/budget/`prune`/plugin | [decision-logging.md](decision-logging.md)、[events-telemetry-contract.md](events-telemetry-contract.md) | 拍板落盘、跨 run 挖掘、清理 | 把历史 telemetry 当自动路由依据 |
 
@@ -24,7 +24,7 @@ decision 拍板即落盘（见 decision-logging.md），不是只在收尾才记
 | 接手陌生项目并续跑 | Ⅰ onboarding → Ⅰ long-loop-state |
 | 新长交付立项 | Ⅱ run-state-workflow（契约四件套） |
 | 派 codex 改代码并等完成 | Ⅲ execution-loop →（跨 runtime 时）cross-runtime-host-notes |
-| 方案多模型审到收敛 | Ⅳ audit-convergence → Ⅳ workflow-playbook（review 一节） |
+| 方案多模型审到收敛 | Ⅳ audit-convergence → Ⅳ playbooks/review.md |
 | 上线并收尾 | Ⅴ deploy-sequencing → Ⅴ release-workflow |
 | autopilot 升档评估 | Ⅲ execution-loop → Ⅵ events-telemetry-contract（跨 run 证据） |
 
@@ -32,7 +32,7 @@ decision 拍板即落盘（见 decision-logging.md），不是只在收尾才记
 
 | 状态 | 含义 | 文件 |
 |---|---|---|
-| active/current | 当前口径，ROUTER 可落地 | onboarding、run-state-workflow、execution-loop、workflow-playbook、control-loop-harness、events-telemetry-contract、audit-convergence、long-loop-state、decision-logging、release-workflow、deploy-sequencing、hooks、sharing-guide、cross-runtime-host-notes、hs-as-core-tool、plugin-boundary、rust-migration-release |
+| active/current | 当前口径，ROUTER 可落地 | onboarding、run-state-workflow、execution-loop、workflow-playbook（总纲）、playbooks/*（11 个场景先验）、control-loop-harness、events-telemetry-contract、audit-convergence、long-loop-state、decision-logging、release-workflow、deploy-sequencing、hooks、sharing-guide、cross-runtime-host-notes、hs-as-core-tool、plugin-boundary、rust-migration-release |
 | design/future | 设计目标，未实现，不得当现状引用 | specs/*、backlog.md、control-loop-roadmap.md、plugin-real-eval-runner.md（含 future 段）、self-driving-wake-loop.md |
 | historical/dated | 历史证据，只证明当时 | validation-log.md、python-rust-ownership.md、2026-06-17-rust-inheritance-and-architecture-review.md、agent-runs-decoupling-diagnosis.md、codex-cli-control.md、decision-logging 之外的 dated 材料 |
 
