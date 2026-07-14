@@ -61,27 +61,31 @@ fn ensure_exists(path: &Path) -> anyhow::Result<()> {
 }
 
 fn upgrade_schema(content: &str) -> String {
-    let content = content
-        .replace(
-            "| round | artifact | auditors | high | critical | minor | trend | status |",
-            "| round | artifact | auditors | coverage | high | critical | minor | trend | status |",
-        )
-        .replace(
-            "|---|---|---|---:|---:|---:|---|---|",
-            "|---|---|---|---|---:|---:|---:|---|---|",
-        )
-        .replace(
-            "| R1 |  |  |  |  |  | start | open |",
-            "| R1 |  |  |  |  |  |  | start | open |",
-        );
     let mut in_summary = false;
     let mut lines = Vec::new();
     for line in content.lines() {
-        if line.starts_with("## ") {
+        if line.trim_start().starts_with("## ") {
             in_summary = line.trim().eq_ignore_ascii_case("## Round Summary");
         }
         if in_summary {
             let mut cells = split_row(line);
+            if cells
+                == [
+                    "round", "artifact", "auditors", "high", "critical", "minor", "trend", "status",
+                ]
+            {
+                cells.insert(3, "coverage".to_string());
+                lines.push(format!("| {} |", cells.join(" | ")));
+                continue;
+            }
+            if !cells.is_empty()
+                && cells
+                    .iter()
+                    .all(|cell| matches!(cell.as_str(), "---" | "---:"))
+            {
+                lines.push("|---|---|---|---|---:|---:|---:|---|---|".to_string());
+                continue;
+            }
             let is_round = cells.first().is_some_and(|cell| {
                 cell.strip_prefix('R')
                     .is_some_and(|n| n.parse::<u64>().is_ok())
@@ -204,5 +208,51 @@ mod tests {
         let rounds = ledger::parse_ledger(&text).unwrap();
         assert_eq!(rounds[0].blockers(), 3);
         assert_eq!(rounds[1].blockers(), 1);
+    }
+
+    #[test]
+    fn schema_upgrade_is_idempotent_and_repairs_repeated_separator_upgrade() {
+        let corrupted = "## Round Summary\n\
+| round | artifact | auditors | coverage | high | critical | minor | trend | status |\n\
+|---|---|---|---|---|---:|---:|---:|---|---|\n\
+| R1 | old | pi | T1 | 0 | 0 | 0 | closed | open |\n";
+
+        let once = upgrade_schema(corrupted);
+        let twice = upgrade_schema(&once);
+
+        assert_eq!(once, twice);
+        let separator = once.lines().nth(2).unwrap();
+        assert_eq!(split_row(separator).len(), 9);
+    }
+
+    #[test]
+    fn consecutive_appends_keep_new_schema_rectangular() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("audit-ledger.md");
+        for high in [1, 0] {
+            append(
+                &path,
+                AppendInput {
+                    artifact: "replies",
+                    auditors: &["pi".into()],
+                    coverage: "T1",
+                    high,
+                    critical: 0,
+                    minor: 0,
+                },
+            )
+            .unwrap();
+        }
+
+        let text = fs::read_to_string(path).unwrap();
+        let summary_rows = text
+            .lines()
+            .skip_while(|line| line.trim() != "## Round Summary")
+            .skip(1)
+            .take_while(|line| !line.trim_start().starts_with("## "))
+            .filter(|line| line.trim_start().starts_with('|'))
+            .collect::<Vec<_>>();
+        assert_eq!(summary_rows.len(), 4);
+        assert!(summary_rows.iter().all(|row| split_row(row).len() == 9));
     }
 }
