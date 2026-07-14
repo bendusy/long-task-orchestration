@@ -98,6 +98,8 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 | host workflow | active reference（状态标注见 INDEX.md） |
 | 设计稿/backlog/历史 | 只作历史证据，**不证明现状** |
 
+本表是按查询意图的速查；完整五级权威层级（runtime/source > COMMANDS 合同 > operating
+policy(SKILL/AGENTS/ADR) > active reference > 历史/设计）以 `references/INDEX.md` §4 为准。
 文档与 runtime 冲突 = 文档漂移，修文档，不做兼容解释。
 LOOKUP → `COMMANDS.md`｜ROUTE → `references/INDEX.md`｜真源 → `.lto/<run-id>/state.json` + `artifacts.json`。
 
