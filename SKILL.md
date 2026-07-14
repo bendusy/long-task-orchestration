@@ -162,7 +162,7 @@ $LTO collect-agent-run --task-id T1 --runner agy --reply 回复-agy.md
 3. 大问题数量必须越来越少，反弹了回头查（别硬修下一版）
 4. 修到零大问题为止
 
-每轮审完，把这一轮的大问题数量填进 ledger（`.lto/<run-id>/audit-ledger.md` 的 Round Summary 表，仅 `--with-audit` 或 `--profile audit|deploy` 时生成），然后让脚本替你判收敛：
+每轮审完，把这一轮的大问题数量填进 ledger（`.lto/<run-id>/audit-ledger.md` 的 Round Summary 表，由 `lto audit` 首轮派工时生成），然后让脚本替你判收敛：
 
 ```bash
 python3 scripts/audit_ledger_check.py .lto/<run-id>/audit-ledger.md
@@ -312,7 +312,7 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 ## Resources
 
 **入口与文档**
-- `src/main.rs` / `src/cli.rs` — Rust v2 当前接管入口（21 个可见业务命令；旧 task/run 入口隐藏兼容；`--help` 另显示 clap 内置 `help` 行；plugin 含 `source-note` / `eval-run`）
+- `src/main.rs` / `src/cli.rs` — Rust v2 当前接管入口（业务命令清单见 `COMMANDS.md`；旧 task/run 入口隐藏兼容；plugin 含 `source-note` / `eval-run`）
 - `scripts/write_decision.py` — ADR-first 决策落盘 helper（写 `docs/decisions/` + state + artifact manifest）
 - `scripts/install.sh` — 安装 skills，并生成 sentinel-managed 全局 `lto` wrapper
 - `references/onboarding.md` — **给 agent 读一份就懂怎么装载 LTO**（跨 runtime）
@@ -330,7 +330,7 @@ $LTO release --part minor --date 2026-06-15            # 真发：写 VERSION/CH
 - `.lto/<run-id>/state.json` — 机器真源（含 tasks/risk_points/why/done_when/agent_runs）
 - `.lto/<run-id>/artifacts.json` — 跨 host 产物索引（replies/briefs/evidence/judge/decision records/handoff，repo-relative 路径）
 - `templates/run-state.md` — 人类可读状态模板
-- `templates/audit-ledger.md` — 审计台账（仅 `--with-audit` 时生成）
+- `templates/audit-ledger.md` — 审计台账（`lto audit` 首轮派工时生成）
 
 **harness primitive 底层模块**（不直接走 CLI，是 next/autopilot/audit 的地基）
 - `src/agent_job.rs` — AgentJob/AgentResult 数据合同（agent 世界，非 shell）

@@ -18,7 +18,7 @@
 
 ### run-state 文件是恢复锚点
 
-新开长任务时，跑 `lto start --goal <goal>`（默认 `--profile minimal` 只创建 `run-state.md`；`--profile audit` 加 `audit-ledger.md`；`--profile deploy` 在 audit 基础上再落一份 preflight 环境快照进 `state.json`）。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `lto check [--strict] [--json]`；要判断能否进写码/收尾，再跑 `lto check --to implementation|closed [--strict]` 读 phase-entry evidence——注意 `check --to` 出的报告带 `human_gate_required: true`，不自动放行；真正推进 phase 用 `lto phase --set <phase>`。之后按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
+新开长任务时，跑 `lto start --goal <goal>`（创建 `state.json` + `run-state.md`；`audit-ledger.md` 由 `lto audit` 首轮派工时生成；preflight 环境快照用 `lto preflight --record` 落进 `state.json`）。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `lto check [--strict] [--json]`；要判断能否进写码/收尾，再跑 `lto check --to implementation|closed [--strict]` 读 phase-entry evidence——注意 `check --to` 出的报告带 `human_gate_required: true`，不自动放行；真正推进 phase 用 `lto phase --set <phase>`。之后按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
 
 ## 二、后台派工不阻塞 + 等待期挖地基
 

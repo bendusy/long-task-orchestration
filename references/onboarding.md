@@ -97,7 +97,7 @@ lto --repo <目标仓库> <子命令> [参数]
 
 跨 runtime 当宿主的专项坑（沙箱、派工、preflight）见 `cross-runtime-host-notes.md`——不同家差异大，派工前先读。
 
-## 21 个可见业务命令速查
+## 业务命令速查
 
 > 参数真源摘要见仓库根目录 [COMMANDS.md](../COMMANDS.md)。下表按常用工作流排序；`audit --discover-risks` 是 audit 的重要变体，与主命令同计。
 
@@ -253,7 +253,7 @@ $L memory export --run-id <run-id> --dry-run
 
 hook 是 commit/deploy/closeout 前的边界闸门，提醒你"测过了吗 / 审过了吗 / 有没有没解决的 block"。详见 `hooks.md`。
 
-**hook 是 opt-in**（2026-06-03 改）：`lto start --install-hooks` 才装进 `.git/hooks`，且检测到 husky / pre-commit framework / 已有自定义 hook 会跳过不覆盖。默认不装——LTO 不擅自动你的 git。
+**hook 是 opt-in、按需手跑**：`lto hook <gate> [--force] [--reason]`，CLI 不写入 `.git/hooks`（早期的 `.git/hooks` 安装器已移除，避免撞 husky / pre-commit framework）——LTO 不擅自动你的 git。
 
 ## 还想深入
 

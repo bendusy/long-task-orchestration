@@ -83,7 +83,6 @@ $L runner \
 - `--touch`：本 task 修改的文件列表
 - `--note`：人类可读摘要
 - `--status-on-fail`：失败后 task 状态（blocked|in_progress）
-- `--auto-commit`：提交 `.lto` 状态改动（**opt-in，默认关**，见下「git 提交策略」）
 
 ## judge
 
@@ -137,24 +136,11 @@ phase 完成 → judge --phase implementation → pass → 下一 phase
 
 judge 不修改工作区文件（只读），只提 findings。
 
-## git 提交策略（opt-in，2026-06-03 修正）
+## git 提交策略
 
-runner / judge / parallel / pipeline / closeout **默认不自动 git commit**——只写文件，把提交权还给你。
-
-```bash
-# 默认：只更新 .lto，打印提示，不 commit
-$L runner --task-id T1 --command "pytest"
-
-# 显式 opt-in：用仓库真实 git identity 提交 .lto 改动
-$L runner --task-id T1 --command "pytest" --auto-commit
-```
-
-规则：
-- 默认 `--auto-commit` 关。关时打印 `git add .lto && git commit` 提示，不替你提交。
-- 开时用**仓库真实 `git config user.name/email`**，**不伪造 `lto@example.invalid` 身份**（避免污染 blame + 违反「禁止自动元数据」）。
-- 仓库未配置 git identity 时**拒绝 commit 并提示**，绝不静默成功。
-- commit 失败（如被 pre-commit hook 拒）会**打印 rc 和错误**，不再静默吞错。
-- closeout 的 `--auto-commit` 还会提交 `CHANGELOG.md`（用户真实产物，更要显式授权）。
+runner / judge / parallel / pipeline / closeout **从不 git commit**——只写文件，
+提交权在 host 手里（历史上的 auto-commit 选项已随 Rust 迁移移除）。`.lto` 默认
+不入库；CHANGELOG.md 等用户真实产物由 host 显式提交。
 
 ## Agent 执行层（harness primitive）
 

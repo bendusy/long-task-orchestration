@@ -26,6 +26,95 @@ def contains_any(text: str, needles: list[str]) -> list[str]:
     return [needle for needle in needles if needle in text]
 
 
+# active 文档：ROUTER 允许落地的当前口径文档。specs/、backlog、validation-log、
+# dated review 是历史/设计材料，不进 active 集合。
+ACTIVE_DOCS = [
+    "SKILL.md",
+    "README.md",
+    "COMMANDS.md",
+    "INSTALL.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "references/onboarding.md",
+    "references/run-state-workflow.md",
+    "references/execution-loop.md",
+    "references/workflow-playbook.md",
+    "references/control-loop-harness.md",
+    "references/audit-convergence.md",
+    "references/long-loop-state.md",
+    "references/decision-logging.md",
+    "references/release-workflow.md",
+    "references/deploy-sequencing.md",
+    "references/hooks.md",
+    "references/sharing-guide.md",
+    "references/cross-runtime-host-notes.md",
+    "references/hs-as-core-tool.md",
+    "references/plugin-boundary.md",
+    "references/rust-migration-release.md",
+]
+
+STALE_FLAG_DENYLIST = [
+    "--request ",
+    "--with-audit",
+    "--profile audit",
+    "--profile deploy",
+    "--install-hooks",
+    "--auto-commit",
+]
+
+
+def check_stale_flags(errors: list[str]) -> None:
+    for rel in ACTIVE_DOCS:
+        hits = contains_any(read(rel), STALE_FLAG_DENYLIST)
+        check(not hits, f"{rel} has no stale CLI flags: {hits}", errors)
+
+
+def check_no_handwritten_command_count(errors: list[str]) -> None:
+    # 手写“N 个可见业务命令”必然漂移；总数只允许出现在 COMMANDS.md（由 cli.rs 派生校验）
+    pattern = re.compile(r"\d+\s*个可见业务命令")
+    for rel in ACTIVE_DOCS:
+        if rel == "COMMANDS.md":
+            continue
+        check(
+            not pattern.search(read(rel)),
+            f"{rel} has no handwritten business-command count",
+            errors,
+        )
+
+
+LINK_RE = re.compile(r"\[[^\]]*\]\(([^)#\s]+)(#[^)\s]*)?\)")
+
+
+def _anchor_ok(target_text: str, anchor: str) -> bool:
+    # GitHub 风格宽松校验：标题与 anchor 都去掉非字母数字汉字后归一比较
+    def norm(value: str) -> str:
+        return re.sub(r"[^0-9a-zA-Z一-鿿]+", "", value).lower()
+
+    want = norm(anchor.lstrip("#"))
+    return any(
+        norm(line.lstrip("#")) == want
+        for line in target_text.splitlines()
+        if line.startswith("#")
+    )
+
+
+def check_relative_links(errors: list[str]) -> None:
+    for rel in ACTIVE_DOCS:
+        base = (ROOT / rel).parent
+        for match in LINK_RE.finditer(read(rel)):
+            target, anchor = match.group(1), match.group(2)
+            if target.startswith(("http://", "https://", "mailto:")):
+                continue
+            path = (base / target).resolve()
+            check(path.exists(), f"{rel} link target exists: {target}", errors)
+            if anchor and path.suffix == ".md" and path.exists():
+                check(
+                    _anchor_ok(path.read_text(encoding="utf-8"), anchor),
+                    f"{rel} anchor resolves: {target}{anchor}",
+                    errors,
+                )
+
+
 def cargo_package_version(cargo_toml: str) -> str | None:
     in_package = False
     for raw in cargo_toml.splitlines():
@@ -174,6 +263,10 @@ def main() -> int:
         check(not hits, f"{rel} has no false platform/release claim: {hits}", errors)
         stale_python = contains_any(read(rel), ["--use-python", "LTO_USE_PYTHON", "scripts/lto_run.py"])
         check(not stale_python, f"{rel} has no active Python fallback instructions: {stale_python}", errors)
+
+    check_stale_flags(errors)
+    check_no_handwritten_command_count(errors)
+    check_relative_links(errors)
 
     if errors:
         print(f"\n{len(errors)} documentation consistency failure(s)", file=sys.stderr)

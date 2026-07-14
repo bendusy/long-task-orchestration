@@ -65,11 +65,10 @@ artifact memory publish 是可选增强，不是核心 hook：
 
 publish 默认走 am-cli sink（am 0.7.0+），`MEMORY_FLOW_URL` / `MEMORY_FLOW_TOKEN` 为 legacy-rest 兜底。没装 ANIMEM 或未配置上述环境变量时，LTO hook 仍应正常工作。
 
-## 安装（opt-in，2026-06-03 改）
+## 触发方式（opt-in，按需手跑）
 
-hook **不默认安装**——`lto start --install-hooks` 才装进 `.git/hooks/pre-commit`：
-- 检测到 husky / pre-commit framework / 已有自定义 pre-commit → **跳过并警告**，不覆盖你的设置
-- 干净环境 → 创建 LTO pre-commit 闸门
-- 已有 LTO 钩子 → 跳过
-
-不传 `--install-hooks` 时 LTO 不碰你的 `.git/hooks`（早期版本盲目追加，会撞 husky，已改）。
+hook **不安装、不常驻**——`lto hook <gate> [--force] [--reason]` 在你需要边界检查时手动跑
+（gate: pre-commit / pre-deploy / pre-closeout）。CLI 不写入 `.git/hooks`：早期版本 start
+命令的 `.git/hooks` 安装器已随 Rust 迁移移除，避免撞 husky /
+pre-commit framework / 已有自定义 hook。想在 git 提交前自动触发，自己在仓库 hook 里
+调 `lto hook pre-commit` 即可（是否接线由你决定，LTO 不擅自动你的 git）。

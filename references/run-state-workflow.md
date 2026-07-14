@@ -9,33 +9,28 @@ in `COMMANDS.md`, `src/cli.rs`, and `references/rust-migration-release.md`.
 Inside the repository, run from the root:
 
 ```bash
-# minimal: state.json + run-state.md (default)
+# minimal: state.json + run-state.md
 lto start \
   --goal "short task goal" \
   --host codex \
-  --request "original user request" \
   --why "why this run exists (for human recap after long gaps)" \
   --done-when "how you'll know it's finished (recap data source)"
 
-# with audit ledger (only INITIALISES the ledger; run `audit` to fill+converge it)
+# /goal 型长交付：delivery contract 四件套（target/constraint/instrument/entropy-check）
 lto start \
-  --goal "spec audit task" \
-  --host codex \
-  --with-audit
-
-# deploy profile: audit 超集，额外落 preflight 环境快照进 state.json
-lto start \
-  --goal "deploy task" \
-  --host codex \
-  --profile deploy
-
-# opt-in: install LTO pre-commit gate into .git/hooks (skips if husky/pre-commit detected)
-#   add --install-hooks ; NOT installed by default
+  --goal "提升检索召回" \
+  --target "hidden eval recall >= 95%" \
+  --constraint "wall clock <= 4h" \
+  --instrument "python3 eval/search_recall.py --hidden" \
+  --entropy-check "on stall, change hypothesis and log overfit reflection"
 ```
 
-`--why` / `--done-when` feed `recap`'s human-facing view. `--install-hooks` is
-opt-in (default off). `--with-audit` only creates `audit-ledger.md`; the actual
-adversarial audit + convergence runs via the `audit` command.
+参数真源是 `lto start --help`（`src/cli.rs` `Start`）：`--run-id/--goal/--why/--done-when/
+--host/--target/--constraint/--instrument/--entropy-check/--force`。
+`--why` / `--done-when` feed `recap`'s human-facing view. `audit-ledger.md` is
+created by the first `lto audit` dispatch round (not by `start`); preflight
+environment snapshots are recorded via `lto preflight --record`. Boundary gates
+run on demand via `lto hook <gate>`（见 `hooks.md`，不写入 `.git/hooks`）。
 
 Before entering implementation or optimization, record four evidence lines in
 `run-state.md` or task evidence:
@@ -79,14 +74,14 @@ The wrapper is sentinel-managed and points at the current
 This creates `.lto/<run-id>/` with:
 - `state.json` — machine-readable state (source of truth)
 - `run-state.md` — human-readable state
-- `audit-ledger.md` — only when `--with-audit` is set
+- `audit-ledger.md` — created later, by the first `lto audit` dispatch round
 
 It also writes `.lto/current`, so later commands can omit `--run-id`.
 
-**Git hook install is opt-in** (2026-06-03): pass `--install-hooks` to add the LTO
-pre-commit gate into `.git/hooks/pre-commit`. It is **not** installed by default,
-and is **skipped with a warning** when husky / pre-commit framework / an existing
-custom pre-commit hook is detected, to avoid clobbering your setup.
+**Boundary hooks are opt-in and on-demand**: `lto hook <gate> [--force] [--reason]`
+runs a pre-commit/pre-deploy/pre-closeout style gate when you invoke it. The CLI
+does not install anything into `.git/hooks`（早期版本的 `.git/hooks` 安装器已移除，
+避免撞 husky / pre-commit framework）。
 
 ## Task-Add
 
@@ -183,7 +178,7 @@ On failure: task.status=blocked, blocker recorded, state.last_failure set,
 retry_count bumped (per command fingerprint).
 
 Other flags: `--status-on-fail {blocked,in_progress}` (default blocked),
-`--cwd`, `--timeout`, `--auto-commit` (opt-in commit of .lto state).
+`--cwd`, `--timeout`. LTO never commits for you——`.lto` 状态提交是 host 动作。
 
 ## Judge
 
@@ -202,7 +197,7 @@ lto judge --phase implementation --rerun-tests
 
 Saves verdict to `.lto/<run-id>/judge/judge-<phase>-<ts>.yaml`.
 Other flags: `--since <git-base>` (diff review base), `--runner <name>`
-(auditor agent name, default codex), `--auto-commit` (opt-in commit of .lto state).
+(auditor agent name, default codex).
 Updates `gates.last_reviewed_head`.
 
 ## Hook
@@ -278,8 +273,8 @@ uncommitted changes outside .lto, or run already closed (use `--force`).
 Also refuses if a high-risk task has no/empty audit ledger, or if there are
 unverified `risk_points` (use `--force` / `--allow-dirty` to override).
 
-Add `--auto-commit` to commit `.lto` + CHANGELOG.md (opt-in, uses repo git
-identity, default off).
+closeout writes CHANGELOG.md but never commits——提交 `.lto` 相关产物与 CHANGELOG
+是 host 的显式动作（提交权在你手里）。
 
 ## Parallel / Pipeline (shell command batching)
 
@@ -296,8 +291,8 @@ $L run parallel --phase implementation --concurrency 4 --command "pytest -x"
 $L run pipeline --phase implementation --stages "ruff check {task_id}" "pytest -k {task_id}"
 ```
 
-Each records evidence via the shared `exec.run_command` kernel. `--auto-commit`
-opt-in. Real **agent fan-out** is `audit --auto-dispatch` / `--discover-risks`.
+Each records evidence via the shared `exec.run_command` kernel.
+Real **agent fan-out** is `audit --auto-dispatch` / `--discover-risks`.
 stdout/stderr artifacts are registered in `.lto/<run-id>/artifacts.json` using
 repo-relative paths.
 

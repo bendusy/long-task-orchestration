@@ -176,8 +176,8 @@ cargo run --manifest-path <repo>/Cargo.toml -- \
 ```
 
 **不要做的**：
-- ❌ 不要把 `lto start --install-hooks` 写进项目初始化脚本默认执行——hook 是 opt-in，自动装会撞 husky / pre-commit framework（见 `start.py` 的冲突检测）。
-- ❌ 不要把 `--auto-commit` 设成默认——LTO 默认不替你 commit，提交权在你手里。
+- ❌ 不要在项目初始化脚本里往 `.git/hooks` 塞 LTO 闸门——hook 是 opt-in 手跑（`lto hook <gate>`），自动装会撞 husky / pre-commit framework。
+- ❌ 不要让任何脚本替用户 git commit——LTO 从不替你 commit，提交权在你手里。
 - ❌ 不要把整份 SKILL.md 贴进 CLAUDE.md——那是反渐进式披露，每次对话白烧 context。
 
 ### 和 pi-dynamic-workflows 同装会冲突吗？
