@@ -74,6 +74,10 @@
   `confidence: low (no lineage)`。
 - 事件：append 发 `audit.round.recorded`；evaluate 发 `audit.ledger.evaluated{verdict,
   terminal, oscillation}`；`event_emit.rs`/`telemetry.rs` 接线；`audit.converged` 只读兼容。
+  **telemetry 轮数统计必须双事件兼容**（异构评审 R3-F1：`telemetry.rs:259` 现硬编码只数
+  `audit.converged`，停写后新 run 的 audit_rounds 恒 0，会把 C4 autonomous_gate 的跨 run
+  证据饿死）：`audit_rounds` = 旧 `audit.converged` + 新 `audit.round.recorded` 合并计数
+  （同 run 同轮去重），加测试：纯新事件 run 的 audit_rounds > 0。
 - check 输出增一行 diagnostics 摘要 + forced_entropy advisory 提示。
 - 测试：`[1,2,0]`→Converged+single_rebound；`[5,2,4,1,3]`→oscillation=alternating+
   envelope 判定；`[5,4,3]`→improving+nonzero；telemetry 对旧 `audit.converged` 事件仍能读。

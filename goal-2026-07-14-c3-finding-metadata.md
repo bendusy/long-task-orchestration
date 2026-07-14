@@ -44,7 +44,7 @@ ground truth，所以新字段只进 host review 信息层，绝不进 gate。
 | # | 消费方 | 落点 | 改法 |
 |---|---|---|---|
 | 1 | Finding struct | `src/audit.rs:15-25` | 加两个 Option 字段 + serde default |
-| 2 | typed parser 白名单 | `src/audit.rs:89-121` | `parse_findings_values` 提取新字段（容错：缺省 None；**兼容简化字符串形态** `"reported_confidence": "high"` → `{level: high, rationale: None}`——异构 agent 常回简化 JSON，不兼容会静默丢失，异构评审 R2-F4） |
+| 2 | typed parser 白名单 | `src/audit.rs:89-121` | `parse_findings_values` 提取新字段（容错：缺省 None；**兼容简化字符串形态** `"reported_confidence": "high"` → `{level: high, rationale: None}`——异构 agent 常回简化 JSON，不兼容会静默丢失，异构评审 R2-F4）。**容错实现在类型层**：给 `ReportedConfidence` 写 custom `Deserialize`（untagged：对象或纯字符串都接受），而非只在手动 parser 打补丁——否则任何 `#[derive(Deserialize)]` 直接解析 `Finding` 的路径（telemetry/事件分发）遇简化形态会解析失败（异构评审 R3-F3） |
 | 3 | dispatch JSON schema | `src/audit_dispatch.rs:194-202` | properties 增两字段；required 不加（审计方可缺省） |
 | 4 | audit prompt 示例 | `src/cli.rs:2182-2189` | 示例 JSON 带新字段 + 一句「自报置信度与失效条件」 |
 | 5 | risk discovery 复制 | `src/cli.rs:1903-1925` | 复制链带上新字段 |

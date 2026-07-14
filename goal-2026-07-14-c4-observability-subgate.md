@@ -43,8 +43,10 @@ signal_declared → NEEDS_CONFIRM（打印「已声明未证实」+ 缺的证据
 1. `goal` 与 `done_when` 非空（C2 落地后新 run 恒真；旧 run 在这里兜底）；
 2. delivery contract 的 `instruments` 至少一条；
 3. instrument 与最新 evidence 有结构化关联：**结构化引用优先**——runner/task evidence
-   增 instrument 引用字段（如 `--instrument-ref <index>`，evidence 落 `instrument_ref`），
-   有引用即精确关联；字符串归一匹配（trim/引号容差）**仅作旧数据回退**，不做语义猜测。
+   增 instrument 引用字段（evidence 落 `instrument_ref`），**引用键用稳定标识**：instrument
+   字符串的内容 hash（或显式 label），**不用数组下标**——contract set 增删/重排会让索引错位
+   甚至越界（异构评审 R3-F5）。有引用即精确关联；字符串归一匹配（trim/引号容差）**仅作旧
+   数据回退**，不做语义猜测。
    两者都匹配不上才降 signal_declared。（异构评审 R2-F1：纯字符串匹配对路径/flag 顺序/
    note 微调过脆，会让 autonomous 长期卡 NEEDS_CONFIRM——降级方向仍安全，但入口要给结构化通道。）
 

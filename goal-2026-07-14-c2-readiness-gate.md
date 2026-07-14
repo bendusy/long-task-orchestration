@@ -31,7 +31,10 @@ LTO 现状违反这条：
 两层规则，名字叫 **run readiness**（基础）+ **contract completeness**（扩展）：
 
 1. **base readiness**：新 run 要求非空 `--goal` 且非空 `--done-when`。缺任一 → 在**任何
-   目录/state 写入之前** fail，stderr 输出：
+   目录/state 写入之前** fail。**校验只放 CLI 参数层**（Start 分支，start_run 之前）：
+   库层构造函数与 state 序列化不动——直接构造 state 的单测不受影响；确有走 CLI 空参路径的
+   旧测试属于断言旧行为，随本 goal 更新。**禁止 `#[cfg(test)]` 测试后门**（会削弱闸门，
+   异构评审 R3-F4 的建议按此驳回）。stderr 输出：
    ```
    需补充: --goal "<一句话目标>" --done-when "<怎么算做完>"
    （信息不足禁猜：没有完成标准的 run 无法判收敛，recap/closeout 都会退化）
@@ -55,6 +58,10 @@ LTO 现状违反这条：
 ### Phase 1：base readiness + contract completeness（start 写盘前拒）
 - 落点：`src/cli.rs` Start 分支（`:1093-1122`）在调 `start_run` 前校验；校验函数放
   `src/state.rs`（挨着 `missing_sections`，如 `readiness_missing(goal, done_when) -> Vec<&str>`）。
+- **顺手修 host 静默默认**：`cli.rs:2123` 不传 `--host` 时 `unwrap_or("codex")`——host 未知
+  不该猜 codex（实证：2026-07-14 run 因此把健康的 codex 错误排除出异构审计池三轮）。改法：
+  未传时写 `unknown`，`pick_auditors` 对 unknown 不做同族排除（全池可用）并在 audit 输出
+  WARN 提示补 host；readiness 输出提示补 `--host`。
 - 测试：缺 goal / 缺 done-when / 双缺 → 非零退出 + 无 `.lto` 新目录；只给 target 不给
   instrument（或反之）→ 拒 + 列缺 flag；target+instrument 成对但缺 constraint/entropy-check
   → 成功 + WARN；四项全满 → 成功；全空 contract → 成功；`--force` **不**豁免 readiness
