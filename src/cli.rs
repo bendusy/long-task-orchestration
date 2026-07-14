@@ -1,4 +1,5 @@
 use crate::audit_dispatch;
+use crate::audit_ledger;
 use crate::budget;
 use crate::commands::{closeout, ops, recap, resume, util};
 use crate::plugin;
@@ -1729,16 +1730,18 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
                 tags: &["audit", "reply"],
             },
         )?;
-        used.push(result.runner.clone());
-        counts.add_reply(&result.reply_text);
-        let findings = parse_findings_or_empty(&result.reply_text);
-        crate::event_emit::emit_audit_findings(
-            repo,
-            &run_id,
-            &result.runner,
-            &findings,
-            "audit.auto_dispatch",
-        );
+        if result.status == crate::agent_job::JobStatus::Ok {
+            used.push(result.runner.clone());
+            counts.add_reply(&result.reply_text);
+            let findings = parse_findings_or_empty(&result.reply_text);
+            crate::event_emit::emit_audit_findings(
+                repo,
+                &run_id,
+                &result.runner,
+                &findings,
+                "audit.auto_dispatch",
+            );
+        }
         println!(
             "  {}: {} exit={:?}",
             result.runner,
@@ -1746,15 +1749,25 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
             result.exit_code
         );
     }
+    used.sort();
+    used.dedup();
+    let coverage = targets
+        .iter()
+        .filter_map(|target| target.get("id").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join(",");
     let ledger_path = run_dir.join("audit-ledger.md");
     append_audit_ledger_round(
         repo,
         &run_id,
         &ledger_path,
-        &state,
-        &replies_dir,
-        &used,
-        counts,
+        AuditLedgerRoundInput {
+            state: &state,
+            replies_dir: &replies_dir,
+            auditors: &used,
+            coverage: &coverage,
+            counts,
+        },
     )?;
     println!(
         "audit ledger: {}",
@@ -1961,6 +1974,14 @@ impl SeverityCounts {
     }
 }
 
+struct AuditLedgerRoundInput<'a> {
+    state: &'a LtoState,
+    replies_dir: &'a Path,
+    auditors: &'a [String],
+    coverage: &'a str,
+    counts: SeverityCounts,
+}
+
 fn parse_findings_or_empty(text: &str) -> Vec<Value> {
     if let Some(findings) = crate::audit::parse_findings_text(text) {
         return findings
@@ -1996,41 +2017,42 @@ fn append_audit_ledger_round(
     repo: &Path,
     run_id: &str,
     ledger_path: &Path,
-    state: &LtoState,
-    replies_dir: &Path,
-    auditors: &[String],
-    counts: SeverityCounts,
+    input: AuditLedgerRoundInput<'_>,
 ) -> anyhow::Result<()> {
-    ensure_audit_ledger(ledger_path)?;
-    let content = fs::read_to_string(ledger_path)?;
-    let label = next_audit_round_label(&content);
+    let AuditLedgerRoundInput {
+        state,
+        replies_dir,
+        auditors,
+        coverage,
+        counts,
+    } = input;
     let artifact = util::repo_relative_path(repo, replies_dir)?;
-    let row = format!(
-        "| {label} | {artifact} | {} | {} | {} | {} | {} | open |",
-        auditors.join(" "),
-        counts.high,
-        counts.critical,
-        counts.minor,
-        if label == "R1" { "start" } else { "flat" },
-    );
-    let updated = if label == "R1" {
-        let placeholder = "| R1 |  |  |  |  |  | start | open |";
-        if content.contains(placeholder) {
-            content.replacen(placeholder, &row, 1)
-        } else {
-            insert_audit_round_row(&content, &row)
-        }
-    } else {
-        insert_audit_round_row(&content, &row)
-    };
-    fs::write(ledger_path, updated)?;
-    crate::event_emit::emit_audit_converged(
+    let outcome = audit_ledger::append(
+        ledger_path,
+        audit_ledger::AppendInput {
+            artifact: &artifact,
+            auditors,
+            coverage,
+            high: counts.high,
+            critical: counts.critical,
+            minor: counts.minor,
+        },
+    )?;
+    crate::event_emit::emit_audit_round_recorded(
         repo,
         run_id,
-        &label,
+        &outcome.label,
         counts.high,
         counts.critical,
         counts.minor,
+    );
+    crate::event_emit::emit_audit_ledger_evaluated(
+        repo,
+        run_id,
+        &outcome.label,
+        outcome.verdict.as_str(),
+        outcome.diagnostics.terminal.as_str(),
+        outcome.diagnostics.oscillation.as_str(),
     );
     register_run_artifact(
         repo,
@@ -2040,49 +2062,11 @@ fn append_audit_ledger_round(
         RunArtifactRecord {
             kind: "audit_ledger",
             producer: "lto-rs.audit.collect",
-            summary: &format!("audit ledger updated {label}"),
+            summary: &format!("audit ledger updated {}", outcome.label),
             tags: &["audit", "ledger"],
         },
     )?;
     Ok(())
-}
-
-fn ensure_audit_ledger(path: &Path) -> anyhow::Result<()> {
-    if path.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, include_str!("../templates/audit-ledger.md"))?;
-    Ok(())
-}
-
-fn next_audit_round_label(content: &str) -> String {
-    let max_round = content
-        .lines()
-        .filter_map(|line| line.trim_start().strip_prefix("| R"))
-        .filter_map(|tail| tail.split('|').next()?.trim().parse::<u64>().ok())
-        .max()
-        .unwrap_or(0);
-    if content.contains("| R1 |  |  |  |  |  | start | open |") || max_round == 0 {
-        "R1".to_string()
-    } else {
-        format!("R{}", max_round + 1)
-    }
-}
-
-fn insert_audit_round_row(content: &str, row: &str) -> String {
-    let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
-    let idx = lines
-        .iter()
-        .rposition(|line| line.trim_start().starts_with("| R"))
-        .map(|idx| idx + 1)
-        .unwrap_or(lines.len());
-    lines.insert(idx, row.to_string());
-    let mut out = lines.join("\n");
-    out.push('\n');
-    out
 }
 
 struct RunArtifactRecord<'a> {

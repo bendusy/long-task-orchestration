@@ -30,7 +30,8 @@ pub const KNOWN_EVENT_TYPES: &[&str] = &[
     "artifact.registered",
     "audit.dispatched",
     "audit.finding",
-    "audit.converged",
+    "audit.round.recorded",
+    "audit.ledger.evaluated",
     "gate.evaluated",
     "gate.blocked",
     "budget.warned",
@@ -632,6 +633,8 @@ fn process_probe_from_kill_output(success: bool, stderr: &[u8]) -> ProcessProbe 
 mod tests {
     use super::*;
 
+    const LEGACY_AUDIT_EVENT: &str = "audit.converged"; // legacy test fixture
+
     #[test]
     fn writes_redacted_append_only_events_and_reads_unknown_types() {
         let tmp = tempfile::tempdir().unwrap();
@@ -663,31 +666,35 @@ mod tests {
     }
 
     #[test]
-    fn accepts_o2_types_but_still_rejects_typos_on_write() {
+    fn accepts_current_audit_types_but_rejects_legacy_and_typos_on_write() {
         let tmp = tempfile::tempdir().unwrap();
-        emit(
-            tmp.path(),
-            "r1",
-            EventRecord {
-                event_type: "gate.blocked".to_string(),
-                actor_kind: "lto".to_string(),
-                summary: "closeout blocked".to_string(),
-                ..EventRecord::default()
-            },
-        )
-        .unwrap();
-        let err = emit(
-            tmp.path(),
-            "r1",
-            EventRecord {
-                event_type: "gate.blokced".to_string(),
-                actor_kind: "lto".to_string(),
-                summary: "typo".to_string(),
-                ..EventRecord::default()
-            },
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("invalid or deferred event type"));
+        for event_type in ["audit.round.recorded", "audit.ledger.evaluated"] {
+            emit(
+                tmp.path(),
+                "r1",
+                EventRecord {
+                    event_type: event_type.to_string(),
+                    actor_kind: "lto".to_string(),
+                    summary: event_type.to_string(),
+                    ..EventRecord::default()
+                },
+            )
+            .unwrap();
+        }
+        for event_type in [LEGACY_AUDIT_EVENT, "gate.blokced"] {
+            let err = emit(
+                tmp.path(),
+                "r1",
+                EventRecord {
+                    event_type: event_type.to_string(),
+                    actor_kind: "lto".to_string(),
+                    summary: event_type.to_string(),
+                    ..EventRecord::default()
+                },
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("invalid or deferred event type"));
+        }
     }
 
     #[test]

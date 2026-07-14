@@ -160,6 +160,17 @@ fn enforce_gates(
         let text = fs::read_to_string(&ledger_path)?;
         let rounds = ledger::parse_ledger(&text)?;
         let verdict = ledger::evaluate_ledger(&rounds, false);
+        if let Some(diagnostics) = ledger::diagnose(&rounds) {
+            eprintln!("ledger diagnostics: {}", diagnostics.summary());
+            if diagnostics.suggests_entropy_review()
+                && !ctx.state.delivery_contract.forced_entropy.is_empty()
+            {
+                eprintln!(
+                    "ADVISORY review forced_entropy before changing hypothesis: {}",
+                    ctx.state.delivery_contract.forced_entropy.join(" | ")
+                );
+            }
+        }
         if !matches!(
             verdict,
             LedgerVerdict::Converged | LedgerVerdict::NoObservations

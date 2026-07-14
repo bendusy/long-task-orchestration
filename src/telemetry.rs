@@ -254,10 +254,7 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
             Ok(events) => events,
             Err(_) => continue,
         };
-        let audit_rounds = events
-            .iter()
-            .filter(|event| event_type(event) == "audit.converged")
-            .count();
+        let audit_rounds = normalized_audit_rounds(&events).len();
         audit_rounds_by_run.insert(run_id.clone(), audit_rounds);
 
         if events
@@ -551,6 +548,62 @@ fn event_type(event: &Value) -> &str {
     event.get("type").and_then(Value::as_str).unwrap_or("")
 }
 
+const LEGACY_AUDIT_ROUND_EVENT: &str = "audit.converged"; // legacy read compatibility
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum AuditRoundKey {
+    Round(String),
+    EventId(u64),
+    Position(usize),
+}
+
+fn normalized_audit_rounds(events: &[Value]) -> Vec<&Value> {
+    let mut by_key = BTreeMap::<AuditRoundKey, (usize, &Value)>::new();
+    for (position, event) in events.iter().enumerate() {
+        if !matches!(
+            event_type(event),
+            LEGACY_AUDIT_ROUND_EVENT | "audit.round.recorded"
+        ) {
+            continue;
+        }
+        let key = audit_round_key(event, position);
+        by_key.insert(key, (position, event));
+    }
+    let mut rounds = by_key.into_values().collect::<Vec<_>>();
+    rounds.sort_by_key(|(position, _)| *position);
+    rounds.into_iter().map(|(_, event)| event).collect()
+}
+
+fn audit_round_key(event: &Value, position: usize) -> AuditRoundKey {
+    normalized_round_identity(event)
+        .map(AuditRoundKey::Round)
+        .or_else(|| {
+            event
+                .get("event_id")
+                .and_then(Value::as_u64)
+                .map(AuditRoundKey::EventId)
+        })
+        .unwrap_or(AuditRoundKey::Position(position))
+}
+
+fn normalized_round_identity(event: &Value) -> Option<String> {
+    normalize_round_label(event.get("object_id").and_then(Value::as_str)).or_else(|| {
+        normalize_round_label(
+            event
+                .get("fields")
+                .and_then(|fields| fields.get("round"))
+                .and_then(Value::as_str),
+        )
+    })
+}
+
+fn normalize_round_label(label: Option<&str>) -> Option<String> {
+    label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
 fn average_f64(values: impl Iterator<Item = f64>) -> Option<f64> {
     let mut count = 0usize;
     let mut sum = 0.0;
@@ -570,10 +623,7 @@ fn audit_metrics(events: &[Value]) -> Value {
         .iter()
         .filter(|event| event.get("type").and_then(Value::as_str) == Some("audit.dispatched"))
         .count();
-    let rounds = events
-        .iter()
-        .filter(|event| event.get("type").and_then(Value::as_str) == Some("audit.converged"))
-        .collect::<Vec<_>>();
+    let rounds = normalized_audit_rounds(events);
     let mut severity_counts = std::collections::BTreeMap::<String, usize>::new();
     for event in events
         .iter()
@@ -736,9 +786,10 @@ mod tests {
             repo,
             run_id,
             EventRecord {
-                event_type: "audit.converged".to_string(),
+                event_type: "audit.round.recorded".to_string(),
                 actor_kind: "lto".to_string(),
-                fields: json!({"blockers": 1}),
+                object_id: Some("R1".to_string()),
+                fields: json!({"round": "R1", "blockers": 1}),
                 ..EventRecord::default()
             },
         )
@@ -758,6 +809,181 @@ mod tests {
         assert_eq!(value["audit_metrics"]["audit_rounds"], 1);
         assert_eq!(value["audit_metrics"]["findings"]["by_severity"]["high"], 1);
         assert_eq!(value["event_log"]["event_count"], 4);
+    }
+
+    #[test]
+    fn audit_rounds_normalize_old_only_events() {
+        let metrics = audit_metrics(&[
+            json!({
+                "event_id": 1,
+                "type": LEGACY_AUDIT_ROUND_EVENT,
+                "object_id": "R1",
+                "fields": {"round": "R1", "blockers": 2}
+            }),
+            json!({
+                "event_id": 2,
+                "type": LEGACY_AUDIT_ROUND_EVENT,
+                "object_id": "R2",
+                "fields": {"round": "R2", "blockers": 1}
+            }),
+        ]);
+
+        assert_eq!(metrics["audit_rounds"], 2);
+        assert_eq!(metrics["latest_blockers"], 1);
+    }
+
+    #[test]
+    fn audit_rounds_normalize_new_only_events_and_ignore_evaluations() {
+        let metrics = audit_metrics(&[
+            json!({
+                "event_id": 1,
+                "type": "audit.round.recorded",
+                "object_id": "R1",
+                "fields": {"round": "R1", "blockers": 2}
+            }),
+            json!({
+                "event_id": 2,
+                "type": "audit.ledger.evaluated",
+                "object_id": "audit-ledger",
+                "fields": {"verdict": "CONVERGING"}
+            }),
+            json!({
+                "event_id": 3,
+                "type": "audit.round.recorded",
+                "fields": {"round": "R2", "blockers": 0}
+            }),
+        ]);
+
+        assert_eq!(metrics["audit_rounds"], 2);
+        assert_eq!(metrics["latest_blockers"], 0);
+    }
+
+    #[test]
+    fn audit_rounds_deduplicate_mixed_same_round_last_wins() {
+        let metrics = audit_metrics(&[
+            json!({
+                "event_id": 1,
+                "type": LEGACY_AUDIT_ROUND_EVENT,
+                "object_id": " R1 ",
+                "fields": {"blockers": 3}
+            }),
+            json!({
+                "event_id": 2,
+                "type": "audit.round.recorded",
+                "fields": {"round": "r1", "blockers": 0}
+            }),
+        ]);
+
+        assert_eq!(metrics["audit_rounds"], 1);
+        assert_eq!(metrics["latest_blockers"], 0);
+    }
+
+    #[test]
+    fn audit_rounds_keep_mixed_different_rounds() {
+        let metrics = audit_metrics(&[
+            json!({
+                "event_id": 1,
+                "type": LEGACY_AUDIT_ROUND_EVENT,
+                "object_id": "R1",
+                "fields": {"blockers": 2}
+            }),
+            json!({
+                "event_id": 2,
+                "type": "audit.round.recorded",
+                "fields": {"round": "R2", "blockers": 1}
+            }),
+        ]);
+
+        assert_eq!(metrics["audit_rounds"], 2);
+        assert_eq!(metrics["latest_blockers"], 1);
+    }
+
+    #[test]
+    fn audit_rounds_fall_back_to_event_id_or_position_without_round_identity() {
+        let events = vec![
+            json!({
+                "event_id": 7,
+                "type": LEGACY_AUDIT_ROUND_EVENT,
+                "fields": {"blockers": 3}
+            }),
+            json!({
+                "event_id": 7,
+                "type": "audit.round.recorded",
+                "fields": {"blockers": 1}
+            }),
+            json!({
+                "type": "audit.round.recorded",
+                "fields": {"blockers": 0}
+            }),
+            json!({
+                "type": "audit.ledger.evaluated",
+                "fields": {"verdict": "CONVERGED"}
+            }),
+        ];
+
+        let rounds = normalized_audit_rounds(&events);
+        assert_eq!(rounds.len(), 2);
+        assert_eq!(rounds[0]["fields"]["blockers"], 1);
+        assert_eq!(rounds[1]["fields"]["blockers"], 0);
+    }
+
+    #[test]
+    fn cross_run_mining_counts_new_audit_round_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_dir = repo.join(".lto").join("r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("state.json"),
+            serde_json::to_string_pretty(&LtoState {
+                run_id: "r1".to_string(),
+                ..LtoState::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let event_lines = [
+            json!({
+                "event_id": 1,
+                "run_id": "r1",
+                "type": "runner.finished",
+                "task_id": "L3",
+                "fields": {"runner": "codex", "status": "ok"}
+            }),
+            json!({
+                "event_id": 2,
+                "run_id": "r1",
+                "type": "audit.round.recorded",
+                "object_id": "R1",
+                "fields": {"round": "R1", "blockers": 1}
+            }),
+            json!({
+                "event_id": 3,
+                "run_id": "r1",
+                "type": "audit.ledger.evaluated",
+                "fields": {"verdict": "CONVERGING"}
+            }),
+            json!({
+                "event_id": 4,
+                "run_id": "r1",
+                "type": "audit.round.recorded",
+                "object_id": "R2",
+                "fields": {"round": "R2", "blockers": 0}
+            }),
+        ]
+        .into_iter()
+        .map(|event| event.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        fs::write(run_dir.join("events.jsonl"), event_lines + "\n").unwrap();
+
+        let mining = cross_run_mining(repo).unwrap();
+        let entry = mining
+            .entries
+            .iter()
+            .find(|entry| entry.runner == "codex")
+            .unwrap();
+        assert_eq!(entry.avg_audit_rounds, Some(2.0));
     }
 
     #[test]

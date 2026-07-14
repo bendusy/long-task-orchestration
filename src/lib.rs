@@ -2,6 +2,7 @@ pub mod agent_job;
 pub mod agent_turn;
 pub mod audit;
 pub mod audit_dispatch;
+pub mod audit_ledger;
 pub mod budget;
 pub mod cli;
 pub mod commands;

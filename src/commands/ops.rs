@@ -4,7 +4,7 @@ use crate::agent_job::{
 };
 use crate::budget::{self, BudgetStatus};
 use crate::commands::util;
-use crate::ledger::{self, LedgerVerdict};
+use crate::ledger::{self, LedgerDiagnostics, LedgerVerdict};
 use crate::llm_judge;
 use crate::scheduler::Scheduler;
 use crate::worktree;
@@ -38,6 +38,7 @@ pub(crate) struct CheckOutcome {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
     pub phase_report: Option<Value>,
+    ledger: Option<LedgerCheck>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +46,8 @@ struct LedgerCheck {
     has_rounds: bool,
     verdict: Option<LedgerVerdict>,
     sequence: Option<String>,
+    diagnostics: Option<LedgerDiagnostics>,
+    advisory: Option<String>,
     error: Option<String>,
 }
 
@@ -363,6 +366,17 @@ pub fn cmd_check(repo: &Path, options: CheckOptions) -> anyhow::Result<()> {
         for error in &outcome.errors {
             eprintln!("ERROR {error}");
         }
+        if let Some(status) = &outcome.ledger {
+            if let Some(verdict) = status.verdict {
+                println!("ledger verdict: {}", verdict.as_str());
+            }
+            if let Some(diagnostics) = status.diagnostics {
+                println!("ledger diagnostics: {}", diagnostics.summary());
+            }
+            if let Some(advisory) = &status.advisory {
+                eprintln!("ADVISORY {advisory}");
+            }
+        }
         if let Some(report) = &outcome.phase_report {
             print_phase_report(report);
         }
@@ -425,7 +439,18 @@ pub(crate) fn collect_check(repo: &Path, options: &CheckOptions) -> CheckOutcome
         ));
     }
 
-    let ledger_status = collect_ledger_check(&run_dir, options.strict, &mut outcome);
+    let mut ledger_status = collect_ledger_check(&run_dir, options.strict, &mut outcome);
+    if let (Some(status), Some(state)) = (ledger_status.as_mut(), state.as_ref())
+        && status
+            .diagnostics
+            .is_some_and(LedgerDiagnostics::suggests_entropy_review)
+        && !state.delivery_contract.forced_entropy.is_empty()
+    {
+        status.advisory = Some(format!(
+            "review forced_entropy before changing hypothesis: {}",
+            state.delivery_contract.forced_entropy.join(" | ")
+        ));
+    }
     if let (Some(target), Some(state)) = (options.to_phase.as_deref(), state.as_ref()) {
         let report = phase_report(repo, &run_dir, state, target, ledger_status.as_ref());
         if options.strict {
@@ -451,6 +476,7 @@ pub(crate) fn collect_check(repo: &Path, options: &CheckOptions) -> CheckOutcome
         }
         outcome.phase_report = Some(report);
     }
+    outcome.ledger = ledger_status;
     outcome
 }
 
@@ -464,6 +490,28 @@ fn outcome_json(outcome: &CheckOutcome) -> Value {
         "errors": outcome.errors,
         "warnings": outcome.warnings,
     });
+    if let Some(status) = &outcome.ledger {
+        let mut ledger = json!({
+            "has_rounds": status.has_rounds,
+            "verdict": status.verdict.map(LedgerVerdict::as_str),
+            "sequence": status.sequence,
+            "error": status.error,
+        });
+        if let Some(diagnostics) = status.diagnostics {
+            ledger["diagnostics"] = json!({
+                "sample_sufficiency": diagnostics.sample_sufficiency.as_str(),
+                "terminal": diagnostics.terminal.as_str(),
+                "direction": diagnostics.direction.as_str(),
+                "oscillation": diagnostics.oscillation.as_str(),
+                "envelope": diagnostics.envelope.as_str(),
+                "confidence": diagnostics.confidence.as_str(),
+            });
+        }
+        if let Some(advisory) = &status.advisory {
+            ledger["advisory"] = json!(advisory);
+        }
+        output["ledger"] = ledger;
+    }
     output
 }
 
@@ -562,28 +610,23 @@ fn collect_ledger_check(
         .and_then(|text| ledger::parse_ledger(&text))
     {
         Ok(rounds) => {
-            if rounds.is_empty() {
-                LedgerCheck {
-                    has_rounds: false,
-                    verdict: None,
-                    sequence: None,
-                    error: None,
-                }
-            } else {
-                let verdict = ledger::evaluate_ledger(&rounds, strict);
-                let sequence = ledger::ledger_sequence(&rounds);
-                LedgerCheck {
-                    has_rounds: true,
-                    verdict: Some(verdict),
-                    sequence: (!sequence.is_empty()).then_some(sequence),
-                    error: None,
-                }
+            let verdict = ledger::evaluate_ledger(&rounds, strict);
+            let sequence = ledger::ledger_sequence(&rounds);
+            LedgerCheck {
+                has_rounds: !rounds.is_empty(),
+                verdict: Some(verdict),
+                sequence: (!sequence.is_empty()).then_some(sequence),
+                diagnostics: ledger::diagnose(&rounds),
+                advisory: None,
+                error: None,
             }
         }
         Err(err) => LedgerCheck {
             has_rounds: false,
             verdict: None,
             sequence: None,
+            diagnostics: None,
+            advisory: None,
             error: Some(err.to_string()),
         },
     };
@@ -596,7 +639,7 @@ fn collect_ledger_check(
                 outcome.warnings.push(msg);
             }
         }
-        (None, None, false) => outcome
+        (None, Some(LedgerVerdict::NoObservations), false) => outcome
             .warnings
             .push("ledger exists but has no filled rounds".to_string()),
         (None, Some(verdict), true) if *verdict != LedgerVerdict::Converged => {

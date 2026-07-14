@@ -4,9 +4,9 @@
 
 ## Round Summary
 
-| round | artifact | auditors | high | critical | minor | trend | status |
-|---|---|---|---:|---:|---:|---|---|
-| R1 |  |  |  |  |  | start | open |
+| round | artifact | auditors | coverage | high | critical | minor | trend | status |
+|---|---|---|---|---:|---:|---:|---|---|
+| R1 |  |  |  |  |  |  | start | open |
 
 Trend values: start, down, flat, rebound, closed.
 

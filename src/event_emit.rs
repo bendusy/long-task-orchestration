@@ -302,7 +302,7 @@ pub fn emit_audit_findings(
     }
 }
 
-pub fn emit_audit_converged(
+pub fn emit_audit_round_recorded(
     repo: &Path,
     run_id: &str,
     round_label: &str,
@@ -314,7 +314,7 @@ pub fn emit_audit_converged(
         repo,
         run_id,
         EventRecord {
-            event_type: "audit.converged".to_string(),
+            event_type: "audit.round.recorded".to_string(),
             actor_kind: "lto".to_string(),
             object_id: Some(round_label.to_string()),
             object_type: Some("audit_round".to_string()),
@@ -327,6 +327,36 @@ pub fn emit_audit_converged(
                 "critical": critical,
                 "minor": minor,
                 "blockers": high + critical,
+            }),
+            ..EventRecord::default()
+        },
+    );
+}
+
+pub fn emit_audit_ledger_evaluated(
+    repo: &Path,
+    run_id: &str,
+    round_label: &str,
+    verdict: &str,
+    terminal: &str,
+    oscillation: &str,
+) {
+    events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "audit.ledger.evaluated".to_string(),
+            actor_kind: "lto".to_string(),
+            object_id: Some(round_label.to_string()),
+            object_type: Some("audit_ledger".to_string()),
+            summary: format!("audit ledger evaluated after {round_label}: {verdict}"),
+            fields: json!({
+                "round": round_label,
+                "verdict": verdict,
+                "terminal": terminal,
+                "oscillation": oscillation,
+                "strict": false,
+                "source": "audit_append",
             }),
             ..EventRecord::default()
         },
