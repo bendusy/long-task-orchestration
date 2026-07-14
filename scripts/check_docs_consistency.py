@@ -35,6 +35,7 @@ ACTIVE_DOCS = [
     "INSTALL.md",
     "AGENTS.md",
     "CLAUDE.md",
+    "references/INDEX.md",
     "references/onboarding.md",
     "references/run-state-workflow.md",
     "references/execution-loop.md",
