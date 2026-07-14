@@ -98,6 +98,112 @@ def _anchor_ok(target_text: str, anchor: str) -> bool:
     )
 
 
+FENCE_RE = re.compile(r"```(?:bash|sh)\n(.*?)```", re.S)
+_INVOKERS = ("lto", "lto-rs", "$LTO", "$L")
+
+
+def _merged_lines(block: str) -> list[str]:
+    # bash 续行（\ 结尾）合并成单行再分析
+    merged: list[str] = []
+    buffer = ""
+    for raw in block.splitlines():
+        line = raw.rstrip()
+        if line.endswith("\\"):
+            buffer += line[:-1] + " "
+            continue
+        merged.append(buffer + line)
+        buffer = ""
+    if buffer:
+        merged.append(buffer)
+    return merged
+
+
+def _extract_sub_and_flags(cmdline: str) -> tuple[list[str], list[str]]:
+    tokens = cmdline.split()
+    idx = None
+    for i, token in enumerate(tokens):
+        if token in _INVOKERS:
+            idx = i + 1
+            break
+        if token == "cargo" and "--" in tokens[i:]:
+            idx = tokens.index("--", i) + 1
+            break
+    if idx is None:
+        return [], []
+    # 跳过子命令前的全局旗标（如 --repo <path>）
+    j = idx
+    while j < len(tokens) and tokens[j].startswith("--"):
+        j += 2
+    subpath: list[str] = []
+    while j < len(tokens) and len(subpath) < 2:
+        token = tokens[j]
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", token):
+            break
+        subpath.append(token)
+        j += 1
+    if not subpath:
+        return [], []
+    rest = " ".join(tokens[j:])
+    # 引号字符串里的 --xxx 是命令参数值（如 --instrument "eval.py --hidden"），不是本命令旗标
+    rest = re.sub(r'"[^"]*"', "", rest)
+    rest = re.sub(r"'[^']*'", "", rest)
+    flags = re.findall(r"(--[a-z][a-z0-9-]*)", rest)
+    return subpath, flags
+
+
+def _lto_bin() -> list[str] | None:
+    import shutil
+
+    release = ROOT / "target/release/lto-rs"
+    if release.exists():
+        return [str(release)]
+    if shutil.which("cargo"):
+        return ["cargo", "run", "--quiet", "--"]
+    return None
+
+
+def check_fenced_lto_flags(errors: list[str]) -> None:
+    import subprocess
+
+    bin_cmd = _lto_bin()
+    if bin_cmd is None:
+        print("SKIP fenced-command flag check (no lto binary/cargo)")
+        return
+    help_cache: dict[tuple[str, ...], str] = {}
+    for rel in ACTIVE_DOCS:
+        for block in FENCE_RE.findall(read(rel)):
+            for line in _merged_lines(block):
+                if line.lstrip().startswith("#"):
+                    continue
+                subpath, flags = _extract_sub_and_flags(line)
+                if not subpath or not flags:
+                    continue
+                key = tuple(subpath)
+                if key not in help_cache:
+                    proc = subprocess.run(
+                        [*bin_cmd, *subpath, "--help"],
+                        capture_output=True,
+                        text=True,
+                        cwd=ROOT,
+                    )
+                    help_cache[key] = proc.stdout + proc.stderr
+                    # 两级子命令拿不到 help 时回退一级（如 `task add` → `task`）
+                    if "Usage:" not in help_cache[key] and len(subpath) == 2:
+                        proc = subprocess.run(
+                            [*bin_cmd, subpath[0], "--help"],
+                            capture_output=True,
+                            text=True,
+                            cwd=ROOT,
+                        )
+                        help_cache[key] = proc.stdout + proc.stderr
+                for flag in flags:
+                    check(
+                        flag in help_cache[key],
+                        f"{rel}: `lto {' '.join(subpath)}` supports {flag}",
+                        errors,
+                    )
+
+
 def check_relative_links(errors: list[str]) -> None:
     for rel in ACTIVE_DOCS:
         base = (ROOT / rel).parent
@@ -267,6 +373,7 @@ def main() -> int:
     check_stale_flags(errors)
     check_no_handwritten_command_count(errors)
     check_relative_links(errors)
+    check_fenced_lto_flags(errors)
 
     if errors:
         print(f"\n{len(errors)} documentation consistency failure(s)", file=sys.stderr)

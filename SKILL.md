@@ -200,19 +200,17 @@ LTO 的真源仍是本地 `.lto/<run-id>/state.json` + `artifacts.json`。
 am（ANIMEM）只是可选的 artifact-memory sink，用来让不同 runtime
 跨项目发现“哪个 run 活着、产物在哪里、谁审过、下一步是什么”。
 
-`memory publish` 默认走 **am 原生 CLI**（`--sink am-cli`，am 0.7.0+）：把
-redacted 投影信封管道喂给 `am ingest -f - --json`，am 负责 slug 生成、
-written/updated/skipped 三态去重和 supersede 版本链；LTO 不构造 slug、
-不碰 PG、不持有任何连接串。旧的 memory-flow REST 仍在（`--sink legacy-rest`）
-作兜底，但已不推荐。
+`memory publish` 走 **am 原生 CLI**（am 0.7.0+，唯一 sink；早期的 memory-flow
+REST 兜底已移除）：把 redacted 投影信封管道喂给 `am ingest -f - --json`，am 负责
+slug 生成、written/updated/skipped 三态去重和 supersede 版本链；LTO 不构造 slug、
+不碰 PG、不持有任何连接串。
 
 没装 am 也能完整使用 LTO（publish/resume 优雅降级，本地 `.lto/` 仍是真源）：
 
 ```bash
 $LTO memory export --run-id <run-id> --dry-run  # 纯本地 redacted JSON
-$LTO memory resume --project <key>              # 无 sink 时降级到本地 .lto
-$LTO memory publish --run-id <run-id>           # 默认 am-cli；am 缺席则报错并提示本地真源
-$LTO memory publish --run-id <run-id> --sink legacy-rest  # 兜底：memory-flow REST
+$LTO memory resume --project <key>              # 无 am 时降级到本地 .lto
+$LTO memory publish --run-id <run-id>           # am 缺席则报错并提示本地真源
 ```
 
 `memory export/publish` 不投影 `original_user_request` 原文、raw transcript、

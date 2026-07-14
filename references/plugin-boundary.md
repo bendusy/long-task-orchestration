@@ -262,7 +262,7 @@ lto plugin render-profile plugins/deep-agent-profiles codex-audit-readonly-v1 \
 lto plugin eval plugins/deep-agent-profiles --json
 
 # Mount plugin provenance into the active run; does not auto-apply profiles
-lto plugin mount plugins/deep-agent-profiles --approved-by host
+lto plugin mount plugins/deep-agent-profiles
 
 # Real baseline-vs-candidate A/B run with deterministic metrics (v0)
 # Compiles each eval-pack case into two AgentJobs and runs them via the scheduler.

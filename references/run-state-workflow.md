@@ -65,7 +65,7 @@ After `bash scripts/install.sh`, the global wrapper is shorter:
 
 ```bash
 lto --repo /path/to/target/repo start --goal "short task goal" --host codex
-lto check --repo /path/to/target/repo
+lto --repo /path/to/target/repo check
 ```
 
 The wrapper is sentinel-managed and points at the current
