@@ -43,10 +43,12 @@ signal_declared → NEEDS_CONFIRM（打印「已声明未证实」+ 缺的证据
 1. `goal` 与 `done_when` 非空（C2 落地后新 run 恒真；旧 run 在这里兜底）；
 2. delivery contract 的 `instruments` 至少一条；
 3. instrument 与最新 evidence 有结构化关联：**结构化引用优先**——runner/task evidence
-   增 instrument 引用字段（evidence 落 `instrument_ref`），**引用键用稳定标识**：instrument
-   字符串的内容 hash（或显式 label），**不用数组下标**——contract set 增删/重排会让索引错位
-   甚至越界（异构评审 R3-F5）。有引用即精确关联；字符串归一匹配（trim/引号容差）**仅作旧
-   数据回退**，不做语义猜测。
+   增 instrument 引用字段（evidence 落 `instrument_ref`），**引用键用稳定标识，优先级**：
+   ①显式 label（用户可给 instrument 起名）＞②**归一化后**（去空白/引号等非语义字符）的
+   内容 hash——raw hash 对微调（加个 flag、改个空格）过敏，会让历史证据瞬间全失配退回
+   signal_declared（异构评审 R4-F2）；**不用数组下标**——contract set 增删/重排会让索引
+   错位甚至越界（异构评审 R3-F5）。有引用即精确关联；字符串归一匹配**仅作旧数据回退**，
+   不做语义猜测。
    两者都匹配不上才降 signal_declared。（异构评审 R2-F1：纯字符串匹配对路径/flag 顺序/
    note 微调过脆，会让 autonomous 长期卡 NEEDS_CONFIRM——降级方向仍安全，但入口要给结构化通道。）
 
@@ -54,6 +56,7 @@ reliability 修复：
 - timeout/rate_limited 判定改为**按 runner/model/task type 匹配 + 有界近期样本 + 最小样本下限**
   （建议：各 slot 取最近 N=20 条完成记录；**样本 ≥5 时**按 failed 比例 ≥0.5 拒，
   样本 <5 时仅连续 ≥3 次失败才拒，单样本失败不拒——冷启动阶段 1/1 失败率=100% 不得锁死；
+  **连续 2 次失败即输出 WARN 提示 host 介入**（不拦截，防冷启动盲跑烧算力，异构评审 R4-F3）；
   单次历史 timeout 不再永久否决）。（异构评审 R2-F3）
 - `mining_dispatches` 改名 `mining_distinct_runs`（或改成真 dispatch 计数——裁决：改名，
   语义诚实优先，阈值常量同步改名 `AUTONOMOUS_MIN_MINING_RUNS_SUM`），

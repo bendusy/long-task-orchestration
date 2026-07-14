@@ -50,8 +50,13 @@ LTO 现状违反这条：
 4. **preflight 解耦**：`preflight` 主职责仍是环境健康；有显式 `--run-id` 或 active run 时，
    增加独立子结果 `run_readiness`（ok/missing 列表），与 `--record`（`ops.rs:328-343`）解耦
    ——不带 `--record` 也报告 readiness；显式给了 `--run-id` 但 run 不存在必须报错不静默。
-5. **`check --to implementation --strict` 与 start 规则一致**：同一套 missing 判定函数复用
-   `state.rs::missing_sections()` + 新的 base readiness 判定，不写第二份逻辑。
+5. **`check --to implementation --strict` 与 start 规则一致**：新写**分级判定函数**
+   `state.rs::completeness_missing()`（成对强制 target↔instrument；constraint/entropy-check
+   只出 WARN 列表），start / `contract set` / check phase gate **三处共用同一函数**，不写
+   第二份逻辑。现有 `missing_sections()`/`is_complete()` 是四项全满语义，**check gate 不得
+   再直接用它**——否则 start 按分级放行的 run 会死锁在 `check --strict`（异构评审 R4-F1，
+   goal 内部曾自相矛盾，已修正）；`is_complete()` 若无其他消费者随本 goal 收敛为
+   completeness_missing 的包装或删除。
 
 ## Phase 划分
 
