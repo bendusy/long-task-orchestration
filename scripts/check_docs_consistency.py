@@ -41,6 +41,7 @@ ACTIVE_DOCS = [
     "references/execution-loop.md",
     "references/workflow-playbook.md",
     "references/control-loop-harness.md",
+    "references/events-telemetry-contract.md",
     "references/audit-convergence.md",
     "references/long-loop-state.md",
     "references/decision-logging.md",

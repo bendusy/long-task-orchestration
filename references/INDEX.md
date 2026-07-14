@@ -12,7 +12,7 @@
 | Ⅲ 执行与派工 | `runner`/`dispatch-goal`/`events`/`autopilot` | [execution-loop.md](execution-loop.md)、[cross-runtime-host-notes.md](cross-runtime-host-notes.md) | 派外部 agent、等完成事件 | 确定性本地命令直接跑（runner 记证据即可） |
 | Ⅳ 验证与收敛 | `audit`/`judge`/`check`/ledger | [audit-convergence.md](audit-convergence.md)、[workflow-playbook.md](workflow-playbook.md) | 多模型对抗审、判收敛 | 确定性测试（直接跑，不需异构审） |
 | Ⅴ 交付与发布 | 部署实测（真实用户路径）/`closeout`/`release` | [deploy-sequencing.md](deploy-sequencing.md)、[release-workflow.md](release-workflow.md) | 上线、发版、收尾 | 未过Ⅳ收敛闸门时 |
-| Ⅵ 学习与维护 | decision/memory/telemetry/budget/`prune`/plugin | [decision-logging.md](decision-logging.md)、[control-loop-harness.md](control-loop-harness.md) | 拍板落盘、跨 run 挖掘、清理 | 把历史 telemetry 当自动路由依据 |
+| Ⅵ 学习与维护 | decision/memory/telemetry/budget/`prune`/plugin | [decision-logging.md](decision-logging.md)、[events-telemetry-contract.md](events-telemetry-contract.md) | 拍板落盘、跨 run 挖掘、清理 | 把历史 telemetry 当自动路由依据 |
 
 `state / evidence / source authority / budget / human gate` 是六域共同覆盖层，不单属任何一域；
 decision 拍板即落盘（见 decision-logging.md），不是只在收尾才记。
@@ -26,14 +26,14 @@ decision 拍板即落盘（见 decision-logging.md），不是只在收尾才记
 | 派 codex 改代码并等完成 | Ⅲ execution-loop →（跨 runtime 时）cross-runtime-host-notes |
 | 方案多模型审到收敛 | Ⅳ audit-convergence → Ⅳ workflow-playbook（review 一节） |
 | 上线并收尾 | Ⅴ deploy-sequencing → Ⅴ release-workflow |
-| autopilot 升档评估 | Ⅲ execution-loop → Ⅵ control-loop-harness（证据闸门） |
+| autopilot 升档评估 | Ⅲ execution-loop → Ⅵ events-telemetry-contract（跨 run 证据） |
 
 ## 3. 文档状态
 
 | 状态 | 含义 | 文件 |
 |---|---|---|
-| active/current | 当前口径，ROUTER 可落地 | onboarding、run-state-workflow、execution-loop、workflow-playbook、control-loop-harness、audit-convergence、long-loop-state、decision-logging、release-workflow、deploy-sequencing、hooks、sharing-guide、cross-runtime-host-notes、hs-as-core-tool、plugin-boundary、rust-migration-release |
-| design/future | 设计目标，未实现，不得当现状引用 | specs/*、backlog.md、plugin-real-eval-runner.md（含 future 段）、self-driving-wake-loop.md |
+| active/current | 当前口径，ROUTER 可落地 | onboarding、run-state-workflow、execution-loop、workflow-playbook、control-loop-harness、events-telemetry-contract、audit-convergence、long-loop-state、decision-logging、release-workflow、deploy-sequencing、hooks、sharing-guide、cross-runtime-host-notes、hs-as-core-tool、plugin-boundary、rust-migration-release |
+| design/future | 设计目标，未实现，不得当现状引用 | specs/*、backlog.md、control-loop-roadmap.md、plugin-real-eval-runner.md（含 future 段）、self-driving-wake-loop.md |
 | historical/dated | 历史证据，只证明当时 | validation-log.md、python-rust-ownership.md、2026-06-17-rust-inheritance-and-architecture-review.md、agent-runs-decoupling-diagnosis.md、codex-cli-control.md、decision-logging 之外的 dated 材料 |
 
 ## 4. 权威级别（冲突时高层胜出；文档与 runtime 冲突判文档漂移，不做兼容解释）
