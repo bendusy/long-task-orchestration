@@ -50,6 +50,9 @@ LTO 现状违反这条：
    **instrument 支持可选显式 label**：`--instrument "<label>::<cmd>"`（`::` 分隔，无 `::`
    则整串为 cmd、label 缺省）——这是 C4 可观性「label 优先」引用键的参数面入口（异构评审
    R5-F2：没有 CLI 入口 label 优先就是空中楼阁），start 与 contract set 同语法。
+   **contract set 同时接受 `--goal/--done-when/--host` 修正**（异构评审 R6-F4：目标拼错或
+   中途调整时不给 typed 通道就只能手改 state.json——本 run 因 host 误记手改 state 的实证
+   已写进「为什么做」）；goal/done-when 修正走 base readiness 同套校验（改后仍须非空）。
 4. **preflight 解耦**：`preflight` 主职责仍是环境健康；有显式 `--run-id` 或 active run 时，
    增加独立子结果 `run_readiness`（ok/missing 列表），与 `--record`（`ops.rs:328-343`）解耦
    ——不带 `--record` 也报告 readiness；显式给了 `--run-id` 但 run 不存在必须报错不静默。

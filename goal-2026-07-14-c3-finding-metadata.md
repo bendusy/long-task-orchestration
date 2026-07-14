@@ -55,6 +55,10 @@ ground truth，所以新字段只进 host review 信息层，绝不进 gate。
 ## Phase 划分
 
 ### Phase 1：schema + parser + 事件（1-3、8）
+- **提取层纪律**：从 markdown 回复提取 findings 时，JSON code block **整体交给 serde_json
+  解析**（现状 `parse_findings_values` 的 Value 路径保持），**严禁手写正则匹配多行嵌套字段**
+  ——提取器是 fail-closed 决策上游，正则错位会把 blocker 静默丢弃造成漏检（异构评审 R6-F3）；
+  加测试：非标缩进/换行的嵌套 reported_confidence 对象解析不丢 finding。
 - 测试：JSON 带新字段 → 解析出；不带 → None；中文别名不扩展（level 只认 high/medium/low，
   容错小写/首字母大写）；事件断言无 rationale 原文。
 - 收口：cargo 全绿 + `lto audit --auto-dispatch`。

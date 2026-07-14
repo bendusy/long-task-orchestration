@@ -47,8 +47,10 @@ signal_declared → NEEDS_CONFIRM（打印「已声明未证实」+ 缺的证据
    ①显式 label（C2 的 `--instrument "<label>::<cmd>"` 语法提供参数面入口，见 goal-c2 裁决 3）
    ＞②**归一化后**（去空白/引号等非语义字符）的内容 hash——raw hash 对微调（加个 flag、改个空格）过敏，会让历史证据瞬间全失配退回
    signal_declared（异构评审 R4-F2）；**不用数组下标**——contract set 增删/重排会让索引
-   错位甚至越界（异构评审 R3-F5）。有引用即精确关联；字符串归一匹配**仅作旧数据回退**，
-   不做语义猜测。
+   错位甚至越界（异构评审 R3-F5）。**evidence 侧写入通道**：`lto runner`/`task add` 增可选
+   `--instrument-ref <label>`，runner 命令与 instrument 归一匹配成功时也自动落 ref——没有
+   写入通道，引用键就无处产生（异构评审 R6-F1，接口断档最后一环）。有引用即精确关联；
+   字符串归一匹配**仅作旧数据回退**，不做语义猜测。
    两者都匹配不上才降 signal_declared。（异构评审 R2-F1：纯字符串匹配对路径/flag 顺序/
    note 微调过脆，会让 autonomous 长期卡 NEEDS_CONFIRM——降级方向仍安全，但入口要给结构化通道。）
 
