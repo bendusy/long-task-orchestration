@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## 用工程控制论 skill 元结构改造 LTO：SKILL/README/references 四层化重组 + 四个 core 机制 goal 文档
+
+- **Run ID**: `20260714-043510-skill-lto-skill-readme-references-core-g-f3c7170b`
+- **Closed**: 2026-07-15T04:11:13+00:00
+- **Summary**: 控制论元结构改造完成：SKILL 四层化(24K→8.8K)+INDEX 六域路由+references 切分重组；C1 稳定性信号/C2 禁猜闸门/C3 finding 元数据/C4 可观性子闸门四机制经 codex 实现并 host 亲验；九轮异构审计 B001-B033 全处置零复发，R9 末轮归零 CONVERGED
+
+### Tasks
+
+- **T1**: 设计讨论：控制论元结构改造方案（codex 异构评审） (pending)
+  - FAIL [manual] collected codex dispatch
+- **T2**: skill/docs 四层化重组（Phase 0+A+B） (done)
+  - FAIL [manual] checker增强+8处漂移修复; INDEX; 切control-loop/playbook; onboarding瘦身; SKILL 24K->8.3K; 
+- **T3**: 四份 core 机制 goal 文档（C1-C4）+ 六轮异构审计吸收 (done)
+  - FAIL [manual] goal-c1/c2/c3/c4 落盘并经 R1-R6 审计迭代（29 条处置零复发）；R7 停环按 LTO 原则3
+  - FAIL [manual] collected pi dispatch
+
+
+## v0.10.0 — 控制论元结构改造：四层 skill 重组 + C1-C4 控制机制（2026-07-15）
 
 - **新增 C4 autonomous 可观性子检查**：现有 `autonomous_gate` 同时输出结构化 `operational_reliability` 与 `current_run_observability`；当前 run 缺 goal/done_when/instrument 时为 `missing`，只有声明无关联 evidence 时为 `signal_declared`，两者都 `NEEDS_CONFIRM` 早退且不执行，结构化 `instrument_ref` 或 legacy 归一命令关联后才为 `observable_verified`。
 - **补齐 instrument evidence 通道**：`task add` 与 command-mode `runner` 新增 `--instrument-ref`；task 引用可由 runner 继承，runner 命令与 `[LABEL::]CMD` 归一匹配时自动写稳定 label/hash，未知引用在执行前拒绝。
