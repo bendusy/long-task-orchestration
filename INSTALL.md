@@ -103,7 +103,7 @@ LTO 依赖的是**接口**，不是具体实现。每个插槽都有两档：不
 
 - codex 当宿主：默认沙箱会挡子 runner 写文件，triad 派工全 FAIL；需 `--dangerously-bypass-approvals-and-sandbox` 才可用，仅受控本机场景适用。更优解是给子 runner 专用可写 roots/HOME，最小放权，而非全盘 bypass。
 - pi / agy 当宿主：无需放开沙箱，默认可派工。
-- 任何宿主：pi/DeepSeek 审 16KB 内容耗时可达 170-200s，timeout 要给足 240s+；agy 交互式启动用 `agy -i ''` 拉起真实 TUI，长 prompt 随后 paste，不能退回只给方案的 `--print`。pi/agy 的 dispatch 完成由 TUI 进程退出 wrapper 读取真实 rc；Codex Stop 只代表一轮结束，只有 `/goal` 的 `update_goal complete` 证据才算 dispatch 完成。
+- 任何宿主：pi/DeepSeek 审 16KB 内容耗时可达 170-200s，timeout 要给足 240s+；agy 交互式启动用 `agy -i ''` 拉起真实 TUI，长 prompt 随后 paste，不能退回只给方案的 `--print`。dispatch 主完成信号是 **goal-self-report**（agent 执行 `lto agent-turn-completed --source goal-self-report --rc 0|1 …`）；Codex Stop/`update_goal` 与 pi/agy process-exit 仅作可选旁路。
 
 ---
 

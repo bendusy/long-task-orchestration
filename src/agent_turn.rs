@@ -102,13 +102,9 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         "window_id": window_id,
         "source": options.source,
         "completion_scope": if dispatch_completed { "dispatch" } else if event_type == "agent.session.ended" { "session" } else { "turn" },
-        "goal_completion_proof": goal_completion_proof,
-        // Alias used by dispatch-goal completion_mode / docs (same value as proof).
-        "completion_proof": if self_report {
-            Some("goal-self-report".to_string())
-        } else {
-            None
-        },
+        // Alias completion_proof == goal_completion_proof for docs/consumers.
+        "goal_completion_proof": goal_completion_proof.clone(),
+        "completion_proof": goal_completion_proof,
         "payload_sha256": payload_hash,
         "known_payload_schema": payload.is_some(),
     });

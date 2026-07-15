@@ -156,7 +156,8 @@ See also: lto dispatch-goal (goal-file dispatch), lto events --wait (await compl
     #[command(
         about = "Dispatch a goal file AND block until the agent completes (dispatch-goal + events --wait)",
         long_about = "One-step convenience: dispatch a goal to an external agent, then block until \
-its agent.dispatch.completed event fires (goal-state proof or process exit with a real rc), and \
+its agent.dispatch.completed event fires (primary: goal-self-report; optional side-channels: \
+Codex Stop/update_goal proof or pi/agy process-exit with a real rc), and \
 print a summary. Equivalent to `lto dispatch-goal ...` followed by `lto events --wait \
 --event-type agent.dispatch.completed`, but in a single call.\n\
 \n\
@@ -172,7 +173,8 @@ The single-step `lto dispatch-goal` and `lto events --wait` remain available for
         about = "Dispatch a goal file to codex, pi, or agy through tmux",
         long_about = "Dispatch a goal file to an external agent (codex/pi/agy) in a real tmux TUI. \
 With no --target/--new-window it opens a visible window in your current tmux session. \
-Uses goal-state proof or a real process rc so the agent wakes you only when the dispatch is done.\n\
+Primary completion is goal-self-report (agent runs lto agent-turn-completed --source \
+goal-self-report); Codex Stop/update_goal and process-exit remain optional side-channels.\n\
 \n\
 Examples:\n  \
 lto dispatch-goal --runner codex --goal goal.md          # dispatch into current tmux\n  \
