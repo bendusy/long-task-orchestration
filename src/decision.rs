@@ -1,5 +1,7 @@
 use crate::agent_job::{AgentResult, JobStatus};
-use crate::audit::{Finding, family, parse_findings_text, parse_findings_values};
+use crate::audit::{
+    Finding, family, parse_findings_text, parse_findings_values, parse_valid_findings_values,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -537,16 +539,18 @@ pub fn merge_findings(results: &[AgentResult]) -> Vec<Finding> {
         if result.status != JobStatus::Ok {
             continue;
         }
-        if !result.findings.is_empty()
-            && let Some(mut findings) = parse_findings_values(&result.findings)
-        {
+        if !result.findings.is_empty() {
+            let mut findings = parse_findings_values(&result.findings)
+                .unwrap_or_else(|| parse_valid_findings_values(&result.findings));
             for finding in &mut findings {
                 if finding.source.is_none() {
                     finding.source = Some(result.runner.clone());
                 }
             }
-            out.extend(findings);
-            continue;
+            if !findings.is_empty() {
+                out.extend(findings);
+                continue;
+            }
         }
         if let Some(mut findings) = parse_findings_text(&result.reply_text) {
             for finding in &mut findings {
@@ -559,6 +563,8 @@ pub fn merge_findings(results: &[AgentResult]) -> Vec<Finding> {
             out.push(Finding {
                 severity: crate::audit::Severity::Medium,
                 claim: result.reply_text.clone(),
+                reported_confidence: None,
+                invalidated_when: None,
                 evidence_to_check: None,
                 file: None,
                 source: Some(result.runner.clone()),
@@ -913,6 +919,22 @@ fn append_review_brief(lines: &mut Vec<String>, review: &ReviewPayload) {
         }
         if let Some(evidence) = &finding.evidence_to_check {
             lines.push(format!("  - Evidence: {}", md_inline(evidence)));
+        }
+        if let Some(confidence) = &finding.reported_confidence {
+            let level = confidence
+                .level
+                .as_ref()
+                .map(crate::audit::ReportedConfidenceLevel::as_str)
+                .unwrap_or("unknown");
+            let rationale = confidence
+                .rationale
+                .as_deref()
+                .map(|rationale| format!(" — {}", md_inline(rationale)))
+                .unwrap_or_default();
+            lines.push(format!("  - [confidence: {level}{rationale}]"));
+        }
+        if let Some(invalidated_when) = &finding.invalidated_when {
+            lines.push(format!("  - 失效条件: {}", md_inline(invalidated_when)));
         }
     }
     lines.push(String::new());
@@ -1388,6 +1410,136 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn finding_metadata_isolation_keeps_direction_status_pick_and_gate_verdict() {
+        let baseline = both_decision(vec![
+            result_with_text("codex", r#"[{"severity":"high","claim":"A"}]"#),
+            result_with_text("pi", r#"[{"severity":"medium","claim":"B"}]"#),
+        ]);
+        let enriched = both_decision(vec![
+            result_with_text(
+                "codex",
+                r#"[{"severity":"high","claim":"A","reported_confidence":{"level":"low","rationale":"limited evidence"},"invalidated_when":"counterexample A"}]"#,
+            ),
+            result_with_text(
+                "pi",
+                r#"[{"severity":"medium","claim":"B","reported_confidence":"high","invalidated_when":"counterexample B"}]"#,
+            ),
+        ]);
+
+        assert_same_control_outputs(&baseline, &enriched);
+        assert!(!baseline.brief.contains("[confidence:"));
+        assert!(
+            enriched
+                .brief
+                .contains("[confidence: low — limited evidence]")
+        );
+        assert!(enriched.brief.contains("失效条件: counterexample A"));
+    }
+
+    #[test]
+    fn structured_finding_metadata_isolation_keeps_control_outputs() {
+        let mut baseline_codex = result_with_text("codex", "structured baseline");
+        baseline_codex.findings = vec![serde_json::json!({"severity": "high", "claim": "A"})];
+        let mut baseline_pi = result_with_text("pi", "structured baseline");
+        baseline_pi.findings = vec![serde_json::json!({"severity": "medium", "claim": "B"})];
+
+        let mut enriched_codex = result_with_text("codex", "structured enriched");
+        enriched_codex.findings = vec![serde_json::json!({
+            "severity": "high",
+            "claim": "A",
+            "reported_confidence": {"level": "medium", "rationale": "typed result"},
+            "invalidated_when": "typed counterexample A"
+        })];
+        let mut enriched_pi = result_with_text("pi", "structured enriched");
+        enriched_pi.findings = vec![serde_json::json!({
+            "severity": "medium",
+            "claim": "B",
+            "reported_confidence": "low",
+            "invalidated_when": "typed counterexample B"
+        })];
+
+        let baseline = both_decision(vec![baseline_codex, baseline_pi]);
+        let enriched = both_decision(vec![enriched_codex, enriched_pi]);
+        assert_same_control_outputs(&baseline, &enriched);
+        assert!(
+            enriched
+                .brief
+                .contains("[confidence: medium — typed result]")
+        );
+        assert!(enriched.brief.contains("失效条件: typed counterexample A"));
+    }
+
+    #[test]
+    fn unstructured_review_fallback_defaults_c3_metadata_without_panicking() {
+        let findings = merge_findings(&[result_with_text("pi", "unstructured review")]);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].reported_confidence, None);
+        assert_eq!(findings[0].invalidated_when, None);
+    }
+
+    #[test]
+    fn merge_findings_keeps_valid_structured_items_from_mixed_batch() {
+        let mut result = result_with_text("pi", "fallback text");
+        result.findings = vec![
+            serde_json::json!({
+                "severity": "high",
+                "claim": "valid",
+                "reported_confidence": "High"
+            }),
+            serde_json::json!({"severity": "INVALID", "claim": "bad"}),
+        ];
+        let findings = merge_findings(&[result]);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].claim, "valid");
+        assert_eq!(
+            findings[0]
+                .reported_confidence
+                .as_ref()
+                .and_then(|confidence| confidence.level.as_ref()),
+            Some(&crate::audit::ReportedConfidenceLevel::High)
+        );
+    }
+
+    fn both_decision(review_results: Vec<AgentResult>) -> DecisionOutcome {
+        run_decision(DecisionRunRequest {
+            kind: DecisionKind::Both,
+            auditors: vec!["codex".into(), "pi".into()],
+            budget_remaining: 100_000,
+            escalate_key: "c3-isolation".into(),
+            diverge: false,
+            spawned_escalate_keys: BTreeSet::new(),
+            valid_task_ids: Some(BTreeSet::from(["T1".into()])),
+            task_universe: BTreeSet::from(["T1".into()]),
+            candidate_results: vec![],
+            direction_votes: vec![
+                vote("codex", DirectionDecision::PickTask, "T1"),
+                vote("pi", DirectionDecision::PickTask, "T1"),
+            ],
+            review_results,
+        })
+    }
+
+    fn assert_same_control_outputs(baseline: &DecisionOutcome, enriched: &DecisionOutcome) {
+        assert_eq!(baseline.status, enriched.status);
+        assert_eq!(baseline.dispatched_to, enriched.dispatched_to);
+        assert_eq!(baseline.budget_consumed_est, enriched.budget_consumed_est);
+        assert_eq!(baseline.record_escalate_key, enriched.record_escalate_key);
+        assert_eq!(
+            baseline.dissent.needs_human_votes,
+            enriched.dissent.needs_human_votes
+        );
+        let baseline_direction = match baseline.result.as_ref() {
+            Some(DecisionResultPayload::Both(payload)) => &payload.direction,
+            other => panic!("unexpected baseline result: {other:?}"),
+        };
+        let enriched_direction = match enriched.result.as_ref() {
+            Some(DecisionResultPayload::Both(payload)) => &payload.direction,
+            other => panic!("unexpected enriched result: {other:?}"),
+        };
+        assert_eq!(baseline_direction, enriched_direction);
     }
 
     fn vote(source: &str, decision: DirectionDecision, value: &str) -> DirectionVote {

@@ -2064,7 +2064,7 @@ fn append_discovered_risk_points(state: &mut LtoState, risks: Vec<Value>) -> usi
         if claim.is_empty() {
             continue;
         }
-        risk_points.push(json!({
+        let mut risk_point = json!({
             "id": format!("RP-auto-{next}"),
             "source": "risk-agent",
             "claim": claim,
@@ -2073,7 +2073,20 @@ fn append_discovered_risk_points(state: &mut LtoState, risks: Vec<Value>) -> usi
             "status": "open",
             "disposition": "open",
             "recorded_at": util::iso_now(),
-        }));
+        });
+        if let Some(reported_confidence) = risk
+            .get("reported_confidence")
+            .filter(|value| !value.is_null())
+        {
+            risk_point["reported_confidence"] = reported_confidence.clone();
+        }
+        if let Some(invalidated_when) = risk
+            .get("invalidated_when")
+            .filter(|value| !value.is_null())
+        {
+            risk_point["invalidated_when"] = invalidated_when.clone();
+        }
+        risk_points.push(risk_point);
         next += 1;
         added += 1;
     }
@@ -2132,7 +2145,20 @@ fn parse_structured_findings(text: &str) -> Option<Vec<Value>> {
                 .collect(),
         );
     }
-    parse_json_findings(text)
+    let raw = parse_json_findings(text)?;
+    if raw.is_empty() {
+        return Some(Vec::new());
+    }
+    let findings = crate::audit::parse_valid_findings_values(&raw);
+    if findings.is_empty() {
+        return None;
+    }
+    Some(
+        findings
+            .into_iter()
+            .filter_map(|finding| serde_json::to_value(finding).ok())
+            .collect(),
+    )
 }
 
 fn parse_json_findings(text: &str) -> Option<Vec<Value>> {
@@ -2311,9 +2337,10 @@ fn build_audit_brief(state: &LtoState, host: &str, targets: &[Value]) -> String 
         String::new(),
         "Return the strongest blockers first. End with a JSON findings list.".to_string(),
         "Use severity critical/high/medium/low. Use [] if there are no findings.".to_string(),
+        "For each finding, report your self-assessed confidence and the evidence that would invalidate the claim. reported_confidence is uncalibrated metadata, not severity or probability.".to_string(),
         String::new(),
         "```json".to_string(),
-        r#"[{"severity":"high","claim":"...","evidence_to_check":"...","file":"..."}]"#.to_string(),
+        r#"[{"severity":"high","claim":"...","reported_confidence":{"level":"high","rationale":"..."},"invalidated_when":"...","evidence_to_check":"...","file":"..."}]"#.to_string(),
         "```".to_string(),
     ]);
     lines.join("\n")
@@ -2321,7 +2348,7 @@ fn build_audit_brief(state: &LtoState, host: &str, targets: &[Value]) -> String 
 
 fn build_risk_brief(state: &LtoState, host: &str) -> String {
     format!(
-        "# LTO Risk Discovery Brief\n\n- goal: {}\n- host_runtime: {}\n- phase: {}\n\nRead current state and recent changed files. Return only new high/critical/medium risks as JSON findings. Return [] if no new risks.\n",
+        "# LTO Risk Discovery Brief\n\n- goal: {}\n- host_runtime: {}\n- phase: {}\n\nRead current state and recent changed files. Return only new high/critical/medium risks as JSON findings. For each finding, include reported_confidence with level/rationale and invalidated_when; confidence is uncalibrated review metadata, not severity or probability. Return [] if no new risks.\n",
         state.goal, host, state.current_phase
     )
 }
@@ -2561,6 +2588,17 @@ mod tests {
         assert_eq!(counts.high, 0);
         assert_eq!(counts.critical, 0);
         assert_eq!(counts.minor, 0);
+    }
+
+    #[test]
+    fn structured_findings_fallback_keeps_only_typed_normalized_items() {
+        let findings = parse_structured_findings(
+            r#"[{"severity":"high","claim":"valid","reported_confidence":"High"},{"severity":"INVALID","claim":"bad"}]"#,
+        )
+        .unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["claim"], "valid");
+        assert_eq!(findings[0]["reported_confidence"]["level"], "high");
     }
 
     #[test]
@@ -3056,7 +3094,12 @@ mod tests {
                 json!({
                     "claim": "closeout gate misses auto risks",
                     "evidence_to_check": "state.json risk_points",
-                    "severity": "critical"
+                    "severity": "critical",
+                    "reported_confidence": {
+                        "level": "high",
+                        "rationale": "source inspection"
+                    },
+                    "invalidated_when": "gate reads a different source"
                 }),
                 json!({"claim": "   "}),
             ],
@@ -3066,6 +3109,28 @@ mod tests {
         assert_eq!(risks.len(), 1);
         assert_eq!(risks[0]["status"], "open");
         assert_eq!(risks[0]["disposition"], "open");
+        assert_eq!(risks[0]["reported_confidence"]["level"], "high");
+        assert_eq!(
+            risks[0]["invalidated_when"],
+            "gate reads a different source"
+        );
+        assert!(risks[0].get("reported_confidence").is_some());
+        assert!(risks[0].get("invalidated_when").is_some());
+    }
+
+    #[test]
+    fn finding_metadata_isolation_keeps_audit_gate_counts() {
+        let mut baseline = SeverityCounts::default();
+        baseline
+            .add_reply(r#"[{"severity":"high","claim":"A"},{"severity":"medium","claim":"B"}]"#);
+        let mut enriched = SeverityCounts::default();
+        enriched.add_reply(
+            r#"[{"severity":"high","claim":"A","reported_confidence":{"level":"low","rationale":"uncertain"},"invalidated_when":"counterexample"},{"severity":"medium","claim":"B","reported_confidence":"high","invalidated_when":"source changes"}]"#,
+        );
+        assert_eq!(
+            (baseline.high, baseline.critical, baseline.minor),
+            (enriched.high, enriched.critical, enriched.minor)
+        );
     }
 
     #[test]

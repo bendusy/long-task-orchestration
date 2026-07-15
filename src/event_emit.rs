@@ -320,6 +320,22 @@ pub fn emit_audit_findings(
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let claim = finding.get("claim").and_then(Value::as_str).unwrap_or("");
+        let confidence = finding.get("reported_confidence");
+        let has_reported_confidence = confidence.is_some_and(|value| !value.is_null());
+        let confidence_level = confidence.and_then(|value| {
+            value
+                .as_str()
+                .or_else(|| value.get("level").and_then(Value::as_str))
+        });
+        let confidence_level = confidence_level
+            .and_then(crate::audit::normalize_reported_confidence_level)
+            .map(|level| level.as_str())
+            .unwrap_or("unknown");
+        let confidence_rationale = confidence
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("rationale"))
+            .and_then(Value::as_str);
+        let invalidated_when = finding.get("invalidated_when").and_then(Value::as_str);
         events::safe_emit(
             repo,
             run_id,
@@ -334,6 +350,12 @@ pub fn emit_audit_findings(
                     "severity": severity,
                     "claim_hash": hash_text(claim),
                     "has_file": finding.get("file").is_some(),
+                    "has_reported_confidence": has_reported_confidence,
+                    "confidence_level": confidence_level,
+                    "has_confidence_rationale": confidence_rationale.is_some(),
+                    "confidence_rationale_hash": confidence_rationale.map(hash_text),
+                    "has_invalidated_when": invalidated_when.is_some(),
+                    "invalidated_when_hash": invalidated_when.map(hash_text),
                     "context": context,
                 }),
                 ..EventRecord::default()
@@ -635,6 +657,85 @@ mod tests {
         let blob = std::fs::read_to_string(crate::events::events_path(tmp.path(), "r1")).unwrap();
         assert!(blob.contains("runner.finished"));
         assert!(!blob.contains("SECRET_REPLY_SHOULD_NOT_APPEAR"));
+    }
+
+    #[test]
+    fn audit_finding_event_keeps_only_confidence_level_presence_and_hashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        emit_audit_findings(
+            tmp.path(),
+            "r1",
+            "pi",
+            &[json!({
+                "severity": "high",
+                "claim": "PRIVATE CLAIM",
+                "reported_confidence": {
+                    "level": "medium",
+                    "rationale": "PRIVATE RATIONALE"
+                },
+                "invalidated_when": "PRIVATE INVALIDATION"
+            })],
+            "audit.auto_dispatch",
+        );
+
+        let events = crate::events::read(tmp.path(), "r1").unwrap();
+        let event = &events[0];
+        assert_eq!(event["type"], "audit.finding");
+        assert_eq!(event["fields"]["confidence_level"], "medium");
+        assert_eq!(event["fields"]["has_reported_confidence"], true);
+        assert_eq!(event["fields"]["has_confidence_rationale"], true);
+        assert_eq!(event["fields"]["has_invalidated_when"], true);
+        assert!(
+            event["fields"]["confidence_rationale_hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(
+            event["fields"]["invalidated_when_hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        let serialized = event.to_string();
+        assert!(!serialized.contains("PRIVATE CLAIM"));
+        assert!(!serialized.contains("PRIVATE RATIONALE"));
+        assert!(!serialized.contains("PRIVATE INVALIDATION"));
+    }
+
+    #[test]
+    fn audit_finding_event_normalizes_or_rejects_raw_confidence_literals() {
+        let tmp = tempfile::tempdir().unwrap();
+        emit_audit_findings(
+            tmp.path(),
+            "r1",
+            "pi",
+            &[
+                json!({
+                    "severity": "high",
+                    "claim": "capitalized",
+                    "reported_confidence": "High"
+                }),
+                json!({
+                    "severity": "medium",
+                    "claim": "unsupported",
+                    "reported_confidence": "extremely confident"
+                }),
+                json!({
+                    "severity": "low",
+                    "claim": "missing"
+                }),
+            ],
+            "audit.auto_dispatch",
+        );
+
+        let events = crate::events::read(tmp.path(), "r1").unwrap();
+        assert_eq!(events[0]["fields"]["confidence_level"], "high");
+        assert_eq!(events[0]["fields"]["has_reported_confidence"], true);
+        assert_eq!(events[1]["fields"]["confidence_level"], "unknown");
+        assert_eq!(events[1]["fields"]["has_reported_confidence"], true);
+        assert_eq!(events[2]["fields"]["confidence_level"], "unknown");
+        assert_eq!(events[2]["fields"]["has_reported_confidence"], false);
     }
 
     #[test]

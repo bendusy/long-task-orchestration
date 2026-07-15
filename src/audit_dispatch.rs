@@ -196,6 +196,25 @@ fn findings_schema(severities: &[&str]) -> Value {
                     "enum": severities,
                 },
                 "claim": {"type": "string"},
+                "reported_confidence": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "level": {
+                                    "type": "string",
+                                    "enum": ["high", "medium", "low"],
+                                },
+                                "rationale": {"type": "string"},
+                            },
+                        },
+                        {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"],
+                        },
+                    ],
+                },
+                "invalidated_when": {"type": "string"},
                 "evidence_to_check": {"type": "string"},
                 "file": {"type": "string"},
             },
@@ -327,6 +346,11 @@ mod tests {
                 .iter()
                 .any(|value| value == "low")
         );
+        for schema in [&audit, &risk] {
+            assert!(schema["items"]["properties"]["reported_confidence"].is_object());
+            assert!(schema["items"]["properties"]["invalidated_when"].is_object());
+            assert_eq!(schema["items"]["required"], json!(["severity", "claim"]));
+        }
     }
 
     #[test]
