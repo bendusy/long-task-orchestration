@@ -12,7 +12,8 @@ const LTO_HOOK_MARKER: &str = "long-task-orchestration";
 const DEFAULT_COMPLETION_WAIT_SEC: u64 = 600;
 const DEFAULT_DISPATCH_READY_TIMEOUT_SEC: u64 = 60;
 const CODEX_STOP_HOOK: &str = include_str!("../scripts/hooks/codex-stop-notify.sh");
-const GOAL_CONSTRAINT_SUMMARY: &str = "Use LTO discipline: keep LTO self-managed, run required redlines, and write the local commit when accepted while leaving release/tag/push to the host. For heterogeneous audit before closeout, you are a host: run `lto audit --auto-dispatch` (and `lto dispatch-goal --runner <name> --goal <file>` for sub-tasks), then block on `lto events --wait --event-type agent.dispatch.completed --timeout <sec>` to collect replies. NEVER impersonate another runner or hand-write reply-*.md yourself — that fabricates cross-family audit evidence; if no healthy heterogeneous runner is available, stop and report blocked rather than self-audit. For any external docs/API/tool-capability lookup, route through `hs` first (Hybrid Search) rather than raw web fetches, then confirm against the local `--help`/config/binary before acting — external sources can name the wrong project; local evidence decides.";
+/// Prompt hard cap: long constraints live in the goal file, not the paste line.
+const GOAL_PROMPT_MAX_CHARS: usize = 500;
 
 #[derive(Debug, Clone)]
 pub struct DispatchGoalOptions {
@@ -86,15 +87,16 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
         }
     } else {
         match options.runner.as_str() {
-            // Codex needs its Stop hook as a sampling point: the Rust handler
-            // only promotes a turn to dispatch-complete after transcript proof
-            // that the active /goal was marked complete. pi/agy use process-exit
-            // wrappers with a real rc and need no global completion hook.
+            // Completion is self-reported via goal_prompt() (source=goal-self-report).
+            // Codex Stop hook is an optional side-channel only: if goal-runtime is
+            // installed, update_goal complete can still promote a turn. pi/agy keep
+            // process-exit wrappers as a secondary signal when the REPL actually exits.
             "codex" => install_codex_hook(repo).unwrap_or_else(degraded),
             "agy" => uninstall_agy_hook(repo).unwrap_or_else(degraded),
             _ => HookStatus {
                 status: "skipped".to_string(),
-                detail: "runner completion uses the process-exit wrapper".to_string(),
+                detail: "primary completion is goal-self-report; process-exit is a side-channel"
+                    .to_string(),
                 script_path: None,
             },
         }
@@ -369,7 +371,9 @@ fn run_dispatch(
 ) -> anyhow::Result<GoalDispatchOutcome> {
     let run_id = ctx.run_id.clone();
     let repo_path = absolutize(repo)?;
-    let plan = runner_plan(&options.runner, goal_path, &run_id);
+    // ready_patterns / launch don't depend on window_id; prompt is rebuilt once
+    // the real window_id is known so self-report can inline it (no env inheritance).
+    let mut plan = runner_plan(&options.runner, goal_path, &run_id, "pending");
     let config = TmuxRunnerConfig {
         mode: TmuxMode::Fire,
         target: options.target.clone(),
@@ -419,6 +423,13 @@ fn run_dispatch(
             )
             .await?;
         }
+        // Inline the real window_id into the self-report command (preference ②).
+        plan.prompt = goal_prompt(
+            &goal_path.display().to_string(),
+            &run_id,
+            &options.runner,
+            window_id.as_deref().unwrap_or("unknown"),
+        );
         tmux_runner::send_dispatch_text(
             &config,
             &target,
@@ -483,18 +494,25 @@ struct GoalDispatchOutcome {
     completion_mode: String,
 }
 
-fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
+fn runner_plan(
+    runner: &str,
+    goal_path: &Path,
+    run_id: &str,
+    window_id: &str,
+) -> GoalRunnerPlan {
     let goal = goal_path.display().to_string();
+    let prompt = goal_prompt(&goal, run_id, runner, window_id);
     match runner {
         "codex" => GoalRunnerPlan {
             launch: Some(format!("LTO_RUN_ID={} codex", shell_single_quote(run_id))),
-            prompt: format!("/goal {goal}"),
+            prompt,
             ready_patterns: vec!["gpt-".to_string()],
-            confirm_patterns: vec!["Pursuing goal".to_string(), "Working".to_string()],
+            // Text-mode prompt (not /goal): confirm on the agent starting work.
+            confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
             needs_probe: true,
             completion_event: Some("agent.dispatch.completed".to_string()),
-            completion_mode: "codex-goal-state-hook".to_string(),
-            // codex starts a REPL, then takes /goal on a later line.
+            completion_mode: "goal-self-report".to_string(),
+            // codex starts a REPL, then takes the prompt on a later line.
             launch_includes_prompt: false,
         },
         "pi" => {
@@ -508,12 +526,13 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
             );
             GoalRunnerPlan {
                 launch: Some(launch),
-                prompt: goal_prompt(&goal),
+                prompt,
                 ready_patterns: vec!["deepseek".to_string(), "ctx".to_string()],
                 confirm_patterns: vec!["Working".to_string()],
                 needs_probe: true,
                 completion_event: Some("agent.dispatch.completed".to_string()),
-                completion_mode: "pi-process-exit".to_string(),
+                // Primary completion is self-report; process-exit remains a side-channel.
+                completion_mode: "goal-self-report".to_string(),
                 // pi starts a REPL, then takes the prompt on a later line.
                 launch_includes_prompt: false,
             }
@@ -546,7 +565,7 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
                     "agy",
                     run_id,
                 )),
-                prompt: goal_prompt(&goal),
+                prompt,
                 // Readiness must key on a marker that appears ONLY once agy's TUI
                 // input box is live — NOT "agy", which the launch command echoes
                 // (`agy -i ''`) while the shell is still running, causing a false
@@ -556,7 +575,8 @@ fn runner_plan(runner: &str, goal_path: &Path, run_id: &str) -> GoalRunnerPlan {
                 confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
                 needs_probe: true,
                 completion_event: Some("agent.dispatch.completed".to_string()),
-                completion_mode: "agy-process-exit".to_string(),
+                // Primary completion is self-report; process-exit remains a side-channel.
+                completion_mode: "goal-self-report".to_string(),
                 launch_includes_prompt: false,
             }
         }
@@ -574,10 +594,24 @@ fn process_exit_wrapper(launch: &str, runner: &str, run_id: &str) -> String {
     )
 }
 
-fn goal_prompt(goal: &str) -> String {
-    format!(
-        "Read the file {goal} and execute it. Follow only the instructions in that goal file. {GOAL_CONSTRAINT_SUMMARY}"
-    )
+/// Build the short dispatch prompt (≤500 chars). Long constraints live in the
+/// goal file itself; only the path + self-report completion signal go here.
+/// window_id is inlined (not `$LTO_WINDOW_ID`) so the agent bash child does not
+/// depend on env inheritance from the REPL process.
+fn goal_prompt(goal: &str, run_id: &str, runner: &str, window_id: &str) -> String {
+    let report = format!(
+        "lto agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --window-id {window_id} --bell"
+    );
+    let prompt = format!(
+        "Read the file {goal} and execute it. Follow only the instructions in that goal file. \
+全部完成判据满足后运行: {report} （若被阻塞改用 --rc 1）"
+    );
+    debug_assert!(
+        prompt.chars().count() <= GOAL_PROMPT_MAX_CHARS,
+        "goal_prompt must stay ≤{GOAL_PROMPT_MAX_CHARS} chars, got {}",
+        prompt.chars().count()
+    );
+    prompt
 }
 
 fn write_dispatch_record(
@@ -1137,7 +1171,7 @@ mod tests {
         assert!(!CODEX_STOP_HOOK.contains("--rc 0"));
         assert!(CODEX_STOP_HOOK.contains("--window-id"));
         for runner in ["pi", "agy"] {
-            let plan = runner_plan(runner, Path::new("/tmp/goal.md"), "r1");
+            let plan = runner_plan(runner, Path::new("/tmp/goal.md"), "r1", "@1");
             let launch = plan.launch.as_deref().unwrap();
             assert!(launch.contains("--repo \"$LTO_REPO\""));
             assert!(launch.contains("--rc \"$LTO_AGENT_RC\""));
@@ -1161,68 +1195,73 @@ mod tests {
     #[test]
     fn runner_plan_uses_required_entrypoints() {
         let goal = Path::new("/tmp/goal.md");
-        assert_eq!(
-            runner_plan("codex", goal, "r1").prompt,
-            "/goal /tmp/goal.md"
+        let codex = runner_plan("codex", goal, "r1", "@9");
+        // codex no longer uses /goal skill; same text-mode prompt as pi/agy.
+        assert!(codex.prompt.starts_with("Read the file /tmp/goal.md"));
+        assert!(codex.prompt.contains("goal-self-report"));
+        assert!(codex.prompt.contains("--run-id r1"));
+        assert!(codex.prompt.contains("--runner codex"));
+        assert!(codex.prompt.contains("--window-id @9"));
+        assert!(codex.prompt.contains("--rc 0"));
+        assert!(
+            codex.prompt.chars().count() <= GOAL_PROMPT_MAX_CHARS,
+            "prompt must stay ≤{GOAL_PROMPT_MAX_CHARS} chars, got {}",
+            codex.prompt.chars().count()
         );
+        assert_eq!(codex.ready_patterns, vec!["gpt-".to_string()]);
         assert_eq!(
-            runner_plan("codex", goal, "r1").ready_patterns,
-            vec!["gpt-".to_string()]
-        );
-        assert_eq!(
-            runner_plan("codex", goal, "r1").completion_event.as_deref(),
+            codex.completion_event.as_deref(),
             Some("agent.dispatch.completed")
         );
+        assert_eq!(codex.completion_mode, "goal-self-report");
         assert!(
-            runner_plan("pi", goal, "r1")
+            runner_plan("pi", goal, "r1", "@1")
                 .launch
                 .as_deref()
                 .unwrap()
                 .starts_with("LTO_RUN_ID='r1' pi --no-skills")
         );
         assert!(
-            !runner_plan("pi", goal, "r1")
+            !runner_plan("pi", goal, "r1", "@1")
                 .launch
                 .as_deref()
                 .unwrap()
                 .contains("--print")
         );
-        assert!(
-            runner_plan("pi", goal, "r1")
-                .prompt
-                .starts_with("Read the file ")
-        );
-        assert!(
-            runner_plan("pi", goal, "r1")
-                .prompt
-                .contains(GOAL_CONSTRAINT_SUMMARY)
-        );
-        assert!(runner_plan("pi", goal, "r1").needs_probe);
-        let pi_plan = runner_plan("pi", goal, "r1");
+        let pi_plan = runner_plan("pi", goal, "r1", "@2");
+        assert!(pi_plan.prompt.starts_with("Read the file "));
+        assert!(pi_plan.prompt.contains("goal-self-report"));
+        assert!(pi_plan.prompt.contains("--window-id @2"));
+        assert!(pi_plan.prompt.chars().count() <= GOAL_PROMPT_MAX_CHARS);
+        // Long LTO constraints stay out of the prompt (live in the goal file).
+        assert!(!pi_plan.prompt.contains("Use LTO discipline"));
+        assert!(!pi_plan.prompt.contains("NEVER impersonate"));
+        assert!(pi_plan.needs_probe);
         let pi_launch = pi_plan.launch.as_deref().unwrap();
         assert!(!pi_launch.contains(" -e "));
+        // process-exit wrapper remains as a side-channel when the REPL exits.
         assert!(pi_launch.contains("pi-process-exit"));
         assert_eq!(
             pi_plan.completion_event.as_deref(),
             Some("agent.dispatch.completed")
         );
-        assert_eq!(pi_plan.completion_mode, "pi-process-exit");
+        assert_eq!(pi_plan.completion_mode, "goal-self-report");
         // agy must use the interactive entrypoint (`agy -i`), not `--print`
         // which only prints a plan without executing (bug #5/#6).
         assert!(
-            runner_plan("agy", goal, "r1")
+            runner_plan("agy", goal, "r1", "@3")
                 .launch
                 .as_deref()
                 .unwrap()
                 .starts_with("LTO_RUN_ID='r1' agy -i")
         );
-        assert!(!runner_plan("agy", goal, "r1").prompt.contains("--print"));
-        assert!(
-            runner_plan("agy", goal, "r1")
-                .prompt
-                .contains("Use LTO discipline")
-        );
-        assert!(runner_plan("agy", goal, "r1").needs_probe);
+        assert!(!runner_plan("agy", goal, "r1", "@3")
+            .prompt
+            .contains("--print"));
+        assert!(runner_plan("agy", goal, "r1", "@3")
+            .prompt
+            .contains("goal-self-report"));
+        assert!(runner_plan("agy", goal, "r1", "@3").needs_probe);
 
         // Regression — two bugs must both stay fixed:
         //  v0.8.0: a bare `agy -i` errors "flag needs an argument" and never
@@ -1234,7 +1273,7 @@ mod tests {
         //  v0.9.1-followup: the placeholder MUST be empty ('') — a word like
         //          "start" makes agy treat it as a real instruction and explore
         //          the workspace, racing with/corrupting the real prompt.
-        let agy = runner_plan("agy", goal, "r1");
+        let agy = runner_plan("agy", goal, "r1", "@4");
         let launch = agy.launch.as_deref().unwrap();
         // `-i` is followed by a value (bug #1 stays fixed)...
         assert!(
@@ -1256,12 +1295,14 @@ mod tests {
             "agy agent launch must stay short: {launch}"
         );
         assert!(launch.contains("agy-process-exit"));
+        assert_eq!(agy.completion_mode, "goal-self-report");
         // agy takes the real prompt on a later line, like codex/pi.
         assert!(!agy.launch_includes_prompt);
-        assert!(!runner_plan("codex", goal, "r1").launch_includes_prompt);
-        assert!(!runner_plan("pi", goal, "r1").launch_includes_prompt);
-        // The real prompt still exists (sent later), and it's the full goal prompt.
+        assert!(!runner_plan("codex", goal, "r1", "@5").launch_includes_prompt);
+        assert!(!runner_plan("pi", goal, "r1", "@5").launch_includes_prompt);
+        // The real prompt still exists (sent later), and it's the short self-report prompt.
         assert!(agy.prompt.contains("Read the file"));
+        assert!(agy.prompt.contains("--window-id @4"));
     }
 
     #[test]
@@ -1289,7 +1330,7 @@ mod tests {
     #[test]
     fn pi_dispatch_confirmation_does_not_reuse_ready_text() {
         let goal = Path::new("/tmp/goal.md");
-        let plan = runner_plan("pi", goal, "r1");
+        let plan = runner_plan("pi", goal, "r1", "@1");
 
         assert!(
             plan.confirm_patterns

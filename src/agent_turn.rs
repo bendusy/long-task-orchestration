@@ -37,6 +37,12 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         .summary
         .or_else(|| payload_summary(payload.as_ref()))
         .unwrap_or_else(|| "agent turn completed".to_string());
+    // goal-self-report is an explicit dispatch completion signal: it must carry
+    // --run-id (no silent cwd routing), so a stray self-report cannot attach to
+    // the wrong run.
+    if options.source == "goal-self-report" && options.run_id.is_none() {
+        anyhow::bail!("goal-self-report requires --run-id");
+    }
     let Some(run_id) = route_run(repo, options.run_id.as_deref(), cwd.as_deref())? else {
         println!("agent.turn.completed ignored: no matching LTO run");
         return Ok(());
@@ -56,7 +62,10 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         .clone()
         .or_else(|| std::env::var("LTO_WINDOW_ID").ok())
         .filter(|value| !value.trim().is_empty());
-    let goal_completion_proof = if options.source == "codex-stop-hook" {
+    let self_report = options.source == "goal-self-report";
+    let goal_completion_proof = if self_report {
+        Some("goal-self-report".to_string())
+    } else if options.source == "codex-stop-hook" {
         payload_goal_completion_proof(payload.as_ref())
     } else {
         None
@@ -70,7 +79,11 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
     } else {
         "agent.turn.completed"
     };
-    let effective_rc = if goal_completion_proof.is_some() {
+    // codex-update-goal-complete implies success (rc=0). self-report and
+    // process-exit carry the caller's real rc (0 = done, non-zero = failed/blocked).
+    let effective_rc = if self_report || process_exit {
+        options.rc
+    } else if goal_completion_proof.is_some() {
         Some(0)
     } else {
         options.rc
@@ -90,6 +103,12 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         "source": options.source,
         "completion_scope": if dispatch_completed { "dispatch" } else if event_type == "agent.session.ended" { "session" } else { "turn" },
         "goal_completion_proof": goal_completion_proof,
+        // Alias used by dispatch-goal completion_mode / docs (same value as proof).
+        "completion_proof": if self_report {
+            Some("goal-self-report".to_string())
+        } else {
+            None
+        },
         "payload_sha256": payload_hash,
         "known_payload_schema": payload.is_some(),
     });
@@ -790,6 +809,109 @@ mod tests {
         assert_eq!(events[0]["type"], "agent.dispatch.completed");
         assert_eq!(events[0]["fields"]["rc"], 7);
         assert_eq!(events[0]["fields"]["completion_scope"], "dispatch");
+    }
+
+    #[test]
+    fn goal_self_report_rc0_marks_dispatch_completed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (tmux_bin, log) = fake_tmux(tmp.path());
+        // state_with_window records runner="codex"; match it so cleanup fires.
+        state_with_window(tmp.path(), &tmux_bin, true);
+
+        cmd_agent_turn_completed(
+            tmp.path(),
+            AgentTurnOptions {
+                run_id: Some("r1".to_string()),
+                runner: "codex".to_string(),
+                payload_file: None,
+                cwd: None,
+                session_id: None,
+                summary: Some("self report done".to_string()),
+                rc: Some(0),
+                window_id: Some("@42".to_string()),
+                source: "goal-self-report".to_string(),
+                bell: false,
+                notify_cmd: None,
+            },
+        )
+        .unwrap();
+
+        let events = events::read(tmp.path(), "r1").unwrap();
+        assert_eq!(events[0]["type"], "agent.dispatch.completed");
+        assert_eq!(events[0]["fields"]["rc"], 0);
+        assert_eq!(events[0]["fields"]["completion_scope"], "dispatch");
+        assert_eq!(
+            events[0]["fields"]["goal_completion_proof"],
+            "goal-self-report"
+        );
+        assert_eq!(events[0]["fields"]["completion_proof"], "goal-self-report");
+        assert_eq!(events[0]["fields"]["source"], "goal-self-report");
+        let cleanup = fs::read_to_string(log).unwrap();
+        assert!(cleanup.contains("kill-window -t '@42'"));
+    }
+
+    #[test]
+    fn goal_self_report_rc1_completes_dispatch_as_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (tmux_bin, log) = fake_tmux(tmp.path());
+        state_with_window(tmp.path(), &tmux_bin, true);
+
+        cmd_agent_turn_completed(
+            tmp.path(),
+            AgentTurnOptions {
+                run_id: Some("r1".to_string()),
+                runner: "codex".to_string(),
+                payload_file: None,
+                cwd: None,
+                session_id: None,
+                summary: Some("blocked".to_string()),
+                rc: Some(1),
+                window_id: Some("@42".to_string()),
+                source: "goal-self-report".to_string(),
+                bell: false,
+                notify_cmd: None,
+            },
+        )
+        .unwrap();
+
+        let events = events::read(tmp.path(), "r1").unwrap();
+        assert_eq!(events[0]["type"], "agent.dispatch.completed");
+        assert_eq!(events[0]["fields"]["rc"], 1);
+        assert_eq!(events[0]["fields"]["completion_scope"], "dispatch");
+        assert_eq!(
+            events[0]["fields"]["goal_completion_proof"],
+            "goal-self-report"
+        );
+        // failed self-report retains the window for troubleshooting
+        assert!(!log.exists());
+        let persisted = load_run_state(tmp.path(), "r1").unwrap();
+        assert_eq!(persisted.dispatch_windows[0].status, "retained");
+    }
+
+    #[test]
+    fn goal_self_report_without_run_id_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = cmd_agent_turn_completed(
+            tmp.path(),
+            AgentTurnOptions {
+                run_id: None,
+                runner: "pi".to_string(),
+                payload_file: None,
+                cwd: Some(tmp.path().to_path_buf()),
+                session_id: None,
+                summary: None,
+                rc: Some(0),
+                window_id: None,
+                source: "goal-self-report".to_string(),
+                bell: false,
+                notify_cmd: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("requires --run-id"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
