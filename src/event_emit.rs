@@ -6,6 +6,46 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContractFieldCounts {
+    pub targets: usize,
+    pub constraints: usize,
+    pub instruments: usize,
+    pub forced_entropy: usize,
+}
+
+pub fn emit_contract_updated(
+    repo: &Path,
+    run_id: &str,
+    phase: &str,
+    changed_fields: &[&str],
+    counts: ContractFieldCounts,
+) -> anyhow::Result<()> {
+    let emitted = events::safe_emit(
+        repo,
+        run_id,
+        EventRecord {
+            event_type: "contract.updated".to_string(),
+            actor_kind: "host".to_string(),
+            phase: Some(phase.to_string()),
+            object_type: Some("delivery_contract".to_string()),
+            summary: format!("contract updated: {} field(s)", changed_fields.len()),
+            fields: json!({
+                "changed_fields": changed_fields,
+                "target_count": counts.targets,
+                "constraint_count": counts.constraints,
+                "instrument_count": counts.instruments,
+                "forced_entropy_count": counts.forced_entropy,
+            }),
+            ..EventRecord::default()
+        },
+    );
+    if emitted.is_none() {
+        anyhow::bail!("event emit failed for contract.updated");
+    }
+    Ok(())
+}
+
 pub fn emit_runner_results(
     repo: &Path,
     run_id: &str,
@@ -595,5 +635,37 @@ mod tests {
         let blob = std::fs::read_to_string(crate::events::events_path(tmp.path(), "r1")).unwrap();
         assert!(blob.contains("runner.finished"));
         assert!(!blob.contains("SECRET_REPLY_SHOULD_NOT_APPEAR"));
+    }
+
+    #[test]
+    fn contract_updated_event_contains_only_changed_fields_and_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        emit_contract_updated(
+            tmp.path(),
+            "r1",
+            "implementation",
+            &["goal", "instruments"],
+            ContractFieldCounts {
+                targets: 1,
+                constraints: 0,
+                instruments: 2,
+                forced_entropy: 0,
+            },
+        )
+        .unwrap();
+
+        let events = crate::events::read(tmp.path(), "r1").unwrap();
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event["type"], "contract.updated");
+        assert_eq!(
+            event["fields"]["changed_fields"],
+            json!(["goal", "instruments"])
+        );
+        assert_eq!(event["fields"]["target_count"], 1);
+        assert_eq!(event["fields"]["constraint_count"], 0);
+        assert_eq!(event["fields"]["instrument_count"], 2);
+        assert_eq!(event["fields"]["forced_entropy_count"], 0);
+        assert!(!event.to_string().contains("cargo test"));
     }
 }

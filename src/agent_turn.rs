@@ -232,7 +232,9 @@ fn shell_single_quote(value: &str) -> String {
 }
 
 fn save_run_state(repo: &Path, run_id: &str, state: &state::LtoState) -> anyhow::Result<()> {
-    state::save_state(repo.join(".lto").join(run_id).join("state.json"), state)
+    let state_path = repo.join(".lto").join(run_id).join("state.json");
+    let mut next = state.clone();
+    crate::commands::util::save_state_preserving_c2(&state_path, run_id, &mut next)
 }
 
 fn is_window_id(value: &str) -> bool {

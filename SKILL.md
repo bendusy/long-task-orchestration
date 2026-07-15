@@ -79,7 +79,7 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 
 **Ⅰ 接管与恢复**——进项目第一件事 `lto runs`（`.lto/` 是本项目真源与本地记忆，am 只是下游投影）。`resume` 喂 AI（git head/task 状态，防 compact 丢上下文）；`recap` 给人（当初要做啥/为什么/做到哪/还剩啥）；`recap --mine` 跨 run 挖掘。冲突时信证据不信旧指令。不适用：新 run 立项（→Ⅱ）。
 
-**Ⅱ 立项与契约**——先问「该不该做」（刹车1）。`start --goal --why --done-when`；/goal 型长交付加契约四件套 `--target/--constraint/--instrument/--entropy-check` 进 core delivery contract。进开发前四证据：architecture_alignment / first_principles / simplification_dedupe / value_measurement（详见 run-state-workflow.md）。不适用：已有 active run 的恢复（→Ⅰ）。
+**Ⅱ 立项与契约**——先问「该不该做」（刹车1）。`start --goal --done-when` 两项硬必填，`--why/--host` 只告警；空 contract 合法，非空时 `--target` ↔ `--instrument [LABEL::]CMD` 必须成对，`--constraint/--entropy-check` 缺失只告警。已有 run 用 `contract set` 修补，legacy 非法 instrument 用 `--replace-instrument`；`preflight` 独立报告环境与 active/显式 run readiness（`--json` 只改输出，`--record` 只落环境快照）。进开发前四证据：architecture_alignment / first_principles / simplification_dedupe / value_measurement（细节见 run-state-workflow.md）。不适用：已有 active run 的恢复（→Ⅰ）。
 
 **Ⅲ 执行与派工**——`task add` 建单元，`runner` 跑命令落证据。**派外部 agent 首选 tmux 真 TUI**（`dispatch-goal` / `dispatch-and-wait`），可见可监督、机制级完成检测；headless delegate 只用于只读评审与兜底（agy `--print` 只出方案不执行=假成功）；写档的非 tmux runner fail-closed。派完挂 `events --wait --event-type agent.dispatch.completed`，别轮询。运行中 `tail -f .lto/<run-id>/live/<job-id>.log`。autopilot 档位 supervised→auto-exec（worktree 沙箱）→autonomous（机械证据闸门，不 spawn 决策 agent，反思归你）。不适用：确定性本地命令直接 runner 跑。
 

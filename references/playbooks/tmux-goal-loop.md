@@ -16,8 +16,11 @@
 
 可用 primitive：
 
-- `lto start --goal ... --target ... --constraint ... --instrument ... --entropy-check ...`
-  记录 goal 四件套。
+- `lto start --goal ... --done-when ... --target ... --constraint ... --instrument "label::command" --entropy-check ...`
+  记录 goal 与交付契约。空 contract
+  合法；一旦填写，target ↔ instrument 必须成对，constraint/entropy-check 缺失只告警。
+- 已有 run 用 `lto contract set` 修补 typed metadata/contract；`lto preflight`
+  分开报告环境与 active/显式 run readiness。
 - `lto task add` 写 feature/task 清单；host 保留拆分和优先级判断权。
 - `lto runner --runner tmux --tmux-mode signal|sentinel|fire ...` 直接派可观测 worker，
   或 `lto autopilot --auto-exec --worker-runner tmux` 让现有 autopilot loop
@@ -60,4 +63,3 @@ loop 跑完、blocked 或 worker 自报完成后，**不得**把 hook 返回、p
 - 把 `tmux` pane 停止、sentinel 文件、contract 文件存在等同于语义完成。
 - 把这个 playbook 抽成替 host 做判断的 `orchestrate` 命令。
 - 依赖 host 侧私有 skill 或本机隐藏脚本，导致 stranger 无法复现。
-

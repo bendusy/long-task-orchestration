@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **新增 C2 信息不足禁猜闸门**：`lto start` 在任何写盘前要求非空 `--goal`/`--done-when`；delivery contract 保持全空兼容，但非空时强制 `--target` 与可执行 `--instrument` 成对，`--constraint`/`--entropy-check` 仅 advisory。
+- **新增 typed contract 修补与并发保护**：`lto contract set` 可修正 goal/done-when/host、追加交付字段并用 `--replace-instrument` 修复 legacy 非法 instrument；所有 run writer 共用锁并保留磁盘最新 C2 字段，失败更新回滚 state/run-state，缺失 run-state 可由内置模板重建。
+- **贯通 preflight/check/closeout**：preflight 文本/JSON 始终先报告环境，并独立报告显式或 active run readiness；bare strict check、phase gate 与 closeout 复用同一分级判定，legacy fixture 和并发 subprocess 回归覆盖保持通过。
 - **审计 ledger 统一由 Rust 判定**：`lto check --ledger <path> [--strict]` 成为唯一 evaluator；空 ledger 明确为 `NO_OBSERVATIONS`，高风险 run 不再把无观测误判为收敛，历史 `[1,2,0]` 仍保持 `CONVERGED`。
 - **增加全序列稳定性 diagnostics**：check/closeout 旁路展示样本充分性、末值、方向、振荡和峰值包络；缺少 auditor/coverage lineage 时明确降为 low-confidence advisory，诊断不参与 promote、route 或 closeout 硬闸门。
 - **纠正审计事件与兼容路径**：新写入使用 `audit.round.recorded` 和 `audit.ledger.evaluated`，telemetry 对新旧事件按轮去重；collector 把结构化 `[]` 视为明确的零 findings，不再从解释文字中的 `high`/`critical` 词频制造 blocker；`scripts/audit_ledger_check.py` 暂留一版本 exec proxy，并由共享 golden fixtures 锁定与 Rust 相同的 verdict 和退出码。

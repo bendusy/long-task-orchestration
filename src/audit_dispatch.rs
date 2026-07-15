@@ -18,7 +18,7 @@ pub fn pick_auditors_with(host: &str, allow_same_family: bool) -> Vec<String> {
         .iter()
         .map(|runner| (*runner).to_string())
         .collect::<Vec<_>>();
-    if allow_same_family {
+    if allow_same_family || host.trim().eq_ignore_ascii_case("unknown") {
         return pool;
     }
     let picked = pool
@@ -243,6 +243,7 @@ mod tests {
             pick_auditors_with("codex", true),
             vec!["codex", "pi", "agy"]
         );
+        assert_eq!(pick_auditors("unknown"), vec!["codex", "pi", "agy"]);
     }
 
     #[test]

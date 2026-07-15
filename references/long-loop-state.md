@@ -18,7 +18,7 @@
 
 ### run-state 文件是恢复锚点
 
-新开长任务时，跑 `lto start --goal <goal>`（创建 `state.json` + `run-state.md`；`audit-ledger.md` 由 `lto audit` 首轮派工时生成；preflight 环境快照用 `lto preflight --record` 落进 `state.json`）。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `lto check [--strict] [--json]`；要判断能否进写码/收尾，再跑 `lto check --to implementation|closed [--strict]` 读 phase-entry evidence——注意 `check --to` 出的报告带 `human_gate_required: true`，不自动放行；真正推进 phase 用 `lto phase --set <phase>`。之后按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
+新开长任务时，跑 `lto start --goal <goal> --done-when <acceptance>`（两项非空硬必填；创建 `state.json` + `run-state.md`；`audit-ledger.md` 由 `lto audit` 首轮派工时生成）。缺失的 typed metadata 或 delivery contract 用 `lto contract set` 修补，不手改 JSON。`lto preflight` 总是报告环境；存在 active run 或显式 `--run-id` 时另报 run readiness，显式不存在的 run 报错，`--json` 与只持久化环境快照的 `--record` 彼此独立。每次进入新阶段、派后台审计、收到 reply、用户拍板、部署或观察窗结束，都更新 run-state。恢复时先跑 `lto check [--strict] [--json]`；要判断能否进写码/收尾，再跑 `lto check --to implementation|closed [--strict]` 读 phase-entry evidence——注意 `check --to` 出的报告带 `human_gate_required: true`，不自动放行；真正推进 phase 用 `lto phase --set <phase>`。之后按上面的三层证据核验；run-state 和证据冲突时，信证据并修正 run-state。
 
 ## 二、后台派工不阻塞 + 等待期挖地基
 

@@ -87,7 +87,9 @@ recap/closeout 才看得见。细节见 [execution-loop.md](execution-loop.md) �
   闸门：攒够真实派工才解锁，不 spawn 决策 agent，反思永远归你）。详见
   [run-state-workflow.md](run-state-workflow.md)。
 - `recap` 对抗**人**的 goal drift：当初要做啥/为什么/跑多久/做到哪/还剩啥/轮到你。
-  开 run 时记 `--why/--done-when`，recap 才答得全。`resume` 距上次活动 >24h 会提示跑 recap。
+  开 run 时 `--goal/--done-when` 硬必填，`--why/--host` 缺失只告警；信息需要
+  后补时用 `lto contract set`，不要手改 `state.json`。`resume` 距上次活动 >24h
+  会提示跑 recap。
 
 ## 最小跑通流程（照着做）
 
@@ -95,13 +97,16 @@ recap/closeout 才看得见。细节见 [execution-loop.md](execution-loop.md) �
 L="lto --repo ."
 
 # 1. 开工，记下目标
-$L start --goal "重构登录模块，消除空指针" --host <你这家:codex/pi/agy/claude>
+$L start --goal "重构登录模块，消除空指针" \
+  --done-when "相关测试全绿且审计无 blocker" \
+  --host <你这家:codex/pi/agy/claude>
 
 # /goal 型长交付，把交付契约落进 Rust core state
 $L start --goal "提升检索召回" \
+  --done-when "hidden eval recall 达标且审计收敛" \
   --target "hidden eval recall >= 95%" \
   --constraint "wall clock <= 4h" \
-  --instrument "python3 eval/search_recall.py --hidden" \
+  --instrument "hidden-eval::python3 eval/search_recall.py --hidden" \
   --entropy-check "on stall, change hypothesis and log overfit reflection"
 
 # 2. 加任务（task 是 runner/next/audit 的操作对象，先建出来）
@@ -124,6 +129,12 @@ $L next
 $L check --to closed --strict
 $L closeout --summary "登录模块重构完成，空指针已修，异构审计收敛"
 ```
+
+空 delivery contract 合法；一旦填写，`--target` 与 `--instrument [LABEL::]CMD`
+必须成对，`--constraint` / `--entropy-check` 缺失只告警。`CMD` 必须非空；没有
+`::` 时整个值就是命令。`$L preflight [--run-id <id>] [--json] [--record]`
+会把环境探活与 run readiness 分开报告；显式不存在的 run 会报错。完整契约见
+[run-state-workflow.md](run-state-workflow.md)。
 
 跨 session 回来：`$L resume`。多 runtime / 多项目接手：`$L memory resume --project
 <repo-key>`（只读，am 缺席时降级本地 `.lto`，不覆盖 current/state）。想看会写入

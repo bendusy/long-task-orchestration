@@ -6,6 +6,8 @@
 
 - run_id:
 - feature / goal:
+- why:
+- done_when:
 - started_at:
 - host_runtime:
 - repo:

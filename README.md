@@ -26,9 +26,10 @@ $L start --goal "重构登录模块" --why "线上空指针崩溃" --done-when "
 
 # /goal 型长交付：交付契约进 Rust core state
 $L start --goal "提升检索召回" \
+  --done-when "hidden eval recall 达标且审计收敛" \
   --target "hidden eval recall >= 95%" \
   --constraint "wall clock <= 4h; paid API <= $50" \
-  --instrument "python3 eval/search_recall.py --hidden" \
+  --instrument "hidden-eval::python3 eval/search_recall.py --hidden" \
   --entropy-check "on stall, change hypothesis and log overfit reflection"
 
 # 2. 建 task，再执行并落证据
@@ -55,6 +56,12 @@ $L check --ledger .lto/<run-id>/audit-ledger.md --strict
 $L check --to closed --strict
 $L closeout --summary "登录重构完成，测试和异构审计已收敛"
 ```
+
+`start` 硬要求非空 `--goal` 和 `--done-when`；`--why`、`--host` 只告警。
+空 delivery contract 合法；一旦填写就必须让 `--target` 与
+`--instrument [LABEL::]CMD` 成对，`--constraint`、`--entropy-check` 缺失仅告警。已有 run 用
+`lto contract set` 修补（legacy 非法 instrument 用 `--replace-instrument`）；`preflight` 的环境探活与 active/显式 run readiness
+彼此独立。完整规则见 [run-state workflow](./references/run-state-workflow.md)。
 
 `audit` 当前命令面是 `--auto-dispatch`、`--discover-risks`、`--allow-same-family`、`--prefer-runner`。历史文档里出现过的 `audit --collect <dir>` 不是当前 Rust CLI 命令；已有回复应通过当前 `runner`/`collect-agent-run`/artifact 机制登记。
 

@@ -1,7 +1,7 @@
 use crate::audit_dispatch;
 use crate::audit_ledger;
 use crate::budget;
-use crate::commands::{closeout, ledger_check, ops, recap, resume, util};
+use crate::commands::{closeout, contract, ledger_check, ops, recap, resume, util};
 use crate::plugin;
 use crate::plugin_eval_run;
 use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 pub const COMMANDS: &[&str] = &[
     "start",
+    "contract",
     "check",
     "closeout",
     "resume",
@@ -69,12 +70,21 @@ pub enum Commands {
         target: Vec<String>,
         #[arg(long)]
         constraint: Vec<String>,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "[LABEL::]CMD",
+            help = "Measurement command; use LABEL::CMD for a stable label, or CMD without ::"
+        )]
         instrument: Vec<String>,
         #[arg(long = "entropy-check")]
         entropy_check: Vec<String>,
         #[arg(long)]
         force: bool,
+    },
+    #[command(about = "Update run readiness metadata and delivery contract")]
+    Contract {
+        #[command(subcommand)]
+        command: ContractCommand,
     },
     #[command(about = "Check run gates, phase evidence, and ledger status")]
     Check {
@@ -121,6 +131,8 @@ pub enum Commands {
         run_id: Option<String>,
         #[arg(long)]
         record: bool,
+        #[arg(long)]
+        json: bool,
     },
     #[command(
         about = "Run or dispatch one scheduler-backed task",
@@ -447,6 +459,41 @@ pub enum TaskCommand {
         run_id: Option<String>,
         #[arg(long = "set")]
         set_phase: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ContractCommand {
+    #[command(about = "Merge typed metadata and delivery contract fields into a run")]
+    Set {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        goal: Option<String>,
+        #[arg(long = "done-when")]
+        done_when: Option<String>,
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        target: Vec<String>,
+        #[arg(long)]
+        constraint: Vec<String>,
+        #[arg(
+            long,
+            value_name = "[LABEL::]CMD",
+            conflicts_with = "replace_instrument",
+            help = "Measurement command; use LABEL::CMD for a stable label, or CMD without ::"
+        )]
+        instrument: Vec<String>,
+        #[arg(
+            long = "replace-instrument",
+            value_name = "[LABEL::]CMD",
+            conflicts_with = "instrument",
+            help = "Replace all instruments; use this to repair invalid legacy instrument values"
+        )]
+        replace_instrument: Vec<String>,
+        #[arg(long = "entropy-check")]
+        entropy_check: Vec<String>,
     },
 }
 
@@ -1126,25 +1173,77 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             entropy_check,
             force,
         } => {
+            let goal = goal.unwrap_or_default();
+            let why = why.unwrap_or_default();
+            let done_when = done_when.unwrap_or_default();
+            let host = host
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "unknown".to_string());
+            let delivery_contract =
+                DeliveryContract::new(target, constraint, instrument, entropy_check);
+            let readiness = state::assess_run_readiness(&goal, &done_when, &why, &host);
+            if !readiness.is_ready() {
+                anyhow::bail!(
+                    "需补充: {}\n（信息不足禁猜：没有完成标准的 run 无法判收敛，recap/closeout 都会退化）",
+                    format_flag_hints(&readiness.missing)
+                );
+            }
+            let contract_assessment = delivery_contract.completeness_missing();
+            if !contract_assessment.is_complete() {
+                anyhow::bail!(
+                    "需补充: {}\n（信息不足禁猜：目标与测量手段必须成对，目标必须有可验证的测量手段）",
+                    format_flag_hints(&contract_assessment.missing)
+                );
+            }
+            for flag in readiness.advisory {
+                eprintln!("WARN 需补充: {}", flag_hint(flag));
+            }
+            for flag in contract_assessment.advisory {
+                eprintln!("WARN delivery contract 可补充: {}", flag_hint(flag));
+            }
             let run_dir = start_run(
                 &args.repo,
                 StartRunOptions {
                     run_id,
-                    goal: goal.unwrap_or_default(),
-                    why: why.unwrap_or_default(),
-                    done_when: done_when.unwrap_or_default(),
-                    host: host.unwrap_or_default(),
-                    delivery_contract: DeliveryContract::new(
-                        target,
-                        constraint,
-                        instrument,
-                        entropy_check,
-                    ),
+                    goal,
+                    why,
+                    done_when,
+                    host,
+                    delivery_contract,
                     force,
                 },
             )?;
             println!("{}", run_dir.display());
         }
+        Commands::Contract { command } => match command {
+            ContractCommand::Set {
+                run_id,
+                goal,
+                done_when,
+                host,
+                target,
+                constraint,
+                instrument,
+                replace_instrument,
+                entropy_check,
+            } => {
+                contract::cmd_contract_set(
+                    &args.repo,
+                    contract::ContractSetOptions {
+                        run_id,
+                        goal,
+                        done_when,
+                        host,
+                        targets: target,
+                        constraints: constraint,
+                        instruments: instrument,
+                        replacement_instruments: replace_instrument,
+                        entropy_checks: entropy_check,
+                    },
+                )?;
+            }
+        },
         Commands::Recap {
             run_id,
             artifacts,
@@ -1184,8 +1283,19 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 },
             )?;
         }
-        Commands::Preflight { run_id, record } => {
-            ops::cmd_preflight(&args.repo, ops::PreflightOptions { run_id, record })?;
+        Commands::Preflight {
+            run_id,
+            record,
+            json,
+        } => {
+            ops::cmd_preflight(
+                &args.repo,
+                ops::PreflightOptions {
+                    run_id,
+                    record,
+                    json,
+                },
+            )?;
         }
         Commands::Runner(cmd) => {
             let cmd = *cmd;
@@ -1658,6 +1768,11 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
     let state_path = run_dir.join("state.json");
     let state = state::load_state(&state_path)?;
     let host = effective_audit_host(&state);
+    if host.eq_ignore_ascii_case("unknown") {
+        eprintln!(
+            "WARN host runtime is unknown; 需补充: lto contract set --run-id {run_id} --host \"<runtime>\"（unknown 不做同族排除）"
+        );
+    }
     let auditors = audit_dispatch::pick_auditors_preferred(
         &host,
         options.allow_same_family,
@@ -1733,7 +1848,7 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
     )?;
     let mut run_ctx = util::load_run(repo, Some(&run_id))?;
     util::append_agent_results_to_state(&mut run_ctx.state, None, &results)?;
-    util::save_run(&run_ctx)?;
+    util::save_run(&mut run_ctx)?;
     let replies_dir = audit_dir.join("replies");
     fs::create_dir_all(&replies_dir)?;
     let mut used = Vec::new();
@@ -1889,7 +2004,7 @@ fn dispatch_risk_discovery(
     )?;
     let mut run_ctx = util::load_run(repo, Some(run_id))?;
     util::append_agent_results_to_state(&mut run_ctx.state, None, &results)?;
-    util::save_run(&run_ctx)?;
+    util::save_run(&mut run_ctx)?;
     if result.status != crate::agent_job::JobStatus::Ok {
         anyhow::bail!(
             "risk discovery runner {} returned {} exit={:?}: {}",
@@ -1929,7 +2044,7 @@ fn dispatch_risk_discovery(
     let state_path = run_dir.join("state.json");
     let mut state = state::load_state(&state_path)?;
     append_discovered_risk_points(&mut state, risks);
-    state::save_state(&state_path, &state)?;
+    util::save_state_preserving_c2(&state_path, run_id, &mut state)?;
     util::sync_run_state_md(&run_dir.join("run-state.md"), &state)?;
     let _ = crate::telemetry::save(repo, run_id);
     println!("risk discovery: {discoverer} added risk points");
@@ -2131,8 +2246,9 @@ fn effective_audit_host(state: &LtoState) -> String {
     }
     std::env::var("LTO_HOST_RUNTIME")
         .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "codex".to_string())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn high_risk_tasks(state: &LtoState) -> Vec<Value> {
@@ -2226,6 +2342,28 @@ struct StartRunOptions {
     host: String,
     delivery_contract: DeliveryContract,
     force: bool,
+}
+
+fn format_flag_hints(flags: &[&str]) -> String {
+    flags
+        .iter()
+        .map(|flag| flag_hint(flag))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn flag_hint(flag: &str) -> String {
+    match flag {
+        "--goal" => "--goal \"<一句话目标>\"".to_string(),
+        "--done-when" => "--done-when \"<怎么算做完>\"".to_string(),
+        "--why" => "--why \"<为什么要做>\"".to_string(),
+        "--host" => "--host \"<当前 host runtime>\"（当前按 unknown 记录）".to_string(),
+        "--target" => "--target \"<可验证目标>\"".to_string(),
+        "--constraint" => "--constraint \"<交付约束>\"".to_string(),
+        "--instrument" => "--instrument \"<测量命令>\"".to_string(),
+        "--entropy-check" => "--entropy-check \"<停滞时的换假设检查>\"".to_string(),
+        _ => flag.to_string(),
+    }
 }
 
 fn start_run(repo: &Path, options: StartRunOptions) -> anyhow::Result<PathBuf> {
@@ -2385,7 +2523,7 @@ mod tests {
     #[test]
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
-        assert_eq!(COMMANDS.len(), 26);
+        assert_eq!(COMMANDS.len(), 27);
     }
 
     #[test]
@@ -2553,6 +2691,20 @@ mod tests {
     }
 
     #[test]
+    fn preflight_json_flag_is_registered() {
+        Args::try_parse_from(["lto-rs", "preflight", "--json"]).unwrap();
+        Args::try_parse_from([
+            "lto-rs",
+            "preflight",
+            "--run-id",
+            "r1",
+            "--record",
+            "--json",
+        ])
+        .unwrap();
+    }
+
+    #[test]
     fn start_accepts_python_migration_metadata() {
         Args::try_parse_from([
             "lto-rs",
@@ -2578,6 +2730,148 @@ mod tests {
             "--force",
         ])
         .unwrap();
+    }
+
+    #[test]
+    fn contract_set_flags_are_registered() {
+        Args::try_parse_from([
+            "lto-rs",
+            "contract",
+            "set",
+            "--run-id",
+            "r1",
+            "--goal",
+            "ship",
+            "--done-when",
+            "tests pass",
+            "--host",
+            "codex",
+            "--target",
+            "first",
+            "--target",
+            "second",
+            "--constraint",
+            "bounded",
+            "--instrument",
+            "smoke::cargo test",
+            "--entropy-check",
+            "change hypothesis",
+        ])
+        .unwrap();
+        Args::try_parse_from([
+            "lto-rs",
+            "contract",
+            "set",
+            "--replace-instrument",
+            "smoke::cargo test",
+        ])
+        .unwrap();
+        assert!(
+            Args::try_parse_from([
+                "lto-rs",
+                "contract",
+                "set",
+                "--instrument",
+                "true",
+                "--replace-instrument",
+                "smoke::true",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn start_rejects_missing_readiness_before_writing() {
+        let cases = [
+            (
+                vec!["--goal", "ship"],
+                vec!["--done-when"],
+                "missing done-when",
+            ),
+            (
+                vec!["--done-when", "tests pass"],
+                vec!["--goal"],
+                "missing goal",
+            ),
+            (
+                vec!["--force"],
+                vec!["--goal", "--done-when"],
+                "force does not bypass readiness",
+            ),
+        ];
+        for (suffix, missing, label) in cases {
+            let tmp = tempfile::tempdir().unwrap();
+            let repo = tmp.path();
+            let mut argv = vec!["lto-rs", "--repo", repo.to_str().unwrap(), "start"];
+            argv.extend(suffix);
+            let err = run_args(Args::try_parse_from(argv).unwrap()).unwrap_err();
+            let message = err.to_string();
+            for flag in missing {
+                assert!(message.contains(flag), "{label}: {message}");
+            }
+            assert!(!repo.join(".lto").exists(), "{label} wrote .lto");
+        }
+    }
+
+    #[test]
+    fn start_rejects_unpaired_contract_before_writing() {
+        for (flag, value, missing) in [
+            ("--target", "ship", "--instrument"),
+            ("--instrument", "cargo test", "--target"),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let repo = tmp.path();
+            let args = Args::try_parse_from([
+                "lto-rs",
+                "--repo",
+                repo.to_str().unwrap(),
+                "start",
+                "--goal",
+                "ship",
+                "--done-when",
+                "tests pass",
+                flag,
+                value,
+            ])
+            .unwrap();
+            let err = run_args(args).unwrap_err();
+            assert!(err.to_string().contains(missing), "{err:#}");
+            assert!(!repo.join(".lto").exists());
+        }
+    }
+
+    #[test]
+    fn start_defaults_missing_host_to_unknown_for_an_empty_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        crate::process::git(repo, ["init"]).unwrap();
+        let args = Args::try_parse_from([
+            "lto-rs",
+            "--repo",
+            repo.to_str().unwrap(),
+            "start",
+            "--run-id",
+            "unknown-host",
+            "--goal",
+            "ship",
+            "--done-when",
+            "tests pass",
+        ])
+        .unwrap();
+        run_args(args).unwrap();
+
+        let state = state::load_state(repo.join(".lto/unknown-host/state.json")).unwrap();
+        assert_eq!(state.host_runtime, "unknown");
+        assert!(state.delivery_contract.is_empty());
+    }
+
+    #[test]
+    fn effective_audit_host_preserves_recorded_unknown() {
+        let state = LtoState {
+            host_runtime: "unknown".to_string(),
+            ..LtoState::default()
+        };
+        assert_eq!(effective_audit_host(&state), "unknown");
     }
 
     #[test]

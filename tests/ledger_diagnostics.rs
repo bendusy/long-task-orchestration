@@ -76,6 +76,12 @@ impl Fixture {
             "r1",
             "--goal",
             "diagnostics test",
+            "--done-when",
+            "ledger diagnostics assertions pass",
+            "--target",
+            "ledger diagnostics remain stable",
+            "--instrument",
+            "check::lto check --json",
             "--entropy-check",
             "change hypothesis",
         ]));

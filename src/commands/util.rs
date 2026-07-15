@@ -3,10 +3,12 @@ use crate::process;
 use crate::state::{self, LtoState};
 use anyhow::{Context, anyhow};
 use chrono::{DateTime, FixedOffset, Local, Utc};
+use fs2::FileExt;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const VALID_PHASES: &[&str] = &[
@@ -30,6 +32,17 @@ pub struct RunContext {
     pub run_dir: PathBuf,
     pub state_path: PathBuf,
     pub state: LtoState,
+}
+
+#[derive(Debug)]
+pub struct RunLock {
+    file: File,
+}
+
+impl Drop for RunLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -80,6 +93,36 @@ pub fn resolve_run_id(repo: &Path, run_id: Option<&str>) -> anyhow::Result<Strin
     Ok(state::validate_run_id(run_id)?.to_string())
 }
 
+pub fn lock_existing_run(repo: &Path, run_id: &str) -> anyhow::Result<RunLock> {
+    state::validate_run_id(run_id)?;
+    let state_path = state::state_path(repo, run_id);
+    lock_existing_state_path(&state_path, run_id)
+}
+
+fn lock_existing_state_path(state_path: &Path, run_id: &str) -> anyhow::Result<RunLock> {
+    if !state_path.is_file() {
+        anyhow::bail!("no state.json for {run_id}: {}", state_path.display());
+    }
+    let lock_path = state_path
+        .parent()
+        .expect("state path always has a run directory")
+        .join(".state.lock");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("open run lock: {}", lock_path.display()))?;
+    file.lock_exclusive()
+        .with_context(|| format!("lock run: {}", lock_path.display()))?;
+    if !state_path.is_file() {
+        let _ = FileExt::unlock(&file);
+        anyhow::bail!("no state.json for {run_id}: {}", state_path.display());
+    }
+    Ok(RunLock { file })
+}
+
 pub fn load_run(repo: &Path, run_id: Option<&str>) -> anyhow::Result<RunContext> {
     let run_id = resolve_run_id(repo, run_id)?;
     let run_dir = repo.join(".lto").join(&run_id);
@@ -94,7 +137,30 @@ pub fn load_run(repo: &Path, run_id: Option<&str>) -> anyhow::Result<RunContext>
     })
 }
 
-pub fn save_run(ctx: &RunContext) -> anyhow::Result<()> {
+pub fn save_run(ctx: &mut RunContext) -> anyhow::Result<()> {
+    save_state_preserving_c2(&ctx.state_path, &ctx.run_id, &mut ctx.state)
+}
+
+pub(crate) fn save_state_preserving_c2(
+    state_path: &Path,
+    run_id: &str,
+    next: &mut LtoState,
+) -> anyhow::Result<()> {
+    let _run_lock = lock_existing_state_path(state_path, run_id)?;
+    let current = state::load_state(state_path)?;
+
+    // Contract metadata has one typed writer. Other commands may keep a run
+    // snapshot across slow work, so preserve the latest contract fields while
+    // saving their unrelated updates instead of overwriting `contract set`.
+    next.goal = current.goal;
+    next.why = current.why;
+    next.done_when = current.done_when;
+    next.host_runtime = current.host_runtime;
+    next.delivery_contract = current.delivery_contract;
+    state::save_state(state_path, next)
+}
+
+pub fn save_run_locked(ctx: &RunContext) -> anyhow::Result<()> {
     state::save_state(&ctx.state_path, &ctx.state)
 }
 
@@ -415,14 +481,22 @@ pub fn sync_run_state_md(path: &Path, state: &LtoState) -> anyhow::Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let mut content = fs::read_to_string(path)?;
+    let content = fs::read_to_string(path)?;
+    let content = render_synced_run_state_md(&content, state);
+    atomic_write(path, content.as_bytes())
+}
+
+pub fn render_synced_run_state_md(content: &str, state: &LtoState) -> String {
+    let mut content = content.to_string();
     let delivery_targets = state.delivery_contract.targets.join(" | ");
     let delivery_constraints = state.delivery_contract.constraints.join(" | ");
     let delivery_instruments = state.delivery_contract.instruments.join(" | ");
     let delivery_forced_entropy = state.delivery_contract.forced_entropy.join(" | ");
-    let fields = [
+    let identity_fields = [
         ("run_id", state.run_id.as_str()),
         ("feature / goal", state.goal.as_str()),
+        ("why", state.why.as_str()),
+        ("done_when", state.done_when.as_str()),
         ("started_at", state.started_at.as_str()),
         ("host_runtime", state.host_runtime.as_str()),
         ("repo", state.workspace.repo_root.as_str()),
@@ -430,27 +504,36 @@ pub fn sync_run_state_md(path: &Path, state: &LtoState) -> anyhow::Result<()> {
         ("current_phase", state.current_phase.as_str()),
         ("current_git_head", state.workspace.head.as_str()),
         ("current_branch", state.workspace.branch.as_str()),
-        (
-            "next_command_or_question",
-            state.next_action.as_str().unwrap_or_default(),
-        ),
-        ("blocked_by", state.blocked_by.as_str().unwrap_or("none")),
+    ];
+    for (field, value) in identity_fields {
+        content = upsert_md_field(&content, field, value, "## Delivery Contract");
+    }
+    let delivery_fields = [
         ("delivery_targets", delivery_targets.as_str()),
         ("delivery_constraints", delivery_constraints.as_str()),
         ("delivery_instruments", delivery_instruments.as_str()),
         ("delivery_forced_entropy", delivery_forced_entropy.as_str()),
     ];
-    for (field, value) in fields {
+    for (field, value) in delivery_fields {
+        content = upsert_md_field(&content, field, value, "## Host Preconditions");
+    }
+    let replace_only_fields = [
+        (
+            "next_command_or_question",
+            state.next_action.as_str().unwrap_or_default(),
+        ),
+        ("blocked_by", state.blocked_by.as_str().unwrap_or("none")),
+    ];
+    for (field, value) in replace_only_fields {
         if !value.is_empty() {
             content = replace_md_field(&content, field, value);
         }
     }
-    fs::write(path, content)?;
-    Ok(())
+    content
 }
 
 fn replace_md_field(content: &str, field: &str, value: &str) -> String {
-    let replacement = format!("- {field}: {}", single_line(value));
+    let replacement = md_field_line(field, value);
     let needle = format!("- {field}:");
     let mut replaced = false;
     let lines = content
@@ -469,6 +552,62 @@ fn replace_md_field(content: &str, field: &str, value: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+fn upsert_md_field(content: &str, field: &str, value: &str, before_heading: &str) -> String {
+    let needle = format!("- {field}:");
+    if content.lines().any(|line| line.starts_with(&needle)) {
+        return replace_md_field(content, field, value);
+    }
+
+    let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
+    let mut insert_at = lines
+        .iter()
+        .position(|line| line.trim() == before_heading)
+        .unwrap_or(lines.len());
+    while insert_at > 0 && lines[insert_at - 1].trim().is_empty() {
+        insert_at -= 1;
+    }
+    lines.insert(insert_at, md_field_line(field, value));
+    let mut output = lines.join("\n");
+    if content.ends_with('\n') {
+        output.push('\n');
+    }
+    output
+}
+
+fn md_field_line(field: &str, value: &str) -> String {
+    let value = single_line(value);
+    if value.is_empty() {
+        format!("- {field}:")
+    } else {
+        format!("- {field}: {value}")
+    }
+}
+
+pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("path has no parent: {}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("run-state.md");
+    let existing_permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    let mut temp = tempfile::Builder::new()
+        .prefix(&format!(".{file_name}."))
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    if let Some(permissions) = existing_permissions {
+        temp.as_file().set_permissions(permissions)?;
+    }
+    temp.write_all(contents)?;
+    temp.flush()?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 pub fn latest_artifacts(repo: &Path, run_id: &str, limit: usize) -> Vec<Value> {
@@ -695,6 +834,109 @@ mod tests {
         assert_eq!(loaded.run_id, "r1");
         assert_eq!(loaded.state.goal, "load me");
         assert_eq!(loaded.state_path, run_dir.join("state.json"));
+    }
+
+    #[test]
+    fn lock_existing_run_does_not_create_a_missing_run_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let error = lock_existing_run(tmp.path(), "missing").unwrap_err();
+
+        assert!(error.to_string().contains("no state.json for missing"));
+        assert!(!tmp.path().join(".lto").exists());
+    }
+
+    #[test]
+    fn save_run_preserves_newer_c2_fields_from_other_typed_writers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join(".lto/r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        let initial = LtoState {
+            run_id: "r1".into(),
+            goal: "initial goal".into(),
+            done_when: "initial acceptance".into(),
+            host_runtime: "codex".into(),
+            ..LtoState::default()
+        };
+        state::save_state(run_dir.join("state.json"), &initial).unwrap();
+        let mut stale = load_run(tmp.path(), Some("r1")).unwrap();
+
+        let mut current = initial;
+        current.goal = "repaired goal".into();
+        current.done_when = "repaired acceptance".into();
+        current.host_runtime = "pi".into();
+        current.delivery_contract = state::DeliveryContract::new(
+            vec!["measurable target".into()],
+            Vec::new(),
+            vec!["smoke::true".into()],
+            Vec::new(),
+        );
+        state::save_state(run_dir.join("state.json"), &current).unwrap();
+
+        stale.state.environment_snapshot.sandbox = "ok".into();
+        save_run(&mut stale).unwrap();
+
+        let persisted = state::load_state(run_dir.join("state.json")).unwrap();
+        assert_eq!(persisted.goal, "repaired goal");
+        assert_eq!(persisted.done_when, "repaired acceptance");
+        assert_eq!(persisted.host_runtime, "pi");
+        assert_eq!(
+            persisted.delivery_contract.targets,
+            vec!["measurable target"]
+        );
+        assert_eq!(persisted.environment_snapshot.sandbox, "ok");
+    }
+
+    #[test]
+    fn sync_run_state_upserts_legacy_identity_and_contract_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("run-state.md");
+        fs::write(
+            &path,
+            "# Run\n\n## Identity\n\n- run_id:\n- feature / goal:\n\n## Delivery Contract\n\n## Host Preconditions\n",
+        )
+        .unwrap();
+        let state = LtoState {
+            run_id: "r1".into(),
+            goal: "ship".into(),
+            why: "user value".into(),
+            done_when: "tests pass".into(),
+            delivery_contract: state::DeliveryContract::new(
+                vec!["measurable target".into()],
+                vec!["macOS first".into()],
+                vec!["smoke::cargo test".into()],
+                vec!["change hypothesis".into()],
+            ),
+            ..LtoState::default()
+        };
+
+        sync_run_state_md(&path, &state).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("- why: user value"), "{content}");
+        assert!(content.contains("- done_when: tests pass"), "{content}");
+        assert!(
+            content.contains("- delivery_targets: measurable target"),
+            "{content}"
+        );
+        assert!(
+            content.contains("- delivery_instruments: smoke::cargo test"),
+            "{content}"
+        );
+        assert!(
+            content.find("- done_when:").unwrap() < content.find("## Delivery Contract").unwrap(),
+            "{content}"
+        );
+        assert!(
+            content.find("- delivery_instruments:").unwrap()
+                < content.find("## Host Preconditions").unwrap(),
+            "{content}"
+        );
+        assert_eq!(
+            fs::read_dir(tmp.path()).unwrap().count(),
+            1,
+            "temporary file should be removed after persist"
+        );
     }
 
     #[test]

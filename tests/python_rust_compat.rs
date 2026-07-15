@@ -58,6 +58,62 @@ fn fixed_legacy_run_fixture_is_readable_by_rust_recap_resume_and_check() {
         json["ledger"]["diagnostics"]["confidence"],
         "low (no lineage)"
     );
+
+    let phase_check = run_ok(
+        Command::new(lto_rs).args([
+            "--repo",
+            work.to_str().unwrap(),
+            "check",
+            "--run-id",
+            "legacy-fixture-run",
+            "--to",
+            "implementation",
+            "--strict",
+            "--json",
+        ]),
+        "strict implementation check for legacy fixture",
+    );
+    let phase_json: Value = serde_json::from_str(&phase_check).unwrap();
+    assert!(phase_json["check"]["errors"].as_array().unwrap().is_empty());
+    assert!(
+        !phase_json["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| {
+                check["id"] == "delivery_contract_complete" && check["status"] == "missing"
+            })
+    );
+
+    #[cfg(unix)]
+    {
+        install_passing_healthcheck(&work);
+        let state_path = work
+            .join(".lto")
+            .join("legacy-fixture-run")
+            .join("state.json");
+        let state_before = fs::read(&state_path).unwrap();
+        let preflight = run_ok(
+            Command::new(lto_rs).args([
+                "--repo",
+                work.to_str().unwrap(),
+                "preflight",
+                "--json",
+                "--run-id",
+                "legacy-fixture-run",
+            ]),
+            "preflight readiness for legacy fixture",
+        );
+        let preflight_json: Value = serde_json::from_str(&preflight).unwrap();
+        assert_eq!(preflight_json["environment"]["ok"], true);
+        assert_eq!(preflight_json["run_readiness"]["ok"], true);
+        assert_eq!(
+            preflight_json["run_readiness"]["missing"],
+            serde_json::json!([])
+        );
+        assert!(preflight_json["run_readiness"]["warnings"].is_array());
+        assert_eq!(fs::read(state_path).unwrap(), state_before);
+    }
 }
 
 fn init_git_repo(repo: &Path) {
@@ -107,6 +163,34 @@ fn install_legacy_fixture(repo: &Path, run_id: &str) {
         include_str!("fixtures/legacy-run/audit-ledger.md"),
     )
     .unwrap();
+}
+
+#[cfg(unix)]
+fn install_passing_healthcheck(repo: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let runners = repo.join("scripts").join("delegate").join("runners");
+    fs::create_dir_all(&runners).unwrap();
+    let script = runners.join("healthcheck.sh");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+shift
+printf '['
+first=1
+for runner in "$@"; do
+  if [ "$first" -eq 0 ]; then printf ','; fi
+  first=0
+  printf '{"agent":"%s","verdict":"OK"}' "$runner"
+done
+printf ']'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(script, permissions).unwrap();
 }
 
 fn git_head(repo: &Path) -> String {

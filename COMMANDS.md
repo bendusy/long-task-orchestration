@@ -2,9 +2,9 @@
 
 Source of truth: `src/cli.rs` `COMMANDS` plus the clap argument definitions in `src/cli.rs`.
 
-Command count: 27.
+Command count: 28.
 
-This is the `lto-rs --help` top-level row count: 26 Rust-owned business
+This is the `lto-rs --help` top-level row count: 27 Rust-owned business
 commands plus clap built-in `help`. The table below lists only the
 Rust-owned business commands tracked by `src/cli.rs` `COMMANDS`.
 
@@ -17,11 +17,12 @@ aliases do not appear in the public help table below.
 
 | Command | Summary | Required | Optional |
 |---|---|---|---|
-| `start` | Create a new Rust v2 run directory and current marker. | None | `--run-id`, `--goal`, `--why`, `--done-when`, `--host`, `--target`, `--constraint`, `--instrument`, `--entropy-check`, `--force` |
-| `check` | Check a run's gates/phase evidence and ledger, or evaluate one standalone ledger with the Rust evaluator. Run-mode text and JSON include verdict plus five-dimensional diagnostics; advisory fields never gate. | None | Run mode: `--run-id`, `--strict`, `--to`, `--json`; standalone mode: `--ledger <path> [--strict]` (`--ledger` conflicts with `--run-id`, `--to`, and `--json`) |
-| `closeout` | Gate closeout, update state/run-state, write handoff and changelog. | `--summary` | `--run-id`, `--next-action`, `--blocked-by`, `--allow-dirty`, `--no-changelog`, `--force` |
+| `start` | Create a new Rust v2 run directory and current marker. Non-empty goal/done-when are hard requirements; why/host are advisory. An empty delivery contract is valid; otherwise target and instrument must be paired, while constraint/entropy-check omissions warn. `--instrument [LABEL::]CMD` accepts an optional stable label; without `::`, the entire value is the command. | `--goal`, `--done-when` | `--run-id`, `--why`, `--host`, `--target`, `--constraint`, `--instrument`, `--entropy-check`, `--force` |
+| `contract` | Repair typed goal/done-when/host metadata and append delivery-contract fields without editing `state.json` by hand. `contract set` validates the merged result before writing and uses the same `[LABEL::]CMD` instrument syntax as `start`; `--replace-instrument` explicitly replaces invalid legacy instrument values. | Subcommand: `set` | `contract set --run-id --goal --done-when --host --target --constraint --instrument --replace-instrument --entropy-check` (delivery fields are repeatable; append and replace instrument modes conflict) |
+| `check` | Check a run's gates/phase evidence and ledger, or evaluate one standalone ledger with the Rust evaluator. Bare run-mode `--strict` enforces base readiness and non-empty-contract target/instrument requirements; `--to` adds phase evidence. Run-mode text and JSON include verdict plus five-dimensional diagnostics; advisory fields never gate. | None | Run mode: `--run-id`, `--strict`, `--to`, `--json`; standalone mode: `--ledger <path> [--strict]` (`--ledger` conflicts with `--run-id`, `--to`, and `--json`) |
+| `closeout` | Gate closeout, including base readiness and non-empty-contract target/instrument requirements; update state/run-state, write handoff and changelog. | `--summary` | `--run-id`, `--next-action`, `--blocked-by`, `--allow-dirty`, `--no-changelog`, `--force` |
 | `resume` | Print an active-session capsule and detect HEAD drift. | None | `--run-id` |
-| `preflight` | Check write access, git repo status, delegate runner health, and an advisory `tool:hs` probe (present→OK, absent→INFO; never gates). | None | `--run-id`, `--record` |
+| `preflight` | Check environment health and, when an active or explicit run is selected, report a separate run-readiness result. `--json` changes output only; `--record` persists only the environment snapshot. An explicitly missing run is an error. | None | `--run-id`, `--json`, `--record` |
 | `runner` | Run a task command or dispatch prompt/job-file work through scheduler. | Mode-dependent: `--task-id --command`, `--prompt`, `--prompt-file`, or `--job-file`; `--runner tmux --command` may dispatch without `--task-id` | `--run-id`, `--kind`, `--cwd`, `--timeout`, `--touch`, `--note`, `--status-on-fail`, `--runner`, `--allow-headless-write`, `--job-id`, `--target`, `--tmux-mode`, `--sentinel`, `--tmux-session`, `--new-window`, `--new-session`, `--window-name`, `--ready-pattern`, `--skip-prompt`, `--ready-timeout`, `--tmux-bin` |
 | `judge` | Write a state verdict or run LLM judge mode over frozen evidence. | None for state mode; LLM mode requires `--brief --baseline-reply --candidate-reply --candidate-runner` | `--run-id`, `--task-id`, `--phase`, `--runner`, `--rerun-tests`, `--case-dir`, `--judge-runner`, `--execute` |
 | `hook` | Run boundary gates. | `gate` | `--force`, `--reason` |

@@ -22,6 +22,35 @@ use std::time::Duration;
 pub struct PreflightOptions {
     pub run_id: Option<String>,
     pub record: bool,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreflightRunReadiness {
+    run_id: String,
+    missing: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+struct PreflightRunOutcome {
+    run: Option<util::RunContext>,
+    record_error: Option<anyhow::Error>,
+}
+
+impl PreflightRunReadiness {
+    fn is_ready(&self) -> bool {
+        self.missing.is_empty()
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "run_id": self.run_id,
+            "ok": self.is_ready(),
+            "missing": self.missing,
+            "warnings": self.warnings,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +265,7 @@ fn is_executable(path: &Path) -> bool {
 }
 
 pub fn cmd_preflight(repo: &Path, options: PreflightOptions) -> anyhow::Result<()> {
+    let selected_run_id = select_preflight_run_id(repo, options.run_id.as_deref());
     let runners = util::KNOWN_RUNNERS
         .iter()
         .map(|runner| (*runner).to_string())
@@ -302,19 +332,205 @@ pub fn cmd_preflight(repo: &Path, options: PreflightOptions) -> anyhow::Result<(
         .filter(|check| check.get("pass").and_then(Value::as_bool).unwrap_or(false))
         .count();
     let gating_total = checks.iter().filter(|check| gating(check)).count();
-    println!(
-        "=== LTO Preflight ({}: {}/{}) ===",
-        if pass { "pass" } else { "fail" },
-        passed,
-        gating_total
+    let run = selected_run_id.and_then(|run_id| {
+        load_preflight_run(
+            repo,
+            run_id.as_deref(),
+            options.record,
+            sandbox_write,
+            pass,
+            &checks,
+        )
+    });
+    let outcome = match run {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            if options.json {
+                let report = preflight_run_error_json(
+                    &checks,
+                    pass,
+                    repo,
+                    options.run_id.as_deref(),
+                    &error,
+                );
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print_preflight_environment(&checks, pass, passed, gating_total);
+                print_preflight_run_error(
+                    &requested_preflight_run_id(repo, options.run_id.as_deref()),
+                    &error,
+                );
+                crate::commands::prune::maybe_nudge_prune(repo);
+            }
+            return Err(error);
+        }
+    };
+    let readiness = outcome.run.as_ref().map(assess_preflight_run);
+
+    if options.json {
+        let mut report = json!({
+            "environment": {
+                "ok": pass,
+                "checks": checks,
+            }
+        });
+        if let Some(readiness) = &readiness {
+            report["run_readiness"] = readiness.to_json();
+        }
+        if let Some(error) = &outcome.record_error {
+            report["record_error"] = json!(error.to_string());
+        }
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_preflight_environment(&checks, pass, passed, gating_total);
+        if let Some(readiness) = &readiness {
+            print_preflight_run_readiness(readiness);
+        }
+        // Advisory: nudge the host to reclaim disk if .lto has grown large.
+        crate::commands::prune::maybe_nudge_prune(repo);
+    }
+
+    let readiness_ok = readiness
+        .as_ref()
+        .is_none_or(PreflightRunReadiness::is_ready);
+    if let Some(error) = outcome.record_error {
+        return Err(error);
+    }
+    if pass && readiness_ok {
+        Ok(())
+    } else {
+        anyhow::bail!("preflight failed")
+    }
+}
+
+fn select_preflight_run_id(
+    repo: &Path,
+    explicit_run_id: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    if let Some(run_id) = explicit_run_id {
+        return Ok(Some(crate::state::validate_run_id(run_id)?.to_string()));
+    }
+    let current = repo.join(".lto").join("current");
+    match fs::symlink_metadata(&current) {
+        Ok(_) => util::resolve_run_id(repo, None).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("cannot inspect {}", current.display())),
+    }
+}
+
+fn load_preflight_run(
+    repo: &Path,
+    selected_run_id: Option<&str>,
+    record: bool,
+    sandbox_write: bool,
+    pass: bool,
+    checks: &[Value],
+) -> anyhow::Result<PreflightRunOutcome> {
+    let Some(run_id) = selected_run_id else {
+        return Ok(PreflightRunOutcome {
+            run: None,
+            record_error: None,
+        });
+    };
+    if !record {
+        return util::load_run(repo, Some(run_id)).map(|run| PreflightRunOutcome {
+            run: Some(run),
+            record_error: None,
+        });
+    }
+
+    let _run_lock = util::lock_existing_run(repo, run_id)?;
+    let mut ctx = util::load_run(repo, Some(run_id))?;
+    ctx.state.environment_snapshot.sandbox = if sandbox_write { "ok" } else { "fail" }.to_string();
+    ctx.state.environment_snapshot.network = "unknown".to_string();
+    ctx.state.environment_snapshot.captured_at = util::iso_now();
+    ctx.state.environment_snapshot.extra.insert(
+        "preflight_verdict".to_string(),
+        json!(if pass { "pass" } else { "fail" }),
     );
-    for check in &checks {
+    ctx.state
+        .environment_snapshot
+        .extra
+        .insert("checks".to_string(), Value::Array(checks.to_vec()));
+    let record_error = util::save_run_locked(&ctx).err();
+    Ok(PreflightRunOutcome {
+        run: Some(ctx),
+        record_error,
+    })
+}
+
+fn preflight_run_error_json(
+    checks: &[Value],
+    pass: bool,
+    repo: &Path,
+    explicit_run_id: Option<&str>,
+    error: &anyhow::Error,
+) -> Value {
+    let run_id = requested_preflight_run_id(repo, explicit_run_id);
+    json!({
+        "environment": {
+            "ok": pass,
+            "checks": checks,
+        },
+        "run_readiness": {
+            "run_id": run_id,
+            "ok": false,
+            "missing": [],
+            "warnings": [],
+            "error": error.to_string(),
+        },
+        "error": error.to_string(),
+    })
+}
+
+fn requested_preflight_run_id(repo: &Path, explicit_run_id: Option<&str>) -> String {
+    explicit_run_id
+        .map(str::to_string)
+        .or_else(|| {
+            fs::read_to_string(repo.join(".lto").join("current"))
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| "(active)".to_string())
+}
+
+fn assess_preflight_run(ctx: &util::RunContext) -> PreflightRunReadiness {
+    let base = crate::state::assess_run_readiness(
+        &ctx.state.goal,
+        &ctx.state.done_when,
+        &ctx.state.why,
+        &ctx.state.host_runtime,
+    );
+    let contract = ctx.state.delivery_contract.completeness_missing();
+    PreflightRunReadiness {
+        run_id: ctx.run_id.clone(),
+        missing: base
+            .missing
+            .into_iter()
+            .chain(contract.missing)
+            .map(str::to_string)
+            .collect(),
+        warnings: base
+            .advisory
+            .into_iter()
+            .chain(contract.advisory)
+            .map(str::to_string)
+            .collect(),
+    }
+}
+
+fn print_preflight_environment(checks: &[Value], pass: bool, passed: usize, total: usize) {
+    println!(
+        "=== LTO Preflight ({}: {passed}/{total}) ===",
+        if pass { "pass" } else { "fail" }
+    );
+    for check in checks {
         let ok = check.get("pass").and_then(Value::as_bool).unwrap_or(false);
         let advisory = check
             .get("advisory")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        // Advisory checks never read as FAIL — they are informational.
         let label = if ok {
             "OK"
         } else if advisory {
@@ -329,30 +545,26 @@ pub fn cmd_preflight(repo: &Path, options: PreflightOptions) -> anyhow::Result<(
             check.get("detail").and_then(Value::as_str).unwrap_or("")
         );
     }
-    if options.record
-        && let Ok(mut ctx) = util::load_run(repo, options.run_id.as_deref())
-    {
-        ctx.state.environment_snapshot.sandbox =
-            if sandbox_write { "ok" } else { "fail" }.to_string();
-        ctx.state.environment_snapshot.network = "unknown".to_string();
-        ctx.state.environment_snapshot.captured_at = util::iso_now();
-        ctx.state.environment_snapshot.extra.insert(
-            "preflight_verdict".to_string(),
-            json!(if pass { "pass" } else { "fail" }),
-        );
-        ctx.state
-            .environment_snapshot
-            .extra
-            .insert("checks".to_string(), Value::Array(checks));
-        util::save_run(&ctx)?;
+}
+
+fn print_preflight_run_readiness(readiness: &PreflightRunReadiness) {
+    println!(
+        "=== LTO run_readiness ({}) ===",
+        if readiness.is_ready() { "pass" } else { "fail" }
+    );
+    println!("  run_id: {}", readiness.run_id);
+    for flag in &readiness.missing {
+        println!("  MISSING {flag}");
     }
-    // Advisory: nudge the host to reclaim disk if .lto has grown large.
-    crate::commands::prune::maybe_nudge_prune(repo);
-    if pass {
-        Ok(())
-    } else {
-        anyhow::bail!("preflight failed")
+    for flag in &readiness.warnings {
+        println!("  WARN {flag}");
     }
+}
+
+fn print_preflight_run_error(run_id: &str, error: &anyhow::Error) {
+    println!("=== LTO run_readiness (fail) ===");
+    println!("  run_id: {run_id}");
+    println!("  ERROR {error}");
 }
 
 pub fn cmd_check(repo: &Path, options: CheckOptions) -> anyhow::Result<()> {
@@ -413,30 +625,37 @@ pub(crate) fn collect_check(repo: &Path, options: &CheckOptions) -> CheckOutcome
     outcome.run_id = run_id.clone();
     let run_dir = repo.join(".lto").join(&run_id);
     let state_path = run_dir.join("state.json");
+    let md_path = run_dir.join("run-state.md");
+    let state_exists = state_path.exists();
+    let md_exists = md_path.exists();
     let mut state = None;
-    if !state_path.exists() {
+    if !state_exists && !md_exists {
+        outcome.errors.push(format!(
+            "missing both {} and {}",
+            state_path.display(),
+            md_path.display()
+        ));
+    } else if !state_exists {
         outcome
             .errors
             .push(format!("missing {}", state_path.display()));
     } else {
         match crate::state::load_state(&state_path) {
             Ok(loaded) => {
-                collect_state_checks(repo, &run_dir, &loaded, options.strict, &mut outcome);
+                collect_state_checks(
+                    repo,
+                    &run_dir,
+                    &loaded,
+                    options.strict,
+                    options.to_phase.is_none(),
+                    &mut outcome,
+                );
                 state = Some(loaded);
             }
             Err(err) => outcome
                 .errors
                 .push(format!("cannot parse {}: {err}", state_path.display())),
         }
-    }
-
-    let md_path = run_dir.join("run-state.md");
-    if !md_path.exists() && !state_path.exists() {
-        outcome.errors.push(format!(
-            "missing both {} and {}",
-            state_path.display(),
-            md_path.display()
-        ));
     }
 
     let mut ledger_status = collect_ledger_check(&run_dir, options.strict, &mut outcome);
@@ -520,12 +739,16 @@ fn collect_state_checks(
     run_dir: &Path,
     state: &crate::state::LtoState,
     strict: bool,
+    include_c2_issues: bool,
     outcome: &mut CheckOutcome,
 ) {
     if !util::VALID_PHASES.contains(&state.current_phase.as_str()) {
         outcome
             .errors
             .push(format!("invalid current_phase: {}", state.current_phase));
+    }
+    if include_c2_issues {
+        collect_c2_state_checks(state, strict, outcome);
     }
     collect_git_anchor_checks(repo, state, strict, outcome);
     if dirty_outside_lto(repo) {
@@ -540,6 +763,58 @@ fn collect_state_checks(
         outcome
             .errors
             .push("closed run missing non-empty handoff.md".to_string());
+    }
+}
+
+fn collect_c2_state_checks(
+    state: &crate::state::LtoState,
+    strict: bool,
+    outcome: &mut CheckOutcome,
+) {
+    let readiness = crate::state::assess_run_readiness(
+        &state.goal,
+        &state.done_when,
+        &state.why,
+        &state.host_runtime,
+    );
+    if !readiness.missing.is_empty() {
+        push_strict_issue(
+            outcome,
+            strict,
+            format!("run readiness missing: {}", readiness.missing.join(", ")),
+        );
+    }
+    if !readiness.advisory.is_empty() {
+        outcome.warnings.push(format!(
+            "run readiness advisory: {}",
+            readiness.advisory.join(", ")
+        ));
+    }
+
+    let contract = state.delivery_contract.completeness_missing();
+    if !contract.missing.is_empty() {
+        push_strict_issue(
+            outcome,
+            strict,
+            format!(
+                "delivery contract incomplete: {}",
+                contract.missing.join(", ")
+            ),
+        );
+    }
+    if contract.present && !contract.advisory.is_empty() {
+        outcome.warnings.push(format!(
+            "delivery contract advisory: {}",
+            contract.advisory.join(", ")
+        ));
+    }
+}
+
+fn push_strict_issue(outcome: &mut CheckOutcome, strict: bool, message: String) {
+    if strict {
+        outcome.errors.push(message);
+    } else {
+        outcome.warnings.push(message);
     }
 }
 
@@ -687,6 +962,7 @@ fn phase_report(
     let open_risks = open_unverified_risks(state);
     match target {
         "implementation" => {
+            add_run_readiness_phase_checks(&mut checks, state);
             add_delivery_contract_phase_check(&mut checks, state);
             let count = unresolved.len() + open_risks.len();
             add_phase_check(
@@ -715,6 +991,7 @@ fn phase_report(
             );
         }
         "closed" => {
+            add_run_readiness_phase_checks(&mut checks, state);
             add_delivery_contract_phase_check(&mut checks, state);
             let open_tasks = util::json_array(&state.tasks)
                 .iter()
@@ -835,13 +1112,47 @@ fn phase_report(
     })
 }
 
+fn add_run_readiness_phase_checks(checks: &mut Vec<Value>, state: &crate::state::LtoState) {
+    let assessment = crate::state::assess_run_readiness(
+        &state.goal,
+        &state.done_when,
+        &state.why,
+        &state.host_runtime,
+    );
+    let detail = if assessment.missing.is_empty() {
+        "goal and done_when present".to_string()
+    } else {
+        format!("missing {}", assessment.missing.join(", "))
+    };
+    add_phase_check(
+        checks,
+        "run_readiness",
+        if assessment.is_ready() {
+            "ok"
+        } else {
+            "missing"
+        },
+        true,
+        detail,
+    );
+    if !assessment.advisory.is_empty() {
+        add_phase_check(
+            checks,
+            "run_readiness_advisory",
+            "warn",
+            false,
+            format!("advisory {}", assessment.advisory.join(", ")),
+        );
+    }
+}
+
 fn add_delivery_contract_phase_check(checks: &mut Vec<Value>, state: &crate::state::LtoState) {
     let contract = &state.delivery_contract;
-    if contract.is_empty() {
+    let assessment = contract.completeness_missing();
+    if !assessment.present {
         return;
     }
-    let missing = contract.missing_sections();
-    let detail = if missing.is_empty() {
+    let detail = if assessment.missing.is_empty() {
         format!(
             "targets={}, constraints={}, instruments={}, forced_entropy={}",
             contract.targets.len(),
@@ -850,15 +1161,28 @@ fn add_delivery_contract_phase_check(checks: &mut Vec<Value>, state: &crate::sta
             contract.forced_entropy.len()
         )
     } else {
-        format!("missing {}", missing.join(", "))
+        format!("missing {}", assessment.missing.join(", "))
     };
     add_phase_check(
         checks,
         "delivery_contract_complete",
-        if missing.is_empty() { "ok" } else { "missing" },
+        if assessment.is_complete() {
+            "ok"
+        } else {
+            "missing"
+        },
         true,
         detail,
     );
+    if !assessment.advisory.is_empty() {
+        add_phase_check(
+            checks,
+            "delivery_contract_advisory",
+            "warn",
+            false,
+            format!("advisory {}", assessment.advisory.join(", ")),
+        );
+    }
 }
 
 fn add_phase_check(
@@ -1259,7 +1583,7 @@ pub fn cmd_next(repo: &Path, options: NextOptions) -> anyhow::Result<()> {
 pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<()> {
     let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
     ctx.state.budget.turns_used = ctx.state.budget.turns_used.saturating_add(1);
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     let rollup = util::token_rollup(&ctx.state);
     let budget = budget::check_budget(
         Some(&ctx.state.budget),
@@ -1332,7 +1656,7 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
         println!("AUTOPILOT_STATUS: NEEDS_HOST");
     }
     update_autopilot_digest(&mut ctx)?;
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     Ok(())
 }
 
@@ -1452,7 +1776,7 @@ pub fn cmd_task_add(repo: &Path, options: TaskAddOptions) -> anyhow::Result<()> 
         task["planned_command"] = json!(command);
     }
     util::json_array_mut(&mut ctx.state.tasks).push(task);
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     crate::events::safe_emit(
         repo,
         &ctx.run_id,
@@ -1525,7 +1849,7 @@ pub fn cmd_task_update(repo: &Path, options: TaskUpdateOptions) -> anyhow::Resul
         .get("phase")
         .and_then(Value::as_str)
         .map(str::to_string);
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     if let Some(status) = &options.status {
         crate::events::safe_emit(
             repo,
@@ -1585,7 +1909,7 @@ pub fn cmd_phase(repo: &Path, options: PhaseOptions) -> anyhow::Result<()> {
     }
     let head = util::git_status(repo).head;
     util::append_phase_transition(&mut ctx.state, &current, &to_phase, &head);
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     crate::events::safe_emit(
         repo,
         &ctx.run_id,
@@ -1730,7 +2054,7 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
             options.task_id
         );
     }
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     let _ = crate::telemetry::save(repo, &ctx.run_id);
     println!(
         "collected {} run for task {}: status={canonical_status}",
@@ -2024,7 +2348,7 @@ fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
         ));
     }
     task["last_update"] = json!(util::iso_now());
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     crate::events::safe_emit(
         repo,
         &ctx.run_id,
@@ -2120,7 +2444,7 @@ fn cmd_state_judge(repo: &Path, options: JudgeOptions) -> anyhow::Result<()> {
         },
     )?;
     ctx.state.gates["last_reviewed_head"] = json!(head);
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     crate::events::safe_emit(
         repo,
         &ctx.run_id,
@@ -2235,7 +2559,7 @@ fn cmd_llm_judge(repo: &Path, options: JudgeOptions) -> anyhow::Result<()> {
                 )?;
                 let mut updated_ctx = ctx.clone();
                 util::append_agent_results_to_state(&mut updated_ctx.state, None, &results)?;
-                util::save_run(&updated_ctx)?;
+                util::save_run(&mut updated_ctx)?;
             }
             let Some(result) = results.first() else {
                 if let Some(ctx) = &run_ctx {
@@ -4114,6 +4438,9 @@ mod tests {
         LtoState {
             run_id: "r1".to_string(),
             goal: "ops commands".to_string(),
+            why: "exercise command behavior".to_string(),
+            done_when: "assertions pass".to_string(),
+            host_runtime: "codex".to_string(),
             current_phase: "implementation".to_string(),
             workspace: WorkspaceSnapshot {
                 head: "unknown".to_string(),
@@ -4315,6 +4642,66 @@ mod tests {
     }
 
     #[test]
+    fn collect_check_reports_missing_state_and_run_state_once() {
+        let h = Harness::new();
+        fs::create_dir_all(h.repo.join(".lto").join("broken")).unwrap();
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("broken".into()),
+                strict: false,
+                to_phase: None,
+                json: true,
+            },
+        );
+
+        assert_eq!(outcome.errors.len(), 1, "{:?}", outcome.errors);
+        assert!(outcome.errors[0].contains("missing both"));
+    }
+
+    #[test]
+    fn strict_phase_check_reports_c2_gaps_only_through_phase_evidence() {
+        let h = Harness::new();
+        h.init_git();
+        let mut state = base_state();
+        state.done_when.clear();
+        state.workspace.head = util::git_status(&h.repo).head;
+        h.write_state(state);
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("r1".into()),
+                strict: true,
+                to_phase: Some("implementation".into()),
+                json: true,
+            },
+        );
+
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|error| error.contains("phase evidence missing: run_readiness"))
+        );
+        assert!(
+            !outcome
+                .errors
+                .iter()
+                .any(|error| error.starts_with("run readiness missing:"))
+        );
+        assert_eq!(
+            outcome
+                .errors
+                .iter()
+                .filter(|error| error.contains("--done-when"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn collect_check_accepts_clean_closed_run_with_handoff() {
         let h = Harness::new();
         h.init_git();
@@ -4395,12 +4782,100 @@ mod tests {
         );
         let joined = outcome.errors.join("\n");
         assert!(joined.contains("delivery_contract_complete"));
-        assert!(joined.contains("constraints"));
+        assert!(joined.contains("--instrument"));
+        assert!(!joined.contains("--target"));
+        assert!(!joined.contains("--constraint"));
         let report = outcome.phase_report.unwrap();
         let checks = report["checks"].as_array().unwrap();
         assert!(checks.iter().any(|check| {
             check["id"] == "delivery_contract_complete" && check["status"] == "missing"
         }));
+    }
+
+    #[test]
+    fn collect_check_accepts_paired_contract_and_reports_optional_advisories() {
+        let h = Harness::new();
+        h.init_git();
+        let mut state = base_state();
+        state.workspace.head = util::git_status(&h.repo).head;
+        state.delivery_contract = DeliveryContract::new(
+            vec!["ship installable Rust wrapper".into()],
+            Vec::new(),
+            vec!["cargo test --locked --all-targets".into()],
+            Vec::new(),
+        );
+        h.write_state(state);
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("r1".into()),
+                strict: true,
+                to_phase: Some("implementation".into()),
+                json: true,
+            },
+        );
+
+        assert_eq!(outcome.errors, Vec::<String>::new());
+        let report = outcome.phase_report.unwrap();
+        let checks = report["checks"].as_array().unwrap();
+        assert!(checks.iter().any(|check| {
+            check["id"] == "delivery_contract_complete" && check["status"] == "ok"
+        }));
+        let advisory = checks
+            .iter()
+            .find(|check| check["id"] == "delivery_contract_advisory")
+            .expect("delivery contract advisory");
+        assert_eq!(advisory["status"], "warn");
+        assert_eq!(advisory["required"], false);
+        assert!(
+            advisory["detail"]
+                .as_str()
+                .unwrap()
+                .contains("--constraint")
+        );
+        assert!(
+            advisory["detail"]
+                .as_str()
+                .unwrap()
+                .contains("--entropy-check")
+        );
+    }
+
+    #[test]
+    fn collect_check_requires_base_readiness_for_implementation_and_closed() {
+        for target in ["implementation", "closed"] {
+            let h = Harness::new();
+            h.init_git();
+            let mut state = base_state();
+            state.done_when.clear();
+            state.workspace.head = util::git_status(&h.repo).head;
+            h.write_state(state);
+
+            let outcome = collect_check(
+                &h.repo,
+                &CheckOptions {
+                    run_id: Some("r1".into()),
+                    strict: true,
+                    to_phase: Some(target.into()),
+                    json: true,
+                },
+            );
+
+            let report = outcome.phase_report.unwrap();
+            let check = report["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|check| check["id"] == "run_readiness")
+                .expect("run readiness check");
+            assert_eq!(check["status"], "missing", "target={target}");
+            assert_eq!(check["required"], true, "target={target}");
+            assert!(
+                check["detail"].as_str().unwrap().contains("--done-when"),
+                "target={target}"
+            );
+        }
     }
 
     #[test]
@@ -5087,7 +5562,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
         h.write_state(state);
         let mut ctx = util::load_run(&h.repo, Some("r1")).unwrap();
         ctx.state.gates["autopilot_last_digest"] = progress_digest(&ctx);
-        util::save_run(&ctx).unwrap();
+        util::save_run(&mut ctx).unwrap();
 
         cmd_autopilot(
             &h.repo,
@@ -5453,6 +5928,56 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
         );
     }
 
+    #[test]
+    fn preflight_readiness_combines_base_contract_and_advisory_flags() {
+        let state = LtoState {
+            run_id: "r1".into(),
+            goal: "ship".into(),
+            done_when: " ".into(),
+            host_runtime: "unknown".into(),
+            delivery_contract: DeliveryContract::new(
+                vec!["unmeasured target".into()],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
+            ..LtoState::default()
+        };
+        let ctx = util::RunContext {
+            run_id: "r1".into(),
+            run_dir: PathBuf::from(".lto/r1"),
+            state_path: PathBuf::from(".lto/r1/state.json"),
+            state,
+        };
+
+        let readiness = assess_preflight_run(&ctx);
+
+        assert_eq!(readiness.missing, vec!["--done-when", "--instrument"]);
+        assert_eq!(
+            readiness.warnings,
+            vec!["--why", "--host", "--constraint", "--entropy-check"]
+        );
+        assert!(!readiness.is_ready());
+    }
+
+    #[test]
+    fn preflight_run_error_json_preserves_environment_result() {
+        let h = Harness::new();
+        let error =
+            load_preflight_run(&h.repo, Some("missing-run"), false, true, true, &[]).unwrap_err();
+        let checks = vec![json!({"name": "sandbox_write", "pass": true})];
+
+        let report = preflight_run_error_json(&checks, true, &h.repo, Some("missing-run"), &error);
+
+        assert_eq!(report["environment"]["ok"], true);
+        assert_eq!(report["environment"]["checks"], Value::Array(checks));
+        assert!(report["environment"].get("skipped").is_none());
+        assert_eq!(report["run_readiness"]["run_id"], "missing-run");
+        assert_eq!(report["run_readiness"]["ok"], false);
+        assert!(report["error"].as_str().unwrap().contains("missing-run"));
+        assert!(!h.repo.join(".lto").exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn cmd_preflight_main_path_records_environment_snapshot() {
@@ -5489,6 +6014,7 @@ printf ']'
             PreflightOptions {
                 run_id: Some("r1".into()),
                 record: true,
+                json: false,
             },
         )
         .unwrap();

@@ -164,7 +164,7 @@ bash scripts/delegate/triad.sh \
 ```markdown
 ## 长任务（>3 文件 / 跨 session / 需审计 / 要上线）
 
-开工前 `lto start --goal "…"`，跨 session 接续用 `lto resume` 拉回上下文胶囊，
+开工前 `lto start --goal "…" --done-when "…"`，跨 session 接续用 `lto resume` 拉回上下文胶囊，
 迷路时先 `lto check`。详见 long-task-orchestration skill（不必整篇读，按阶段加载）。
 ```
 

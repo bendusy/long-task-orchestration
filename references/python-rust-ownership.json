@@ -2,6 +2,7 @@
   "schema_version": 1,
   "top_level_commands": [
     {"command": "start", "owner": "rust-core", "python_role": "removed"},
+    {"command": "contract", "owner": "rust-core", "python_role": "removed"},
     {"command": "check", "owner": "rust-core", "python_role": "removed"},
     {"command": "closeout", "owner": "rust-core", "python_role": "removed"},
     {"command": "resume", "owner": "rust-core", "python_role": "removed"},

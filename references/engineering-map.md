@@ -27,7 +27,7 @@
 
 | 步 | 阶段 | 输入 | 输出 | 脚本化？ | 落点 |
 |---|---|---|---|---|---|
-| S0 | 开局 | `--goal` `--host` `--profile` | `.lto/<run-id>/` state.json + run-state.md + `current` | ✅ 全 | `lto start` |
+| S0 | 开局 | 硬必填 `--goal --done-when`；advisory `--why --host`；可选 delivery contract | `.lto/<run-id>/` state.json + run-state.md + `current` | ✅ 全 | `lto start` |
 | S1 | intake | 用户想法 / 「以后可能要 X」 | 该做 / 砍到最小版 | ❌ 判断 | SKILL §三原则·刹车1 |
 | S2 | spec | 需求 | 方案 md + 待审点清单 | ❌ 创作 | SKILL §六阶段 P2；`references/decision-logging.md` |
 | S3a | audit·派工 | 方案 md + auditors | 各 runner 的回复 md | ✅ 全 | `agent-delegate` runners |
@@ -49,11 +49,12 @@
 
 | 脚本 | 职责 | 输入 | 输出 | 运行 |
 |---|---|---|---|---|
-| `lto start` | 建状态文件（state.json + run-state.md；audit-ledger 由 `lto audit` 首轮生成；preflight 快照走 `lto preflight --record`） | `--goal --host --why --done-when` + 契约四件套 | `.lto/<run-id>/` | `lto start --goal X` |
+| `lto start` | 建状态文件；空 contract 合法，非空时 target ↔ instrument 成对，constraint/entropy-check 缺失只告警 | `--goal --done-when`（硬必填）；`--why --host`（advisory）；可选契约 | `.lto/<run-id>/` | `lto start --goal X --done-when Y` |
+| `lto contract set` | 修补 typed goal/done-when/host，追加契约字段并在写入前校验合并结果 | `[--run-id] [--goal] [--done-when] [--host] [--target] [--constraint] [--instrument [LABEL::]CMD] [--entropy-check]` | state.json + run-state.md 同步更新 | `lto contract set --goal X --done-when Y` |
 | `lto resume` | 跨 session 断点恢复 | `[--run-id]` | 上下文胶囊 + state.json 更新 | `lto resume` |
 | `lto check` | run 模式校验状态/git/phase/ledger；standalone 模式调用唯一 Rust ledger evaluator | run: `[--run-id] [--strict] [--to implementation\|closed] [--json]`；standalone: `--ledger <path> [--strict]` | 硬 verdict + 五维 diagnostics；advisory 不进 gate；rc 0/1/2 | `lto check --ledger .lto/<id>/audit-ledger.md --strict` |
 | `write_decision.py` | 生成 ADR 决策记录，更新 state.user_decisions，并登记 `decision_record` artifact | `--repo --run-id --title --context --decision --consequences [--slug]` | `docs/decisions/YYYY-MM-DD-<slug>.md` + manifest entry | `python3 scripts/write_decision.py --run-id <id> --title "..." ...` |
-| `lto preflight` | 即时探活 stdout | `[--record]` | 环境健康报告 | `lto preflight` |
+| `lto preflight` | 环境探活；active/显式 run 另算 readiness，显式 missing run 报错 | `[--run-id] [--json] [--record]` | 环境报告 + 可选 run_readiness；`--json` 只改输出，`--record` 只落环境快照 | `lto preflight --json` |
 | `lto task add` | 给当前 run 加一个 task（runner/next/audit 的操作对象） | `--task-id --title [--phase] [--command]` | state.json tasks 追加 + commands_run 记录 | `lto task add --task-id T1 --title "..."` |
 | `lto runner` | 单 task 执行+证据记录 | `--task-id --kind --command [--cwd] [--timeout]` | evidence + state.json 更新 | `lto runner --task-id T1 --kind test --command "..."` |
 | `lto judge` | 只读审查+YAML verdict | `[--phase] [--task-id] [--rerun-tests]` | `.lto/<id>/judge/*.yaml` | `lto judge --phase implementation` |

@@ -61,7 +61,7 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
     ctx.state.workspace.dirty_fingerprint = if git.dirty { "dirty" } else { "clean" }.to_string();
     ctx.state.blocked_by = json!(options.blocked_by);
     ctx.state.next_action = json!(options.next_action);
-    util::save_run(&ctx)?;
+    util::save_run(&mut ctx)?;
     crate::events::safe_emit(
         repo,
         &ctx.run_id,
@@ -155,6 +155,40 @@ fn enforce_gates(
     ctx: &util::RunContext,
     options: &CloseoutOptions,
 ) -> anyhow::Result<()> {
+    if !options.force {
+        let readiness = crate::state::assess_run_readiness(
+            &ctx.state.goal,
+            &ctx.state.done_when,
+            &ctx.state.why,
+            &ctx.state.host_runtime,
+        );
+        if !readiness.is_ready() {
+            emit_closeout_gate_blocked(
+                repo,
+                &ctx.run_id,
+                "run readiness missing",
+                json!({"missing": &readiness.missing}),
+            );
+            anyhow::bail!(
+                "closeout refused: run readiness missing {} (use --force to override)",
+                readiness.missing.join(", ")
+            );
+        }
+        let contract = ctx.state.delivery_contract.completeness_missing();
+        if !contract.is_complete() {
+            emit_closeout_gate_blocked(
+                repo,
+                &ctx.run_id,
+                "delivery contract incomplete",
+                json!({"missing": &contract.missing}),
+            );
+            anyhow::bail!(
+                "closeout refused: delivery contract incomplete: {} (use --force to override)",
+                contract.missing.join(", ")
+            );
+        }
+    }
+
     let ledger_path = ctx.run_dir.join("audit-ledger.md");
     if ledger_path.exists() && !options.force {
         let text = fs::read_to_string(&ledger_path)?;
@@ -572,6 +606,9 @@ mod tests {
         let state = LtoState {
             run_id: run_id.clone(),
             goal: "closeout gates".to_string(),
+            why: "prove closeout safety".to_string(),
+            done_when: "all closeout gates pass".to_string(),
+            host_runtime: "codex".to_string(),
             current_phase: "implementation".to_string(),
             workspace: WorkspaceSnapshot {
                 head: "abc123".to_string(),
@@ -617,6 +654,36 @@ mod tests {
         ctx.state.gates = json!({"unresolved_blocks": [{"id": "B1"}]});
         let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
         assert!(err.to_string().contains("1 unresolved blocks"));
+    }
+
+    #[test]
+    fn enforce_gates_rejects_missing_run_readiness() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.done_when.clear();
+
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+
+        assert!(err.to_string().contains("run readiness missing"));
+        assert!(err.to_string().contains("--done-when"));
+    }
+
+    #[test]
+    fn enforce_gates_rejects_optional_only_delivery_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.delivery_contract = crate::state::DeliveryContract::new(
+            Vec::new(),
+            vec!["bounded".into()],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+
+        assert!(err.to_string().contains("delivery contract incomplete"));
+        assert!(err.to_string().contains("--target"));
+        assert!(err.to_string().contains("--instrument"));
     }
 
     #[test]

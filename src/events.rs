@@ -16,6 +16,7 @@ pub const HARD_STOP_AT: usize = 50_000;
 pub const KNOWN_EVENT_TYPES: &[&str] = &[
     "run.started",
     "run.closed",
+    "contract.updated",
     "phase.changed",
     "task.created",
     "task.status_changed",

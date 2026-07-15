@@ -47,11 +47,18 @@ For `/goal`-style long deliveries, start with a delivery contract:
 
 ```bash
 lto start --goal "..." \
+  --done-when "..." \
   --target "..." \
   --constraint "..." \
-  --instrument "..." \
+  --instrument "label::command" \
   --entropy-check "..."
 ```
+
+`start` 的 `--goal` / `--done-when` 非空硬必填，`--why` / `--host` 仅告警；
+空 delivery contract 合法，非空时 `--target` 与 `--instrument [LABEL::]CMD`
+必须成对，缺 `--constraint` / `--entropy-check` 仅告警。已有 run 用
+`lto contract set` 修补（legacy 非法 instrument 用 `--replace-instrument`）。`preflight` 独立报告环境与 active/显式 run readiness；`--json`
+只改变输出格式，`--record` 只持久化环境快照，显式不存在的 `--run-id` 直接报错。
 
 ## Closeout Gate
 

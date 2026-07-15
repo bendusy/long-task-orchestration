@@ -19,18 +19,43 @@ lto start \
 # /goal 型长交付：delivery contract 四件套（target/constraint/instrument/entropy-check）
 lto start \
   --goal "提升检索召回" \
+  --done-when "hidden eval recall 达标且审计收敛" \
   --target "hidden eval recall >= 95%" \
   --constraint "wall clock <= 4h" \
-  --instrument "python3 eval/search_recall.py --hidden" \
+  --instrument "hidden-eval::python3 eval/search_recall.py --hidden" \
   --entropy-check "on stall, change hypothesis and log overfit reflection"
 ```
 
 参数真源是 `lto start --help`（`src/cli.rs` `Start`）：`--run-id/--goal/--why/--done-when/
 --host/--target/--constraint/--instrument/--entropy-check/--force`。
-`--why` / `--done-when` feed `recap`'s human-facing view. `audit-ledger.md` is
-created by the first `lto audit` dispatch round (not by `start`); preflight
-environment snapshots are recorded via `lto preflight --record`. Boundary gates
-run on demand via `lto hook <gate>`（见 `hooks.md`，不写入 `.git/hooks`）。
+
+- `--goal` 与 `--done-when` 必须提供非空值；缺失时在任何 `.lto` 写入前硬失败。
+- `--why` 与 `--host` 是 advisory；缺失会告警，缺失 host 按 `unknown` 记录。
+- 四个 contract section 全空是合法 ordinary run。一旦任一 section 非空，
+  `--target` 与 `--instrument` 必须同时非空，否则硬失败；`--constraint` 与
+  `--entropy-check` 缺失只产生可选完善告警。
+- Instrument 语法是 `[LABEL::]CMD`，`CMD` 必须非空；没有 `::` 时整个值就是命令。
+
+已有 run 通过 typed mutation 入口修补，不要直接编辑 `state.json`：
+
+```bash
+lto contract set --run-id <run-id> \
+  --goal "repaired goal" \
+  --done-when "repaired acceptance" \
+  --host codex \
+  --target "hidden eval recall >= 95%" \
+  --instrument "hidden-eval::python3 eval/search_recall.py --hidden"
+```
+
+`contract set` 替换 goal/done-when/host，重复参数追加 delivery fields，并在任何
+写入前校验合并后的 readiness 与 target ↔ instrument 配对关系。`audit-ledger.md`
+由首轮 `lto audit` 派工创建（不是 `start`）；boundary gates 按需通过
+`lto hook <gate>` 运行（见 `hooks.md`，不写入 `.git/hooks`）。
+
+若 legacy state 已含 `label::` 这类没有命令的非法 instrument，用重复的
+`--replace-instrument "label::command"` 显式替换全部 instruments；它与追加型
+`--instrument` 互斥。成功结果会同步 `state.json`、`run-state.md` 和
+`contract.updated` event；后置持久化失败时回滚 state/run-state，不留下可重复追加的部分提交。
 
 Before entering implementation or optimization, record four evidence lines in
 `run-state.md` or task evidence:
@@ -58,13 +83,15 @@ but those flags/subcommands are not part of the current Rust CLI.
 When the target repo is not current directory, pass `--repo` before the command:
 
 ```bash
-lto --repo /path/to/target/repo start --goal "short task goal" --host codex
+lto --repo /path/to/target/repo start \
+  --goal "short task goal" --done-when "acceptance criteria" --host codex
 ```
 
 After `bash scripts/install.sh`, the global wrapper is shorter:
 
 ```bash
-lto --repo /path/to/target/repo start --goal "short task goal" --host codex
+lto --repo /path/to/target/repo start \
+  --goal "short task goal" --done-when "acceptance criteria" --host codex
 lto --repo /path/to/target/repo check
 ```
 
@@ -153,12 +180,25 @@ local files win.
 
 ## Preflight
 
-Probe environment health (stdout only, no file):
+Environment health is always evaluated. With an active run, or an explicit
+`--run-id`, preflight also emits a separate `run_readiness` result for hard
+goal/done-when requirements and target ↔ instrument pairing, plus advisory
+why/host/constraint/entropy-check gaps. An explicitly selected missing run is an
+error after the environment result has been evaluated and emitted; with no explicit
+or active run, output remains environment-only.
 
 ```bash
-lto preflight
-lto preflight --record  # also write to state.json
+lto preflight                         # environment + active run readiness, if any
+lto preflight --run-id <run-id>       # environment + this run's readiness
+lto preflight --json                  # output shape only; no persistence side effect
+lto preflight --record                # persist environment snapshot only
+lto preflight --json --record         # the two flags remain independent
 ```
+
+`--record` never turns readiness into persisted state and does not control whether
+readiness is reported. Conversely, `--json` changes serialization only. If snapshot
+persistence fails, JSON still contains the evaluated environment/readiness sections,
+adds top-level `record_error`, and exits nonzero.
 
 ## Runner
 
@@ -245,13 +285,17 @@ Targets covered in this first version:
 
 | Target | Required evidence under `--strict` | Advisory evidence |
 |---|---|---|
-| `implementation` | no unresolved gate blocks or open unverified risks; filled audit ledger is `CONVERGED` when present | task list present, phase direction |
-| `closed` | no open tasks (`status` not in `done`/`skipped`); no unresolved gate blocks; risk points verified or closed; filled audit ledger is `CONVERGED` when present | artifact manifest, handoff if already closed, phase direction |
+| `implementation` | base `run_readiness` (`goal` + `done_when`); target ↔ instrument pairing when a contract is present; no unresolved gate blocks or open unverified risks; filled audit ledger is `CONVERGED` when present | why/host and constraint/entropy-check gaps, task list present, phase direction |
+| `closed` | base `run_readiness`; target ↔ instrument pairing when a contract is present; no open tasks (`status` not in `done`/`skipped`); no unresolved gate blocks; risk points verified or closed; filled audit ledger is `CONVERGED` when present | why/host and constraint/entropy-check gaps, artifact manifest, handoff if already closed, phase direction |
 
 Default mode reports missing phase evidence but keeps rc 0 when the base
 `check` passes. `--strict` upgrades missing required evidence to rc 1.
 `--json` prints one JSON object to stdout and suppresses text/WARN output so
 other host runtimes can parse it directly.
+
+Even without `--to`, run-mode `check --strict` enforces base readiness and the
+non-empty-contract target/instrument requirements. `closeout` repeats those hard
+checks before archival so legacy or externally edited state cannot bypass C2.
 
 The four development evidence lines and four closure evidence lines are host
 contracts today. Rust `check` enforces the machine-verifiable gates; record the
