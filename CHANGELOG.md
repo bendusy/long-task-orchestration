@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **新增 C4 autonomous 可观性子检查**：现有 `autonomous_gate` 同时输出结构化 `operational_reliability` 与 `current_run_observability`；当前 run 缺 goal/done_when/instrument 时为 `missing`，只有声明无关联 evidence 时为 `signal_declared`，两者都 `NEEDS_CONFIRM` 早退且不执行，结构化 `instrument_ref` 或 legacy 归一命令关联后才为 `observable_verified`。
+- **补齐 instrument evidence 通道**：`task add` 与 command-mode `runner` 新增 `--instrument-ref`；task 引用可由 runner 继承，runner 命令与 `[LABEL::]CMD` 归一匹配时自动写稳定 label/hash，未知引用在执行前拒绝。
+- **修复 autonomous 历史永久污染**：reliability 按 runner/model/task type 取最近 20 条完成记录；样本不少于 5 时失败率达到 50% 才阻断，冷启动仅连续 3 败阻断、连续 2 败只 WARN，单次旧 timeout/rate-limit 不再永久锁死。跨 run 聚合统一使用 `distinct_runs`，旧 `dispatches` JSON 可兼容读取。
 - **新增 C2 信息不足禁猜闸门**：`lto start` 在任何写盘前要求非空 `--goal`/`--done-when`；delivery contract 保持全空兼容，但非空时强制 `--target` 与可执行 `--instrument` 成对，`--constraint`/`--entropy-check` 仅 advisory。
 - **新增 typed contract 修补与并发保护**：`lto contract set` 可修正 goal/done-when/host、追加交付字段并用 `--replace-instrument` 修复 legacy 非法 instrument；所有 run writer 共用锁并保留磁盘最新 C2 字段，失败更新回滚 state/run-state，缺失 run-state 可由内置模板重建。
 - **贯通 preflight/check/closeout**：preflight 文本/JSON 始终先报告环境，并独立报告显式或 active run readiness；bare strict check、phase gate 与 closeout 复用同一分级判定，legacy fixture 和并发 subprocess 回归覆盖保持通过。

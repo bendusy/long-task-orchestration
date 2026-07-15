@@ -373,20 +373,20 @@ fn truncate(value: &str, max_chars: usize) -> String {
 }
 
 pub fn recap_mine(repo: &Path) -> anyhow::Result<()> {
-    let mining = crate::telemetry::cross_run_mining(repo)?;
-    println!("{}", render_mining_brief(&mining));
+    let evidence = crate::telemetry::cross_run_evidence(repo)?;
+    println!("{}", render_evidence_brief(&evidence));
     Ok(())
 }
 
-fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
+fn render_evidence_brief(evidence: &crate::telemetry::CrossRunEvidence) -> String {
     let mut lines = vec![
         "=== LTO Cross-Run Tuning Brief ===".to_string(),
         "只读分析：不写配置、不改 runner 优先级、不自动 route/promote。".to_string(),
-        format!("runs_scanned: {}", mining.run_count),
+        format!("runs_scanned: {}", evidence.run_count),
         String::new(),
     ];
-    if mining.entries.is_empty() {
-        lines.push("未发现可挖掘的 runner.finished 或 agent.dispatch.completed 事件。".to_string());
+    if evidence.entries.is_empty() {
+        lines.push("未发现可用的 runner.finished 或 agent.dispatch.completed 事件。".to_string());
         return lines.join("\n");
     }
     lines.push("| Runner | Model | 任务类型 | 时间窗 | distinct runs | 失败率 | 平均耗时 | 平均 retry | 平均 audit 轮次 | dispatch.completed | 评估类型 |".to_string());
@@ -394,7 +394,7 @@ fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
         "| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |"
             .to_string(),
     );
-    for entry in &mining.entries {
+    for entry in &evidence.entries {
         lines.push(format!(
             "| {} | {} | {} | {} | {} | {:.1}% | {} | {} | {} | {} | {} |",
             entry.runner,
@@ -417,7 +417,7 @@ fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
     lines.push(String::new());
     lines.push("=== 派生信号 ===".to_string());
     let mut emitted = false;
-    for entry in &mining.entries {
+    for entry in &evidence.entries {
         let rate = failure_rate(entry);
         if rate >= 0.3 && entry.distinct_runs >= 3 {
             emitted = true;
@@ -446,7 +446,7 @@ fn render_mining_brief(mining: &crate::telemetry::CrossRunMining) -> String {
     lines.join("\n")
 }
 
-fn failure_rate(entry: &crate::telemetry::CrossRunMiningEntry) -> f64 {
+fn failure_rate(entry: &crate::telemetry::CrossRunEvidenceEntry) -> f64 {
     if entry.distinct_runs == 0 {
         0.0
     } else {
@@ -531,15 +531,14 @@ mod tests {
     }
 
     #[test]
-    fn render_mining_brief_is_readonly_and_includes_completed_counts() {
-        let brief = render_mining_brief(&crate::telemetry::CrossRunMining {
+    fn render_evidence_brief_is_readonly_and_includes_completed_counts() {
+        let brief = render_evidence_brief(&crate::telemetry::CrossRunEvidence {
             run_count: 2,
-            entries: vec![crate::telemetry::CrossRunMiningEntry {
+            entries: vec![crate::telemetry::CrossRunEvidenceEntry {
                 runner: "pi".to_string(),
                 model: "deepseek-v4-pro".to_string(),
                 task_type: "implementation".to_string(),
                 time_window: "2026-06-17".to_string(),
-                dispatches: 2,
                 ok: 1,
                 failed: 1,
                 timeout: 0,
@@ -551,6 +550,7 @@ mod tests {
                 agent_dispatch_completed: 2,
                 distinct_runs: 2,
                 subjective_non_measurement: false,
+                recent_completions: Vec::new(),
             }],
         });
 

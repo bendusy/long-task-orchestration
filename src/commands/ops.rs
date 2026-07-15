@@ -90,6 +90,7 @@ pub struct RunnerOptions {
     pub timeout: u64,
     pub touch: Vec<String>,
     pub note: Option<String>,
+    pub instrument_ref: Option<String>,
     pub status_on_fail: String,
     pub runner: String,
     pub allow_headless_write: bool,
@@ -176,6 +177,7 @@ pub struct TaskAddOptions {
     pub title: String,
     pub phase: Option<String>,
     pub command: Option<String>,
+    pub instrument_ref: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1599,11 +1601,49 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
         return Ok(());
     }
     if options.autonomous {
-        let (ok, reason) = autonomous_gate(repo);
+        let report = autonomous_gate(repo, &ctx.state);
         println!("# LTO Autopilot -- autonomous");
-        println!("  evidence gate: {}", if ok { "PASS" } else { "BLOCKED" });
-        println!("  reason: {reason}");
-        if !ok {
+        println!(
+            "  operational_reliability: {}",
+            if report.operational_reliability.passes() {
+                "PASS"
+            } else {
+                "FAIL"
+            }
+        );
+        println!("    reason: {}", report.operational_reliability.reason);
+        for warning in &report.operational_reliability.warnings {
+            println!("    WARN {warning}");
+        }
+        println!(
+            "  current_run_observability: {}",
+            serde_json::to_value(report.current_run_observability.status)?
+                .as_str()
+                .unwrap_or("missing")
+        );
+        println!("    reason: {}", report.current_run_observability.reason);
+        match report.current_run_observability.status {
+            crate::run_observability::ObservabilityStatus::SignalDeclared => {
+                println!(
+                    "  已声明未证实: {}",
+                    report.current_run_observability.reason
+                );
+                println!(
+                    "  missing evidence: {}",
+                    report.current_run_observability.missing.join(", ")
+                );
+            }
+            crate::run_observability::ObservabilityStatus::Missing => {
+                println!(
+                    "  missing: {}",
+                    report.current_run_observability.missing.join(", ")
+                );
+            }
+            crate::run_observability::ObservabilityStatus::ObservableVerified => {}
+        }
+        println!("  gate_report: {}", serde_json::to_string(&report)?);
+        if !report.passes() {
+            println!("  fallback: supervised");
             println!("AUTOPILOT_STATUS: NEEDS_CONFIRM");
             return Ok(());
         }
@@ -1757,6 +1797,16 @@ pub fn cmd_task_add(repo: &Path, options: TaskAddOptions) -> anyhow::Result<()> 
         .clone()
         .unwrap_or_else(|| ctx.state.current_phase.clone());
     ensure_valid_phase(&phase)?;
+    let instrument_ref = options
+        .instrument_ref
+        .as_deref()
+        .map(|reference| {
+            crate::run_observability::validate_instrument_ref(
+                &ctx.state.delivery_contract,
+                reference,
+            )
+        })
+        .transpose()?;
     let mut task = json!({
         "id": options.task_id,
         "title": options.title,
@@ -1774,6 +1824,9 @@ pub fn cmd_task_add(repo: &Path, options: TaskAddOptions) -> anyhow::Result<()> 
     });
     if let Some(command) = options.command {
         task["planned_command"] = json!(command);
+    }
+    if let Some(instrument_ref) = instrument_ref {
+        task["instrument_ref"] = json!(instrument_ref);
     }
     util::json_array_mut(&mut ctx.state.tasks).push(task);
     util::save_run(&mut ctx)?;
@@ -2023,7 +2076,7 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
     // Emit event BEFORE saving state. If safe_emit fails (events.lock timeout,
     // hard-stop reached, disk full, etc.), bail before state is written. This
     // prevents permanent divergence between state.agent_runs (read by
-    // autonomous_gate) and events.jsonl (read by cross_run_mining).
+    // autonomous_gate) and events.jsonl (read by cross_run_evidence).
     // safe_emit remains fail-closed (⑫) — the caller now reacts instead of
     // silently ignoring the failure.
     let emitted = crate::events::safe_emit(
@@ -2304,13 +2357,23 @@ fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
         .clone();
     ensure_valid_kind(&options.kind)?;
     let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
+    let inherited_ref = find_task_mut(&mut ctx.state.tasks, &task_id)?
+        .get("instrument_ref")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let instrument_ref = crate::run_observability::resolve_instrument_ref(
+        &ctx.state.delivery_contract,
+        options.instrument_ref.as_deref(),
+        inherited_ref.as_deref(),
+        &command,
+    )?;
     let task = find_task_mut(&mut ctx.state.tasks, &task_id)?;
     let cwd = options.cwd.as_deref().unwrap_or(repo);
     let head_before = util::git_status(repo).head;
     let (rc, stdout, stderr, elapsed) =
         util::run_command_capture(repo, &command, Some(cwd), options.timeout)?;
     let head_after = util::git_status(repo).head;
-    let evidence = json!({
+    let mut evidence = json!({
         "kind": options.kind,
         "command": command,
         "cwd": cwd.display().to_string(),
@@ -2325,6 +2388,9 @@ fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
         "stderr_tail": tail_lines(&stderr, 20),
         "elapsed_sec": elapsed,
     });
+    if let Some(instrument_ref) = &instrument_ref {
+        evidence["instrument_ref"] = json!(instrument_ref);
+    }
     util::append_to_object_array(task, "evidence", evidence.clone());
     append_unique_strings(task, "touched_files", &options.touch);
     append_string(task, "commands_run", &command);
@@ -2361,14 +2427,20 @@ fn run_task_command(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
             object_id: Some(task_id.clone()),
             object_type: Some("task".to_string()),
             summary: format!("{} rc={rc}", options.kind),
-            fields: json!({
+            fields: {
+                let mut fields = json!({
                 "kind": options.kind,
                 "command_hash": format!("{:x}", sha2::Sha256::digest(command.as_bytes())),
                 "rc": rc,
                 "status": if rc == 0 { "ok" } else if rc == 124 { "timeout" } else { "failed" },
                 "elapsed_sec": elapsed,
                 "timeout": rc == 124,
-            }),
+                });
+                if let Some(instrument_ref) = &instrument_ref {
+                    fields["instrument_ref"] = json!(instrument_ref);
+                }
+                fields
+            },
             ..crate::events::EventRecord::default()
         },
     );
@@ -3552,16 +3624,29 @@ fn json_u64_field(value: &Value, key: &str) -> u64 {
 
 const AUTONOMOUS_MIN_AGENT_RUNS: u64 = 5;
 const AUTONOMOUS_MIN_AGENT_RESULTS: u64 = 10;
-const AUTONOMOUS_MIN_MINING_RUNS: usize = 5;
-const AUTONOMOUS_MIN_MINING_DISPATCHES: usize = 10;
-const AUTONOMOUS_HIGH_FAILURE_RATE: f64 = 0.5;
-const AUTONOMOUS_HIGH_FAILURE_MIN_RUNS: usize = 3;
+const AUTONOMOUS_MIN_EVIDENCE_RUNS: usize = 5;
+const AUTONOMOUS_MIN_EVIDENCE_RUNS_SUM: usize = 10;
+const AUTONOMOUS_RECENT_COMPLETIONS: usize = 20;
+const AUTONOMOUS_FAILURE_RATE_MIN_SAMPLES: usize = 5;
+const AUTONOMOUS_FAILURE_RATE_LIMIT: f64 = 0.5;
+const AUTONOMOUS_COLD_FAILURE_STREAK: usize = 3;
+const AUTONOMOUS_FAILURE_WARNING_STREAK: usize = 2;
 
-fn autonomous_gate(repo: &Path) -> (bool, String) {
+fn autonomous_gate(
+    repo: &Path,
+    state: &crate::state::LtoState,
+) -> crate::autonomous_gate::GateReport {
+    crate::autonomous_gate::GateReport {
+        operational_reliability: operational_reliability(repo),
+        current_run_observability: crate::run_observability::assess(state),
+    }
+}
+
+fn operational_reliability(repo: &Path) -> crate::autonomous_gate::ReliabilityReport {
     let mut runs = 0_u64;
     let mut results = 0_u64;
     let Ok(entries) = fs::read_dir(repo.join(".lto")) else {
-        return (false, "no .lto directory".to_string());
+        return crate::autonomous_gate::ReliabilityReport::fail("no .lto directory");
     };
     for entry in entries.flatten() {
         let path = entry.path().join("state.json");
@@ -3577,84 +3662,62 @@ fn autonomous_gate(repo: &Path) -> (bool, String) {
         }
     }
     if runs < AUTONOMOUS_MIN_AGENT_RUNS || results < AUTONOMOUS_MIN_AGENT_RESULTS {
-        return (
-            false,
-            format!(
-                "autonomous requires >={AUTONOMOUS_MIN_AGENT_RUNS} real agent-run runs and >={AUTONOMOUS_MIN_AGENT_RESULTS} results; current {runs}/{results}"
-            ),
-        );
+        return crate::autonomous_gate::ReliabilityReport::fail(format!(
+            "autonomous requires >={AUTONOMOUS_MIN_AGENT_RUNS} real agent-run runs and >={AUTONOMOUS_MIN_AGENT_RESULTS} results; current {runs}/{results}"
+        ));
     }
-    let mining = match crate::telemetry::cross_run_mining(repo) {
-        Ok(mining) => mining,
-        Err(err) => return (false, format!("cross-run mining unavailable: {err}")),
+    let evidence = match crate::telemetry::cross_run_evidence(repo) {
+        Ok(evidence) => evidence,
+        Err(err) => {
+            return crate::autonomous_gate::ReliabilityReport::fail(format!(
+                "cross-run evidence unavailable: {err}"
+            ));
+        }
     };
-    if mining.entries.is_empty() {
-        return (
-            false,
-            "cross-run mining has no runner.finished or agent.dispatch.completed entries"
-                .to_string(),
+    if evidence.entries.is_empty() {
+        return crate::autonomous_gate::ReliabilityReport::fail(
+            "cross-run evidence has no runner.finished or agent.dispatch.completed entries",
         );
     }
-    let mining_dispatches = mining
+    let evidence_distinct_runs = evidence
         .entries
         .iter()
         .map(|entry| entry.distinct_runs)
         .sum::<usize>();
-    if mining.run_count < AUTONOMOUS_MIN_MINING_RUNS
-        || mining_dispatches < AUTONOMOUS_MIN_MINING_DISPATCHES
+    if evidence.run_count < AUTONOMOUS_MIN_EVIDENCE_RUNS
+        || evidence_distinct_runs < AUTONOMOUS_MIN_EVIDENCE_RUNS_SUM
     {
-        return (
-            false,
-            format!(
-                "autonomous requires mining evidence >={AUTONOMOUS_MIN_MINING_RUNS} runs and >={AUTONOMOUS_MIN_MINING_DISPATCHES} dispatches; current {}/{}",
-                mining.run_count, mining_dispatches
-            ),
-        );
+        return crate::autonomous_gate::ReliabilityReport::fail(format!(
+            "autonomous requires cross-run evidence >={AUTONOMOUS_MIN_EVIDENCE_RUNS} runs and >={AUTONOMOUS_MIN_EVIDENCE_RUNS_SUM} distinct-runs sum; current {}/{}",
+            evidence.run_count, evidence_distinct_runs
+        ));
     }
-    if mining
+    if evidence
         .entries
         .iter()
         .all(|entry| entry.subjective_non_measurement)
     {
-        return (
-            false,
-            "cross-run mining evidence is only subjective/non-measurement runs".to_string(),
+        return crate::autonomous_gate::ReliabilityReport::fail(
+            "cross-run evidence is only subjective/non-measurement runs",
         );
     }
-    if let Some(entry) = mining
-        .entries
-        .iter()
-        .find(|entry| entry.timeout > 0 || entry.rate_limited > 0)
-    {
-        return (
-            false,
-            format!(
-                "cross-run mining risk for {}/{}: timeout={} rate_limited={}",
-                entry.runner, entry.model, entry.timeout, entry.rate_limited
-            ),
-        );
+    let recent = crate::autonomous_gate::assess_recent_reliability(
+        &evidence,
+        AUTONOMOUS_RECENT_COMPLETIONS,
+        AUTONOMOUS_FAILURE_RATE_MIN_SAMPLES,
+        AUTONOMOUS_FAILURE_RATE_LIMIT,
+        AUTONOMOUS_COLD_FAILURE_STREAK,
+        AUTONOMOUS_FAILURE_WARNING_STREAK,
+    );
+    if let Some(failure) = recent.failure {
+        return crate::autonomous_gate::ReliabilityReport::fail(failure);
     }
-    if let Some(entry) = mining.entries.iter().find(|entry| {
-        entry.distinct_runs >= AUTONOMOUS_HIGH_FAILURE_MIN_RUNS
-            && (entry.failed as f64 / entry.distinct_runs as f64) >= AUTONOMOUS_HIGH_FAILURE_RATE
-    }) {
-        return (
-            false,
-            format!(
-                "cross-run mining risk for {}/{}: failure_rate={:.1}% over {} dispatches",
-                entry.runner,
-                entry.model,
-                (entry.failed as f64 / entry.distinct_runs as f64) * 100.0,
-                entry.distinct_runs
-            ),
-        );
-    }
-    (
-        true,
+    crate::autonomous_gate::ReliabilityReport::pass(
         format!(
-            "{runs} state-agent-run runs / {results} results; mining runs={} dispatches={mining_dispatches}",
-            mining.run_count
+            "{runs} state-agent-run runs / {results} results; evidence runs={} distinct-runs sum={evidence_distinct_runs}",
+            evidence.run_count
         ),
+        recent.warnings,
     )
 }
 
@@ -3858,6 +3921,7 @@ fn run_many_task_commands(repo: &Path, options: ParallelOptions) -> anyhow::Resu
             timeout: options.timeout,
             touch: Vec::new(),
             note: None,
+            instrument_ref: None,
             status_on_fail: "blocked".to_string(),
             runner: "codex".to_string(),
             allow_headless_write: false,
@@ -3930,6 +3994,7 @@ fn run_pipeline_task_commands(repo: &Path, options: PipelineOptions) -> anyhow::
                 timeout: options.timeout,
                 touch: Vec::new(),
                 note: Some(format!("stage {idx}")),
+                instrument_ref: None,
                 status_on_fail: "blocked".to_string(),
                 runner: "codex".to_string(),
                 allow_headless_write: false,
@@ -4466,6 +4531,7 @@ mod tests {
                 title: "write tests".into(),
                 phase: Some("implementation".into()),
                 command: Some("cargo test".into()),
+                instrument_ref: None,
             },
         )
         .unwrap();
@@ -4484,6 +4550,7 @@ mod tests {
                 title: "duplicate".into(),
                 phase: None,
                 command: None,
+                instrument_ref: None,
             },
         )
         .unwrap_err();
@@ -4502,6 +4569,7 @@ mod tests {
                 title: "run once".into(),
                 phase: Some("implementation".into()),
                 command: Some("true".into()),
+                instrument_ref: None,
             },
         )
         .unwrap();
@@ -4516,6 +4584,7 @@ mod tests {
                 timeout: 5,
                 touch: Vec::new(),
                 note: None,
+                instrument_ref: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
                 allow_headless_write: false,
@@ -4544,6 +4613,103 @@ mod tests {
     }
 
     #[test]
+    fn task_add_accepts_only_current_contract_instrument_refs() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.delivery_contract = DeliveryContract::new(
+            vec!["tests".into()],
+            vec![],
+            vec!["tests::printf ok".into()],
+            vec![],
+        );
+        h.write_state(state);
+
+        cmd_task_add(
+            &h.repo,
+            TaskAddOptions {
+                run_id: Some("r1".into()),
+                task_id: "T1".into(),
+                title: "run tests".into(),
+                phase: Some("implementation".into()),
+                command: Some("printf ok".into()),
+                instrument_ref: Some("tests".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(h.state().tasks[0]["instrument_ref"], "tests");
+
+        let err = cmd_task_add(
+            &h.repo,
+            TaskAddOptions {
+                run_id: Some("r1".into()),
+                task_id: "T2".into(),
+                title: "unknown signal".into(),
+                phase: Some("implementation".into()),
+                command: None,
+                instrument_ref: Some("unknown".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn runner_auto_links_matching_contract_command_in_evidence() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.delivery_contract = DeliveryContract::new(
+            vec!["tests".into()],
+            vec![],
+            vec!["tests::printf ok".into()],
+            vec![],
+        );
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "commands_run": [],
+            "evidence": [],
+            "blockers": []
+        }]);
+        h.write_state(state);
+
+        cmd_runner(
+            &h.repo,
+            RunnerOptions {
+                run_id: Some("r1".into()),
+                task_id: Some("T1".into()),
+                kind: "test".into(),
+                command: Some("printf \"ok\"".into()),
+                cwd: None,
+                timeout: 5,
+                touch: Vec::new(),
+                note: None,
+                instrument_ref: None,
+                status_on_fail: "blocked".into(),
+                runner: "codex".into(),
+                allow_headless_write: false,
+                prompt: None,
+                prompt_file: None,
+                job_file: None,
+                job_id: None,
+                tmux_target: None,
+                tmux_mode: None,
+                tmux_sentinel: None,
+                tmux_session: None,
+                tmux_new_window: false,
+                tmux_new_session: false,
+                tmux_window_name: None,
+                tmux_ready_patterns: Vec::new(),
+                tmux_skip_prompts: Vec::new(),
+                tmux_ready_timeout_sec: None,
+                tmux_bin: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(h.state().tasks[0]["evidence"][0]["instrument_ref"], "tests");
+    }
+
+    #[test]
     fn task_command_falls_back_to_planned_command_before_any_run() {
         let h = Harness::new();
         h.write_state(base_state());
@@ -4555,6 +4721,7 @@ mod tests {
                 title: "not yet run".into(),
                 phase: Some("implementation".into()),
                 command: Some("echo hi".into()),
+                instrument_ref: None,
             },
         )
         .unwrap();
@@ -4936,6 +5103,7 @@ mod tests {
                     timeout: 5,
                     touch: Vec::new(),
                     note: None,
+                    instrument_ref: None,
                     status_on_fail: "blocked".into(),
                     runner: "codex".into(),
                     allow_headless_write: false,
@@ -4993,6 +5161,7 @@ mod tests {
                 timeout: 5,
                 touch: Vec::new(),
                 note: None,
+                instrument_ref: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
                 allow_headless_write: false,
@@ -5043,6 +5212,7 @@ mod tests {
                 timeout: 5,
                 touch: Vec::new(),
                 note: None,
+                instrument_ref: None,
                 status_on_fail: "blocked".into(),
                 runner: "tmux".into(),
                 allow_headless_write: false,
@@ -5265,6 +5435,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 timeout: 5,
                 touch: Vec::new(),
                 note: None,
+                instrument_ref: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
                 allow_headless_write: false,
@@ -5317,6 +5488,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
             timeout: 5,
             touch: Vec::new(),
             note: None,
+            instrument_ref: None,
             status_on_fail: "blocked".into(),
             runner: "codex".into(),
             allow_headless_write: false,
@@ -5368,6 +5540,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 timeout: 5,
                 touch: Vec::new(),
                 note: None,
+                instrument_ref: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
                 allow_headless_write: false,
@@ -5661,7 +5834,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 run_id,
                 crate::events::EventRecord {
                     event_type: "decision.voted".to_string(),
-                    actor_kind: "judge".to_string(),
+                    actor_kind: "auditor".to_string(),
                     actor_id: Some("codex".to_string()),
                     summary: "subjective vote".to_string(),
                     ..crate::events::EventRecord::default()
@@ -5689,16 +5862,18 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
     }
 
     #[test]
-    fn autonomous_gate_blocks_when_mining_data_is_missing() {
+    fn autonomous_gate_blocks_when_evidence_data_is_missing() {
         let h = Harness::new();
         for index in 0..5 {
             write_gate_count_only_run(&h, &format!("r{index}"));
         }
 
-        let (ok, reason) = autonomous_gate(&h.repo);
+        let report = operational_reliability(&h.repo);
+        let ok = report.passes();
+        let reason = report.reason;
 
         assert!(!ok);
-        assert!(reason.contains("cross-run mining has no"));
+        assert!(reason.contains("cross-run evidence has no"));
     }
 
     #[test]
@@ -5709,14 +5884,16 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
             write_autonomous_gate_run(&h, &format!("r{index}"), status, "ok", false);
         }
 
-        let (ok, reason) = autonomous_gate(&h.repo);
+        let report = operational_reliability(&h.repo);
+        let ok = report.passes();
+        let reason = report.reason;
 
         assert!(!ok);
         assert!(reason.contains("failure_rate=60.0%"), "{reason}");
     }
 
     #[test]
-    fn autonomous_gate_blocks_timeout_or_rate_limited_signal() {
+    fn autonomous_gate_does_not_block_one_old_timeout_or_rate_limit() {
         let h = Harness::new();
         for index in 0..5 {
             let first = if index == 0 { "rate_limited" } else { "ok" };
@@ -5724,45 +5901,106 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
             write_autonomous_gate_run(&h, &format!("r{index}"), first, second, false);
         }
 
-        let (ok, reason) = autonomous_gate(&h.repo);
+        let report = operational_reliability(&h.repo);
+        let ok = report.passes();
+        let reason = report.reason;
 
-        assert!(!ok);
-        assert!(reason.contains("timeout="), "{reason}");
-        assert!(reason.contains("rate_limited="), "{reason}");
+        assert!(ok, "{reason}");
     }
 
     #[test]
-    fn autonomous_gate_blocks_when_only_one_run_has_mining_evidence() {
+    fn autonomous_gate_blocks_when_only_one_run_has_evidence() {
         let h = Harness::new();
         write_autonomous_gate_run(&h, "r0", "ok", "ok", false);
         for index in 1..5 {
             write_gate_count_only_run(&h, &format!("r{index}"));
         }
 
-        let (ok, reason) = autonomous_gate(&h.repo);
+        let report = operational_reliability(&h.repo);
+        let ok = report.passes();
+        let reason = report.reason;
 
         assert!(!ok);
         assert!(
-            reason.contains("mining evidence >=5 runs and >=10 dispatches"),
+            reason.contains("cross-run evidence >=5 runs and >=10 distinct-runs sum"),
             "{reason}"
         );
         assert!(reason.contains("current 1/2"), "{reason}");
     }
 
     #[test]
-    fn autonomous_gate_passes_with_counts_and_clean_objective_mining() {
+    fn autonomous_gate_passes_with_counts_and_clean_objective_evidence() {
         let h = Harness::new();
         for index in 0..5 {
             write_autonomous_gate_run(&h, &format!("r{index}"), "ok", "ok", false);
         }
         let before = fs::read_to_string(h.repo.join(".lto").join("r0").join("state.json")).unwrap();
 
-        let (ok, reason) = autonomous_gate(&h.repo);
+        let report = operational_reliability(&h.repo);
+        let ok = report.passes();
+        let reason = report.reason;
 
         assert!(ok, "{reason}");
-        assert!(reason.contains("mining runs=5 dispatches=10"), "{reason}");
+        assert!(
+            reason.contains("evidence runs=5 distinct-runs sum=10"),
+            "{reason}"
+        );
         let after = fs::read_to_string(h.repo.join(".lto").join("r0").join("state.json")).unwrap();
         assert_eq!(before, after, "autonomous_gate must stay read-only");
+    }
+
+    #[test]
+    fn autonomous_gate_still_blocks_pure_subjective_evidence() {
+        let h = Harness::new();
+        for index in 0..5 {
+            write_autonomous_gate_run(&h, &format!("r{index}"), "ok", "ok", true);
+        }
+
+        let report = operational_reliability(&h.repo);
+
+        assert!(!report.passes());
+        assert!(
+            report.reason.contains("only subjective/non-measurement"),
+            "{}",
+            report.reason
+        );
+    }
+
+    #[test]
+    fn autonomous_missing_current_signal_does_not_execute_pending_task() {
+        let h = Harness::new();
+        for index in 0..5 {
+            write_autonomous_gate_run(&h, &format!("r{index}"), "ok", "ok", false);
+        }
+        let mut current = state::load_state(h.repo.join(".lto/r1/state.json")).unwrap();
+        current.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "planned_command": "touch autonomous-should-not-run",
+            "commands_run": [],
+            "evidence": []
+        }]);
+        h.write_state(current);
+
+        cmd_autopilot(
+            &h.repo,
+            AutopilotOptions {
+                run_id: Some("r1".into()),
+                auto_exec: false,
+                autonomous: true,
+                timeout: 5,
+                worker_runner: "sandbox".into(),
+                tmux_target: None,
+                tmux_bin: None,
+                tmux_ready_timeout_sec: None,
+            },
+        )
+        .unwrap();
+
+        let state = h.state();
+        assert_eq!(state.tasks[0]["status"], "pending");
+        assert!(state.tasks[0]["evidence"].as_array().unwrap().is_empty());
+        assert!(!h.repo.join("autonomous-should-not-run").exists());
     }
 
     #[test]
@@ -5851,6 +6089,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 timeout: 5,
                 touch: vec!["src/lib.rs".into()],
                 note: Some("unit smoke".into()),
+                instrument_ref: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
                 allow_headless_write: false,
@@ -5892,6 +6131,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
                 timeout: 5,
                 touch: Vec::new(),
                 note: None,
+                instrument_ref: None,
                 status_on_fail: "blocked".into(),
                 runner: "codex".into(),
                 allow_headless_write: false,
@@ -6202,7 +6442,7 @@ sys.exit(0)
         // BUG-7: When safe_emit fails (e.g. hard-stop reached), the command
         // must bail BEFORE saving state. Otherwise state.agent_runs and
         // events.jsonl diverge permanently: autonomous_gate (reads state)
-        // and cross_run_mining (reads events) report different run counts.
+        // and cross_run_evidence (reads events) report different run counts.
         let h = Harness::new();
         h.write_state(LtoState {
             tasks: json!([

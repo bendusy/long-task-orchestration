@@ -310,6 +310,8 @@ See also: lto events --wait (collect replies), lto judge (single judgment)."
         phase: Option<String>,
         #[arg(long)]
         command: Option<String>,
+        #[arg(long = "instrument-ref")]
+        instrument_ref: Option<String>,
     },
     #[command(hide = true)]
     TaskUpdate {
@@ -436,6 +438,8 @@ pub enum TaskCommand {
         phase: Option<String>,
         #[arg(long)]
         command: Option<String>,
+        #[arg(long = "instrument-ref")]
+        instrument_ref: Option<String>,
     },
     #[command(about = "Update task status, notes, phase, or touched paths")]
     Update {
@@ -518,6 +522,9 @@ pub struct RunnerCommand {
     touch: Vec<String>,
     #[arg(long)]
     note: Option<String>,
+    /// Stable delivery-contract instrument label (or generated sha256 reference).
+    #[arg(long = "instrument-ref", requires = "command")]
+    instrument_ref: Option<String>,
     /// Task status to record when the runner exits non-zero. Defaults to
     /// `blocked` (NOT `failed`) — a blocked task is a gate the host must clear,
     /// not a permanent failure. Pass `--status-on-fail failed` if you want a
@@ -1310,6 +1317,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     timeout: cmd.timeout,
                     touch: cmd.touch,
                     note: cmd.note,
+                    instrument_ref: cmd.instrument_ref,
                     status_on_fail: cmd.status_on_fail,
                     runner: cmd.runner,
                     allow_headless_write: cmd.allow_headless_write,
@@ -1575,6 +1583,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 title,
                 phase,
                 command,
+                instrument_ref,
             } => {
                 ops::cmd_task_add(
                     &args.repo,
@@ -1584,6 +1593,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                         title,
                         phase,
                         command,
+                        instrument_ref,
                     },
                 )?;
             }
@@ -1617,6 +1627,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             title,
             phase,
             command,
+            instrument_ref,
         } => {
             ops::cmd_task_add(
                 &args.repo,
@@ -1626,6 +1637,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     title,
                     phase,
                     command,
+                    instrument_ref,
                 },
             )?;
         }

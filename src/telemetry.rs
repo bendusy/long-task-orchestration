@@ -2,6 +2,7 @@ use crate::events;
 use crate::redact::redact_text;
 use crate::state::{self, LtoState};
 use chrono::{DateTime, FixedOffset};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -186,19 +187,22 @@ fn runner_metrics(events: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CrossRunMining {
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CrossRunEvidence {
     pub run_count: usize,
-    pub entries: Vec<CrossRunMiningEntry>,
+    pub entries: Vec<CrossRunEvidenceEntry>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CrossRunMiningEntry {
+#[deprecated(note = "use CrossRunEvidence")]
+pub type CrossRunMining = CrossRunEvidence;
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct CrossRunEvidenceEntry {
     pub runner: String,
     pub model: String,
     pub task_type: String,
     pub time_window: String,
-    pub dispatches: usize,
     pub ok: usize,
     pub failed: usize,
     pub timeout: usize,
@@ -210,6 +214,69 @@ pub struct CrossRunMiningEntry {
     pub agent_dispatch_completed: usize,
     pub distinct_runs: usize,
     pub subjective_non_measurement: bool,
+    #[serde(skip)]
+    pub recent_completions: Vec<CompletionSample>,
+}
+
+#[deprecated(note = "use CrossRunEvidenceEntry")]
+pub type CrossRunMiningEntry = CrossRunEvidenceEntry;
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CrossRunEvidenceEntryWire {
+    runner: String,
+    model: String,
+    task_type: String,
+    time_window: String,
+    dispatches: Option<usize>,
+    ok: usize,
+    failed: usize,
+    timeout: usize,
+    rate_limited: usize,
+    skipped: usize,
+    avg_elapsed_sec: Option<f64>,
+    avg_retry: Option<f64>,
+    avg_audit_rounds: Option<f64>,
+    agent_dispatch_completed: usize,
+    distinct_runs: Option<usize>,
+    subjective_non_measurement: bool,
+}
+
+impl<'de> Deserialize<'de> for CrossRunEvidenceEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = CrossRunEvidenceEntryWire::deserialize(deserializer)?;
+        Ok(Self {
+            runner: wire.runner,
+            model: wire.model,
+            task_type: wire.task_type,
+            time_window: wire.time_window,
+            ok: wire.ok,
+            failed: wire.failed,
+            timeout: wire.timeout,
+            rate_limited: wire.rate_limited,
+            skipped: wire.skipped,
+            avg_elapsed_sec: wire.avg_elapsed_sec,
+            avg_retry: wire.avg_retry,
+            avg_audit_rounds: wire.avg_audit_rounds,
+            agent_dispatch_completed: wire.agent_dispatch_completed,
+            distinct_runs: wire.distinct_runs.or(wire.dispatches).unwrap_or(0),
+            subjective_non_measurement: wire.subjective_non_measurement,
+            recent_completions: Vec::new(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompletionSample {
+    pub completion_id: String,
+    pub run_id: String,
+    pub at: String,
+    pub event_id: u64,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -224,6 +291,7 @@ struct CrossRunSlot {
     completed_runs: BTreeSet<String>,
     distinct_runs: BTreeSet<String>,
     subjective_runs: BTreeSet<String>,
+    completions: BTreeMap<String, CompletionSample>,
 }
 
 pub fn discover_run_ids(repo: &Path) -> anyhow::Result<Vec<String>> {
@@ -242,11 +310,10 @@ pub fn discover_run_ids(repo: &Path) -> anyhow::Result<Vec<String>> {
     Ok(runs)
 }
 
-pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
+pub fn cross_run_evidence(repo: &Path) -> anyhow::Result<CrossRunEvidence> {
     let run_ids = discover_run_ids(repo)?;
     let mut audit_rounds_by_run = BTreeMap::<String, usize>::new();
-    let mut mined_run_ids = BTreeSet::<String>::new();
-    let mut subjective_runs = BTreeSet::<String>::new();
+    let mut observed_run_ids = BTreeSet::<String>::new();
     let mut slots = BTreeMap::<(String, String, String, String), CrossRunSlot>::new();
 
     for run_id in &run_ids {
@@ -257,22 +324,39 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
         let audit_rounds = normalized_audit_rounds(&events).len();
         audit_rounds_by_run.insert(run_id.clone(), audit_rounds);
 
-        if events
+        let run_is_subjective = events
             .iter()
-            .any(|event| matches!(event_type(event), "decision.voted" | "judge.skipped"))
-        {
-            subjective_runs.insert(run_id.clone());
-        }
+            .any(|event| matches!(event_type(event), "decision.voted" | "judge.skipped"));
 
         let model_hints = model_hints_for_run(&events);
         for event in events {
             match event_type(&event) {
                 "runner.finished" => {
-                    mined_run_ids.insert(run_id.clone());
+                    observed_run_ids.insert(run_id.clone());
+                    let key = slot_key(&event, &runner_from_event(&event));
+                    if run_is_subjective {
+                        slots
+                            .entry(key)
+                            .or_default()
+                            .subjective_runs
+                            .insert(run_id.clone());
+                    }
                     record_runner_finished(&mut slots, run_id, &event);
                 }
                 "agent.dispatch.completed" => {
-                    mined_run_ids.insert(run_id.clone());
+                    observed_run_ids.insert(run_id.clone());
+                    let key = slot_key_with_model(
+                        &event,
+                        &runner_from_event(&event),
+                        model_for_completed(&event, &runner_from_event(&event), &model_hints),
+                    );
+                    if run_is_subjective {
+                        slots
+                            .entry(key)
+                            .or_default()
+                            .subjective_runs
+                            .insert(run_id.clone());
+                    }
                     record_agent_dispatch_completed(&mut slots, run_id, &event, &model_hints);
                 }
                 _ => {}
@@ -280,30 +364,21 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
         }
     }
 
-    for slot in slots.values_mut() {
-        for run_id in &slot.distinct_runs {
-            if subjective_runs.contains(run_id) {
-                slot.subjective_runs.insert(run_id.clone());
-            }
-        }
-    }
-
     let entries = slots
         .into_iter()
         .map(|((runner, model, task_type, time_window), slot)| {
-            let dispatches = slot.distinct_runs.len();
+            let distinct_runs = slot.distinct_runs.len();
             let failed = slot.failed_runs.len();
             let total_audit_rounds = slot
                 .distinct_runs
                 .iter()
                 .map(|run_id| audit_rounds_by_run.get(run_id).copied().unwrap_or(0))
                 .sum::<usize>();
-            CrossRunMiningEntry {
+            CrossRunEvidenceEntry {
                 runner,
                 model,
                 task_type,
                 time_window,
-                dispatches,
                 ok: slot.ok_runs.len(),
                 failed,
                 timeout: slot.timeout_runs.len(),
@@ -311,22 +386,29 @@ pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunMining> {
                 skipped: slot.skipped_runs.len(),
                 avg_elapsed_sec: average_f64(slot.elapsed_by_run.values().copied()),
                 avg_retry: average_f64(slot.retry_by_run.values().map(|value| *value as f64)),
-                avg_audit_rounds: if dispatches == 0 {
+                avg_audit_rounds: if distinct_runs == 0 {
                     None
                 } else {
-                    Some(total_audit_rounds as f64 / dispatches as f64)
+                    Some(total_audit_rounds as f64 / distinct_runs as f64)
                 },
                 agent_dispatch_completed: slot.completed_runs.len(),
-                distinct_runs: dispatches,
-                subjective_non_measurement: !slot.subjective_runs.is_empty(),
+                distinct_runs,
+                subjective_non_measurement: !slot.distinct_runs.is_empty()
+                    && slot.subjective_runs.len() == slot.distinct_runs.len(),
+                recent_completions: sorted_completions(slot.completions),
             }
         })
         .collect();
 
-    Ok(CrossRunMining {
-        run_count: mined_run_ids.len(),
+    Ok(CrossRunEvidence {
+        run_count: observed_run_ids.len(),
         entries,
     })
+}
+
+#[deprecated(note = "use cross_run_evidence")]
+pub fn cross_run_mining(repo: &Path) -> anyhow::Result<CrossRunEvidence> {
+    cross_run_evidence(repo)
 }
 
 fn record_runner_finished(
@@ -335,10 +417,12 @@ fn record_runner_finished(
     event: &Value,
 ) {
     let runner = runner_from_event(event);
-    let key = mining_key(event, &runner);
+    let key = slot_key(event, &runner);
     let slot = slots.entry(key).or_default();
     slot.distinct_runs.insert(run_id.to_string());
-    match runner_status(event).as_str() {
+    let status = runner_status(event);
+    record_completion(slot, run_id, event, &status);
+    match status.as_str() {
         "ok" => {
             slot.ok_runs.insert(run_id.to_string());
         }
@@ -384,7 +468,7 @@ fn record_agent_dispatch_completed(
     model_hints: &BTreeMap<(String, String, String), Option<String>>,
 ) {
     let runner = runner_from_event(event);
-    let key = mining_key_with_model(
+    let key = slot_key_with_model(
         event,
         &runner,
         model_for_completed(event, &runner, model_hints),
@@ -392,7 +476,9 @@ fn record_agent_dispatch_completed(
     let slot = slots.entry(key).or_default();
     slot.completed_runs.insert(run_id.to_string());
     slot.distinct_runs.insert(run_id.to_string());
-    match runner_status(event).as_str() {
+    let status = runner_status(event);
+    record_completion(slot, run_id, event, &status);
+    match status.as_str() {
         "ok" => {
             slot.ok_runs.insert(run_id.to_string());
         }
@@ -418,6 +504,59 @@ fn record_agent_dispatch_completed(
             .entry(run_id.to_string())
             .or_insert(elapsed);
     }
+}
+
+fn record_completion(slot: &mut CrossRunSlot, run_id: &str, event: &Value, status: &str) {
+    let identity = event
+        .get("object_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            event
+                .get("event_id")
+                .and_then(Value::as_u64)
+                .map(|event_id| format!("event-{event_id}"))
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "{}-{}-{}",
+                event_type(event),
+                event
+                    .get("task_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                event.get("at").and_then(Value::as_str).unwrap_or("unknown")
+            )
+        });
+    let completion_id = format!("{run_id}:{identity}");
+    slot.completions.insert(
+        completion_id.clone(),
+        CompletionSample {
+            completion_id,
+            run_id: run_id.to_string(),
+            at: event
+                .get("at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            event_id: event.get("event_id").and_then(Value::as_u64).unwrap_or(0),
+            status: status.to_string(),
+        },
+    );
+}
+
+fn sorted_completions(completions: BTreeMap<String, CompletionSample>) -> Vec<CompletionSample> {
+    let mut completions = completions.into_values().collect::<Vec<_>>();
+    completions.sort_by(|left, right| {
+        (&left.at, left.event_id, &left.run_id, &left.completion_id).cmp(&(
+            &right.at,
+            right.event_id,
+            &right.run_id,
+            &right.completion_id,
+        ))
+    });
+    completions
 }
 
 fn runner_from_event(event: &Value) -> String {
@@ -499,11 +638,11 @@ fn model_for_completed(
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn mining_key(event: &Value, runner: &str) -> (String, String, String, String) {
-    mining_key_with_model(event, runner, model_from_event(event))
+fn slot_key(event: &Value, runner: &str) -> (String, String, String, String) {
+    slot_key_with_model(event, runner, model_from_event(event))
 }
 
-fn mining_key_with_model(
+fn slot_key_with_model(
     event: &Value,
     runner: &str,
     model: String,
@@ -928,7 +1067,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_run_mining_counts_new_audit_round_events() {
+    fn cross_run_evidence_counts_new_audit_round_events() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         let run_dir = repo.join(".lto").join("r1");
@@ -977,8 +1116,8 @@ mod tests {
         .join("\n");
         fs::write(run_dir.join("events.jsonl"), event_lines + "\n").unwrap();
 
-        let mining = cross_run_mining(repo).unwrap();
-        let entry = mining
+        let evidence = cross_run_evidence(repo).unwrap();
+        let entry = evidence
             .entries
             .iter()
             .find(|entry| entry.runner == "codex")
@@ -987,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_run_mining_groups_by_runner_task_and_distinct_runs() {
+    fn cross_run_evidence_groups_by_runner_task_and_distinct_runs() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         for run_id in ["r1", "r2"] {
@@ -1056,8 +1195,8 @@ mod tests {
         )
         .unwrap();
 
-        let mining = cross_run_mining(repo).unwrap();
-        let entry = mining
+        let evidence = cross_run_evidence(repo).unwrap();
+        let entry = evidence
             .entries
             .iter()
             .find(|entry| entry.runner == "codex" && entry.task_type == "implementation")
@@ -1068,10 +1207,68 @@ mod tests {
         assert_eq!(entry.ok, 2);
         assert_eq!(entry.agent_dispatch_completed, 1);
         assert_eq!(entry.avg_retry, Some(1.0));
+        assert_eq!(entry.recent_completions.len(), 4);
     }
 
     #[test]
-    fn cross_run_mining_splits_same_runner_task_by_model() {
+    fn distinct_runs_deserializes_legacy_dispatches_alias() {
+        let entry: CrossRunEvidenceEntry =
+            serde_json::from_value(json!({"dispatches": 7})).unwrap();
+        assert_eq!(entry.distinct_runs, 7);
+        let serialized = serde_json::to_value(&entry).unwrap();
+        assert_eq!(serialized["distinct_runs"], 7);
+        assert!(serialized.get("dispatches").is_none());
+        assert!(serialized.get("recent_completions").is_none());
+
+        let old_dual_field: CrossRunEvidenceEntry =
+            serde_json::from_value(json!({"dispatches": 7, "distinct_runs": 8})).unwrap();
+        assert_eq!(old_dual_field.distinct_runs, 8);
+    }
+
+    #[test]
+    fn completion_samples_deduplicate_two_event_types_by_object_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_dir = repo.join(".lto/r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("state.json"),
+            serde_json::to_string_pretty(&LtoState {
+                run_id: "r1".into(),
+                ..LtoState::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        for event_type in ["runner.finished", "agent.dispatch.completed"] {
+            emit(
+                repo,
+                "r1",
+                EventRecord {
+                    event_type: event_type.into(),
+                    actor_kind: "runner".into(),
+                    actor_id: Some("codex".into()),
+                    task_id: Some("L3".into()),
+                    object_id: Some("job-1".into()),
+                    fields: json!({"runner": "codex", "model": "gpt-5", "status": "ok"}),
+                    ..EventRecord::default()
+                },
+            )
+            .unwrap();
+        }
+
+        let evidence = cross_run_evidence(repo).unwrap();
+        let entry = evidence
+            .entries
+            .iter()
+            .find(|entry| entry.model == "gpt-5")
+            .unwrap();
+        assert_eq!(entry.recent_completions.len(), 1);
+        assert_eq!(entry.recent_completions[0].completion_id, "r1:job-1");
+    }
+
+    #[test]
+    fn cross_run_evidence_splits_same_runner_task_by_model() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         for run_id in ["r1", "r2"] {
@@ -1114,8 +1311,8 @@ mod tests {
         )
         .unwrap();
 
-        let mining = cross_run_mining(repo).unwrap();
-        let mut models = mining
+        let evidence = cross_run_evidence(repo).unwrap();
+        let mut models = evidence
             .entries
             .iter()
             .filter(|entry| entry.runner == "codex" && entry.task_type == "implementation")
@@ -1126,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_run_mining_infers_missing_turn_model_from_unique_run_slot() {
+    fn cross_run_evidence_infers_missing_turn_model_from_unique_run_slot() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         let run_dir = repo.join(".lto").join("r1");
@@ -1167,8 +1364,8 @@ mod tests {
         )
         .unwrap();
 
-        let mining = cross_run_mining(repo).unwrap();
-        let mut models = mining
+        let evidence = cross_run_evidence(repo).unwrap();
+        let mut models = evidence
             .entries
             .iter()
             .filter(|entry| entry.runner == "codex" && entry.task_type == "implementation")
@@ -1186,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_run_mining_keeps_missing_turn_model_unknown_when_run_slot_is_ambiguous() {
+    fn cross_run_evidence_keeps_missing_turn_model_unknown_when_run_slot_is_ambiguous() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         let run_dir = repo.join(".lto").join("r1");
@@ -1229,8 +1426,8 @@ mod tests {
         )
         .unwrap();
 
-        let mining = cross_run_mining(repo).unwrap();
-        let mut models = mining
+        let evidence = cross_run_evidence(repo).unwrap();
+        let mut models = evidence
             .entries
             .iter()
             .filter(|entry| entry.runner == "codex" && entry.task_type == "implementation")
@@ -1255,7 +1452,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_run_mining_marks_completed_nonzero_rc_as_failed() {
+    fn cross_run_evidence_marks_completed_nonzero_rc_as_failed() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         let run_dir = repo.join(".lto").join("r1");
@@ -1283,8 +1480,8 @@ mod tests {
         )
         .unwrap();
 
-        let mining = cross_run_mining(repo).unwrap();
-        let entry = mining
+        let evidence = cross_run_evidence(repo).unwrap();
+        let entry = evidence
             .entries
             .iter()
             .find(|entry| entry.runner == "pi")
@@ -1297,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_run_mining_tracks_rate_limited_runner_results() {
+    fn cross_run_evidence_tracks_rate_limited_runner_results() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         let run_dir = repo.join(".lto").join("r1");
@@ -1329,8 +1526,8 @@ mod tests {
         )
         .unwrap();
 
-        let mining = cross_run_mining(repo).unwrap();
-        let entry = mining
+        let evidence = cross_run_evidence(repo).unwrap();
+        let entry = evidence
             .entries
             .iter()
             .find(|entry| entry.runner == "codex")

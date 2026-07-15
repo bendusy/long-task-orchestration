@@ -123,7 +123,11 @@ lto --repo . task add \
 ```
 
 `--task-id` must be unique (duplicate is rejected). `--phase` defaults to the
-current phase. Then run it via `runner --task-id T1 --command "..."`.
+current phase. `--instrument-ref <label>` optionally binds the task to a labeled
+delivery-contract instrument; `runner` inherits that reference. Then run it via
+`runner --task-id T1 --command "..."`. `runner --instrument-ref <label>` can bind
+one command directly, and an exact normalized command match records the stable
+label/hash automatically.
 
 ## Resume
 
@@ -383,9 +387,13 @@ pending task gets its own worker dispatch and must write a
 `.lto/<run>/live/*.worker.json` completion contract. `state.tasks` changes only
 from that contract `rc`, not from the worker saying it is done. `--autonomous` is implemented
 as a **mechanical evidence gate + mechanical execution** — it never spawns a decision
-agent and never reflects (LTO emits facts; the host reflects). It reads cross-run
-mining to gate on accumulated real dispatch data (falls back to supervised when
-insufficient), then mechanically runs safe substeps; escalate/dangerous/push/network
+agent and never reflects (LTO emits facts; the host reflects). Its named subresults
+are `operational_reliability` and `current_run_observability`: current goal/done_when,
+an instrument declaration, and linked parseable runner evidence must all be present.
+先观测后控制：当前 run 无已证实观测信号不放行；声明但未证实或缺失时打印
+`NEEDS_CONFIRM` 并退回 supervised，不执行子步骤。The reliability subcheck reads
+bounded recent cross-run evidence data, then mechanically runs safe substeps only
+when both subchecks pass; escalate/dangerous/push/network
 stay with the human. Historical `--decide` flags are not exposed by the current
 Rust CLI.
 
