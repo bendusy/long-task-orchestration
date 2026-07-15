@@ -161,11 +161,14 @@ lto events --wait --event-type agent.dispatch.completed --run-id <run-id> --time
 lto dispatch-and-wait --runner codex --goal goal.md --timeout 600
 ```
 
-**完成语义**：Codex Stop 是每轮结束，普通 Stop 只写 `agent.turn.completed`；只有
-transcript 中真实的 `update_goal complete` 才升级为 dispatch 完成。pi/agy 由 TUI
-进程退出 wrapper 传真实 rc。成功按 run state 记录的 `@window_id` 清理窗口；失败、
-超时、交互阻塞和 `--keep-window` 保留现场。可选 `--notify-cmd` 只在 dispatch 真完成
-时执行。
+**完成语义**：主路径是 **goal-self-report**——`dispatch-goal` 把短 prompt 注入 REPL，
+要求 agent 在完成判据满足后执行
+`lto agent-turn-completed --source goal-self-report --rc 0 --window-id <id> --bell`
+（阻塞用 `--rc 1`）。这是 LTO 自包含信号，不依赖 codex `/goal` 或 goal-runtime skill。
+Codex Stop hook（若 transcript 有 `update_goal complete`）与 pi/agy process-exit
+wrapper 仅作可选旁路。成功按 run state 记录的 `@window_id` 清理窗口；失败、超时、
+交互阻塞和 `--keep-window` 保留现场。可选 `--notify-cmd` 只在 dispatch 真完成时执行。
+自报只是信号：closeout/check 仍只看 evidence/ledger，不因 self-report 放行闸门。
 
 **运行中可见**：每个派工的输出边跑边写 `.lto/<run-id>/live/<job-id>.log`，卡住时
 `tail -f` 就能看；tmux 派工直接切窗观察（`tmux capture-pane` 救援见 goal blocked 场景）。

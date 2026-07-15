@@ -61,5 +61,7 @@ loop 跑完、blocked 或 worker 自报完成后，**不得**把 hook 返回、p
 - 让一个 worker 啃整个大 goal，并把它的自述当验收。
 - loop 完成后直接 closeout，不读 diff、不跑测试、不看 artifact。
 - 把 `tmux` pane 停止、sentinel 文件、contract 文件存在等同于语义完成。
+- 把 `dispatch-goal` 的 goal-self-report / process-exit / Stop hook 完成信号直接当语义验收
+  （信号只唤醒 waiter；closeout/check 仍只看 evidence/ledger）。
 - 把这个 playbook 抽成替 host 做判断的 `orchestrate` 命令。
 - 依赖 host 侧私有 skill 或本机隐藏脚本，导致 stranger 无法复现。

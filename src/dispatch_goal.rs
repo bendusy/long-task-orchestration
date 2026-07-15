@@ -494,12 +494,7 @@ struct GoalDispatchOutcome {
     completion_mode: String,
 }
 
-fn runner_plan(
-    runner: &str,
-    goal_path: &Path,
-    run_id: &str,
-    window_id: &str,
-) -> GoalRunnerPlan {
+fn runner_plan(runner: &str, goal_path: &Path, run_id: &str, window_id: &str) -> GoalRunnerPlan {
     let goal = goal_path.display().to_string();
     let prompt = goal_prompt(&goal, run_id, runner, window_id);
     match runner {
@@ -515,7 +510,11 @@ fn runner_plan(
             )),
             prompt,
             // Idle TUI after optional update prompt is dismissed (2026-07-15 probe).
-            ready_patterns: vec!["gpt-".to_string(), "model:".to_string(), "codex>".to_string()],
+            ready_patterns: vec![
+                "gpt-".to_string(),
+                "model:".to_string(),
+                "codex>".to_string(),
+            ],
             // Text-mode prompt (not /goal): confirm on the agent starting work.
             confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
             needs_probe: true,
@@ -1229,7 +1228,11 @@ mod tests {
         );
         assert_eq!(
             codex.ready_patterns,
-            vec!["gpt-".to_string(), "model:".to_string(), "codex>".to_string()]
+            vec![
+                "gpt-".to_string(),
+                "model:".to_string(),
+                "codex>".to_string()
+            ]
         );
         assert_eq!(
             runner_plan("pi", goal, "r1", "@1").ready_patterns,
@@ -1290,12 +1293,16 @@ mod tests {
                 .unwrap()
                 .starts_with("LTO_RUN_ID='r1' agy -i")
         );
-        assert!(!runner_plan("agy", goal, "r1", "@3")
-            .prompt
-            .contains("--print"));
-        assert!(runner_plan("agy", goal, "r1", "@3")
-            .prompt
-            .contains("goal-self-report"));
+        assert!(
+            !runner_plan("agy", goal, "r1", "@3")
+                .prompt
+                .contains("--print")
+        );
+        assert!(
+            runner_plan("agy", goal, "r1", "@3")
+                .prompt
+                .contains("goal-self-report")
+        );
         assert!(runner_plan("agy", goal, "r1", "@3").needs_probe);
 
         // Regression — two bugs must both stay fixed:

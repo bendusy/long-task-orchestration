@@ -1,7 +1,5 @@
 # LTO 控制论元结构改造 · 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** 按 `references/specs/2026-07-14-goal-cybernetics-metastructure-redesign.md` 完成 Phase 0（reference truth）→ B 前半（INDEX+切分）→ A（SKILL 四层化）→ B 后半（README）→ 验收审计 → C（四份 core goal 文档）。
 
 **Architecture:** 纯文档/skill 重组 + Python checker 增强，不改 Rust 行为。TDD 体现在：先让 checker 能抓到已知漂移（红），再修文档（绿）。迁移顺序不可倒置：先修真源、后建路由、最后压 SKILL。

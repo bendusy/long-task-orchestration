@@ -67,7 +67,7 @@ $L closeout --summary "登录重构完成，测试和异构审计已收敛"
 
 普通 `lto check` 的文本和 `--json` 输出都包含 ledger 硬 verdict 与五维 diagnostics（样本充分性、终态、方向、振荡、包络）；diagnostics 及可能出现的 `forced_entropy` advisory 不进入 phase/closeout gate。`scripts/audit_ledger_check.py` 只保留一个版本的兼容入口，并原样 `exec` 到 `lto check --ledger`，不再实现第二套判定逻辑。
 
-`dispatch-goal` 新建的窗口默认命名为 `lto:<runner>:<goal-slug>`，程序寻址与清理只使用 tmux 不可变 `@window_id`。成功完成后自动清理；非零 rc、超时、交互阻塞或 `--keep-window` 都保留现场。Codex 的 Stop hook 只是每轮结束：普通 Stop 只写 `agent.turn.completed`，只有 transcript 中存在真实 `update_goal complete` 证据才写 `agent.dispatch.completed`；pi/agy 则由 TUI 进程退出 wrapper 传真实 rc。不要再用 turn 事件判断整个 goal 完成。
+`dispatch-goal` 新建的窗口默认命名为 `lto:<runner>:<goal-slug>`，程序寻址与清理只使用 tmux 不可变 `@window_id`。成功完成后自动清理；非零 rc、超时、交互阻塞或 `--keep-window` 都保留现场。主完成信号是 goal 文件 prompt 注入的 **goal-self-report**（agent 跑完后执行 `lto agent-turn-completed --source goal-self-report --rc 0|1 …`，不依赖 runner 端 skill）。Codex Stop hook / pi·agy process-exit 仅作可选旁路。不要再用 turn 事件判断整个 goal 完成。
 
 ## 架构全貌
 
