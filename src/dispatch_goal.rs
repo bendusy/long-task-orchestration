@@ -504,9 +504,18 @@ fn runner_plan(
     let prompt = goal_prompt(&goal, run_id, runner, window_id);
     match runner {
         "codex" => GoalRunnerPlan {
-            launch: Some(format!("LTO_RUN_ID={} codex", shell_single_quote(run_id))),
+            // Isolate from the user's global MCP servers (2026-07-15: bare
+            // `codex` hung on "Starting MCP servers" chrome-devtools for minutes).
+            // `-c 'mcp_servers={}'` overrides ~/.codex/config.toml [mcp_servers] to
+            // an empty table — same isolation intent as pi's --no-skills/--no-extensions.
+            launch: Some(format!(
+                "LTO_RUN_ID={} codex -c {}",
+                shell_single_quote(run_id),
+                shell_single_quote("mcp_servers={}")
+            )),
             prompt,
-            ready_patterns: vec!["gpt-".to_string()],
+            // Idle TUI after optional update prompt is dismissed (2026-07-15 probe).
+            ready_patterns: vec!["gpt-".to_string(), "model:".to_string(), "codex>".to_string()],
             // Text-mode prompt (not /goal): confirm on the agent starting work.
             confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
             needs_probe: true,
@@ -527,8 +536,10 @@ fn runner_plan(
             GoalRunnerPlan {
                 launch: Some(launch),
                 prompt,
-                ready_patterns: vec!["deepseek".to_string(), "ctx".to_string()],
-                confirm_patterns: vec!["Working".to_string()],
+                // Idle status line is model-agnostic: "0.0%/… (auto)" + "(model) …" (2026-07-15:
+                // default model is grok, not deepseek — hardcoding model names flaked).
+                ready_patterns: vec!["0.0%".to_string(), "(auto)".to_string()],
+                confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
                 needs_probe: true,
                 completion_event: Some("agent.dispatch.completed".to_string()),
                 // Primary completion is self-report; process-exit remains a side-channel.
@@ -910,8 +921,16 @@ fn codex_home() -> Option<PathBuf> {
 fn default_skip_prompts() -> Vec<SkipPrompt> {
     vec![
         SkipPrompt {
+            // codex 0.144+ shows a numbered update menu:
+            // 1. Update now / 2. Skip / 3. Skip until next version.
+            // Prefer "2" (Skip) so dispatch does not mutate the host toolchain.
+            // Pattern keys on the menu footer; after skip, idle TUI shows model:.
+            pattern: "Press enter to continue".to_string(),
+            key: "2".to_string(),
+        },
+        SkipPrompt {
             pattern: "update available".to_string(),
-            key: "n".to_string(),
+            key: "2".to_string(),
         },
         SkipPrompt {
             pattern: "upgrade?".to_string(),
@@ -1208,12 +1227,28 @@ mod tests {
             "prompt must stay ≤{GOAL_PROMPT_MAX_CHARS} chars, got {}",
             codex.prompt.chars().count()
         );
-        assert_eq!(codex.ready_patterns, vec!["gpt-".to_string()]);
+        assert_eq!(
+            codex.ready_patterns,
+            vec!["gpt-".to_string(), "model:".to_string(), "codex>".to_string()]
+        );
+        assert_eq!(
+            runner_plan("pi", goal, "r1", "@1").ready_patterns,
+            vec!["0.0%".to_string(), "(auto)".to_string()]
+        );
         assert_eq!(
             codex.completion_event.as_deref(),
             Some("agent.dispatch.completed")
         );
         assert_eq!(codex.completion_mode, "goal-self-report");
+        let codex_launch = codex.launch.as_deref().unwrap();
+        assert!(
+            codex_launch.starts_with("LTO_RUN_ID='r1' codex -c "),
+            "codex launch must disable MCP via -c override, got: {codex_launch}"
+        );
+        assert!(
+            codex_launch.contains("mcp_servers={}"),
+            "codex launch must empty mcp_servers for isolation, got: {codex_launch}"
+        );
         assert!(
             runner_plan("pi", goal, "r1", "@1")
                 .launch
