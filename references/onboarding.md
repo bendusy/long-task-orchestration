@@ -1,6 +1,6 @@
 # LTO 装载手册 — 给 agent 读的一份文档
 
-> 你是一个 agent（codex / pi / agy / claude / 任意能跑 Rust/Cargo + bash 的 runtime）。
+> 你是一个 agent（codex/pi/agy/claude/任意能跑 Rust/Cargo + bash 的 runtime）。
 > 读完这一份，你就知道 LTO 是什么、怎么装给自己用、长任务里怎么用它不迷路。
 > 细节按需再读：路由见 [INDEX.md](INDEX.md)，命令面见 [COMMANDS.md](../COMMANDS.md)。
 
@@ -53,8 +53,7 @@ lto recap                   # 当前 run 的人话回顾（给人）；跨 run �
 ## 怎么装、怎么调
 
 前提：Rust stable + Cargo、bash、git；异构派工需本机至少装两家 agent CLI
-（repo 自带 `scripts/delegate/`）。安装细节（软链路径、wrapper 生成、校验）见
-[INSTALL.md](../INSTALL.md)：
+（repo 自带 `scripts/delegate/`）。安装细节见 [INSTALL.md](../INSTALL.md)：
 
 ```bash
 bash scripts/install.sh          # 软链到 ~/.claude/skills + ~/.agents/skills，并生成 lto wrapper
@@ -65,7 +64,6 @@ LTO 是纯 CLI，任何能跑 bash 的 runtime 都能调：
 
 ```bash
 lto --repo <目标仓库> <子命令> [参数]
-# 未装 wrapper 时：cargo run --manifest-path <skill-root>/Cargo.toml -- --repo <目标仓库> <子命令>
 ```
 
 跨 runtime 当宿主的专项坑（沙箱、派工、preflight）见
@@ -139,8 +137,7 @@ $L closeout --summary "登录模块重构完成，空指针已修，异构审计
 跨 session 回来：`$L resume`。多 runtime / 多项目接手：`$L memory resume --project
 <repo-key>`（只读，am 缺席时降级本地 `.lto`，不覆盖 current/state）。想看会写入
 记忆层的内容先 `$L memory export --run-id <id> --dry-run`（纯本地 redacted JSON）；
-`memory publish` 走 am 原生 CLI（唯一 sink，早期 memory-flow REST 已移除），am
-缺席时报错并提示本地 `.lto` 仍是真源。
+`memory publish` 走 am 原生 CLI（唯一 sink），am 缺席时报错并提示本地 `.lto` 仍是真源。
 
 ## hook：让你别忘了用 LTO
 
