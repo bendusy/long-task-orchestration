@@ -1,5 +1,12 @@
 # Changelog
 
+## C5 selfcontained completion closeout
+
+- **Run ID**: `20260715-c5-selfcontained-completion`
+- **Closed**: 2026-07-15T07:46:08+00:00
+- **Summary**: goal-self-report is now the primary dispatch completion signal (codex/pi/agy); Stop hook and process-exit remain optional side-channels. Three-runner smoke confirmed self-report + window recycle. Host rejection of an early self-report without audit-ledger/closeout is recorded as the protocol proof that self-report ≠ judgment.
+
+
 ## 用工程控制论 skill 元结构改造 LTO：SKILL/README/references 四层化重组 + 四个 core 机制 goal 文档
 
 - **Run ID**: `20260714-043510-skill-lto-skill-readme-references-core-g-f3c7170b`
