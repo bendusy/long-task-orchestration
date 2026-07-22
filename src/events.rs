@@ -529,8 +529,15 @@ fn owner_exe_mismatch(value: &Value, pid: u32) -> Option<bool> {
 #[cfg(target_os = "linux")]
 fn process_exe_name(pid: u32) -> Option<String> {
     let path = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())?;
+    // A binary replaced on disk while running (cargo rebuild) reads back as
+    // "name (deleted)"; strip it or the alive holder gets branded stale.
+    Some(match name.strip_suffix(" (deleted)") {
+        Some(stripped) => stripped.to_string(),
+        None => name,
+    })
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
