@@ -1,5 +1,19 @@
 # Changelog
 
+## seed-edit handoff A/B 实验：同一 flaky-test 修复任务，传统 goal vs seed-edit goal 各派一个 codex，对照跑偏指标
+
+- **Run ID**: `20260722-seed-ab`
+- **Closed**: 2026-07-22T10:09:44+00:00
+- **Summary**: seed-edit A/B 首轮完成：seed 组胜（根因不漏修+diff 克制），已合并 main；两臂均漏自报=独立缺陷；第二任务候选=events 计数器 CI 竞态。指标 metrics.md
+
+### Tasks
+
+- **arm-a**: 传统 goal 修 flaky tmux 测试 (done)
+  - FAIL [manual] collected codex dispatch
+- **arm-b**: seed-edit goal 修 flaky tmux 测试 (done)
+  - FAIL [manual] collected codex dispatch
+
+
 ## 三方合议（claude host + codex + pi）裁决 lto 下一步开发方向
 
 - **Run ID**: `20260722-next-dev-council`
