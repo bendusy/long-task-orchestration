@@ -1218,6 +1218,9 @@ mod tests {
     use crate::agent_job::{Budget, PermissionPolicy, RetryPolicy, Sandbox, TaskSize};
     use std::fs as std_fs;
 
+    // 30s only widens the failure budget; successful fake tmux completions still return immediately.
+    const LOAD_TOLERANT_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
+
     fn job_with_meta(meta: BTreeMap<String, Value>) -> AgentJob {
         AgentJob {
             job_id: "job-1".to_string(),
@@ -1489,7 +1492,7 @@ sys.exit(0)
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };
-        let summary = dispatch(&config, "echo ok", Duration::from_secs(1), None)
+        let summary = dispatch(&config, "echo ok", LOAD_TOLERANT_COMPLETION_TIMEOUT, None)
             .await
             .unwrap();
 
@@ -1529,9 +1532,14 @@ sys.exit(0)
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
         };
-        let summary = dispatch(&config, "finish this", Duration::from_secs(1), None)
-            .await
-            .unwrap();
+        let summary = dispatch(
+            &config,
+            "finish this",
+            LOAD_TOLERANT_COMPLETION_TIMEOUT,
+            None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(summary.capture, "done");
         assert_eq!(summary.sentinel_path, Some(sentinel));
@@ -1567,9 +1575,14 @@ sys.exit(0)
             capture_lines: 20,
         };
 
-        let err = dispatch(&config, "finish this", Duration::from_secs(1), None)
-            .await
-            .unwrap_err();
+        let err = dispatch(
+            &config,
+            "finish this",
+            LOAD_TOLERANT_COMPLETION_TIMEOUT,
+            None,
+        )
+        .await
+        .unwrap_err();
 
         assert!(err.to_string().contains("read sentinel"), "{err}");
     }
