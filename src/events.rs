@@ -526,7 +526,14 @@ fn owner_exe_mismatch(value: &Value, pid: u32) -> Option<bool> {
     Some(owner != live)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
+fn process_exe_name(pid: u32) -> Option<String> {
+    let path = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 fn process_exe_name(pid: u32) -> Option<String> {
     let output = Command::new("ps")
         .arg("-p")
@@ -1028,6 +1035,17 @@ mod tests {
         .unwrap();
 
         assert!(events_lock_is_stale(&lock_path, LOCK_STALE_AFTER).unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_process_exe_name_is_not_truncated_like_proc_comm() {
+        let expected = current_exe_name().expect("current test executable should have a name");
+        assert!(
+            expected.len() > 15,
+            "test executable must exceed Linux TASK_COMM_LEN to cover the lock-owner bug"
+        );
+        assert_eq!(process_exe_name(std::process::id()), Some(expected));
     }
 
     #[cfg(unix)]
