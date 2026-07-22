@@ -1,5 +1,18 @@
 # Changelog
 
+## 三方合议（claude host + codex + pi）裁决 lto 下一步开发方向
+
+- **Run ID**: `20260722-next-dev-council`
+- **Closed**: 2026-07-22T09:50:45+00:00
+- **Summary**: 三方合议完成：codex+pi verdict 收齐，合成结论见 council-synthesis.md；定案 ③ seed-edit handoff A/B 先行
+
+### Tasks
+
+- **council-review**: codex+pi 独立评审 lto 下一步方向 (done)
+  - FAIL [manual] collected codex dispatch
+  - FAIL [manual] collected pi dispatch
+
+
 ## C5 selfcontained completion closeout
 
 - **Run ID**: `20260715-c5-selfcontained-completion`
