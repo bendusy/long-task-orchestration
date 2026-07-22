@@ -1,3 +1,9 @@
 # Fake PEM redaction fixture from historical commit 3930382. The current test
 # constructs the marker at runtime so new commits do not add this fingerprint.
 3930382a2b1c3c11a4da3474b206492c914b8c8c:scripts/test_eval_judge.py:private-key:108
+
+# redact.rs unit-test fixtures from historical commit b1c5da1: fake token
+# "abcdef123456" and a literal PEM header used to test the redaction regexes
+# themselves. Current tests construct markers at runtime; no real secrets.
+b1c5da14ac29c757b85e380b4aac41a6a94eb718:src/redact.rs:generic-api-key:111
+b1c5da14ac29c757b85e380b4aac41a6a94eb718:src/redact.rs:private-key:128

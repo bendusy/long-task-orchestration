@@ -27,3 +27,7 @@ dist/
 build/
 target/
 *.egg-info/
+
+# local tool state / non-product dirs
+.codestable/
+engineering-cybernetics-essence/
