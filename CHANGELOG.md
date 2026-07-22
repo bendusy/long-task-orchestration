@@ -1,5 +1,19 @@
 # Changelog
 
+## seed-edit A/B 第二轮：events 锁假 stale 抢锁竞态修复，传统 goal vs seed goal 各派一个 codex
+
+- **Run ID**: `20260723-seed-ab2`
+- **Closed**: 2026-07-22T18:36:57+00:00
+- **Summary**: A/B 第二轮完成：arm-A（传统 goal）独立确诊 comm truncation 并以 /proc/exe 修源头胜出，容器 50 轮归零已合并+deleted 后缀加固；arm-B 因 tmux 环境中断数据作废。最大发现：4 臂零自报真根因=self-report 命令缺 --repo（已修 2e539ad）。指标 metrics.md
+
+### Tasks
+
+- **arm-a2**: 传统 goal 修 events 假 stale 竞态 (done)
+  - FAIL [manual] collected codex dispatch
+- **arm-b2**: seed goal 修 events 假 stale 竞态 (skipped)
+  - FAIL [manual] collected codex dispatch
+
+
 ## seed-edit handoff A/B 实验：同一 flaky-test 修复任务，传统 goal vs seed-edit goal 各派一个 codex，对照跑偏指标
 
 - **Run ID**: `20260722-seed-ab`
