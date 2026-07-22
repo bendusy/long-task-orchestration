@@ -34,7 +34,7 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 | 接手项目 / compact 恢复 | Ⅰ 接管与恢复 | onboarding.md、long-loop-state.md |
 | 开新 run / 写交付契约 | Ⅱ 立项与契约 | run-state-workflow.md |
 | 派 agent / 等完成 / autopilot | Ⅲ 执行与派工 | execution-loop.md |
-| 多模型审 / 判收敛 | Ⅳ 验证与收敛 | audit-convergence.md、playbooks/review.md |
+| 多模型审 / 方向合议 / 判收敛 | Ⅳ 验证与收敛 | audit-convergence.md、playbooks/review.md |
 | 上线 / 发版 / 收尾 | Ⅴ 交付与发布 | deploy-sequencing.md、release-workflow.md |
 | 记决策 / 记忆 / 挖掘 / 清理 | Ⅵ 学习与维护 | decision-logging.md、events-telemetry-contract.md |
 
@@ -46,6 +46,7 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 - **人说了算**：phase 切换、不可逆动作、语义争议、closeout 都过 human gate；三个 AI 都说「没问题」≠ 真没问题，autopilot 任何档位都不取消这条。
 - **先观测后控制**：动作前先读 `.lto`/git/runtime 状态；未能观测的行为不自动化。
 - **审者 ≠ host**：主观/对抗审计必须异构（你是 claude 就派 codex/pi/agy）；确定性测试直接跑，不需异构。
+- **重大裁决先合议，不等用户提醒**：host 产出方向分析、设计裁决、开发排序、spec 这类非确定性结论后，**定案前默认派 ≥2 个异构 runner 独立评审（三方合议）**，收齐 verdict 再合成结论。这是反射不是选项——用户没说「找 codex/pi 看看」也要做。流程见域Ⅳ；仅当结论确定性可测（跑命令即可验证）或用户明说跳过时才免。
 - **信息不足先自助补证**：缺证据先查 state/source/runtime；权威证据仍缺且影响方案才问用户。缺 `--goal/--done-when` 的 run 先补齐再推进。
 - **证据先于断言**：区分「源码存在 / 二进制存在 / 当前 runtime 可用」；说做完了要拿得出 artifact。
 - **调优必须有测评**：baseline、指标、及格线、复测命令，缺一只算假设。
@@ -83,7 +84,7 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 
 **Ⅲ 执行与派工**——`task add` 建单元，`runner` 跑命令落证据。**派外部 agent 首选 tmux 真 TUI**（`dispatch-goal` / `dispatch-and-wait`），可见可监督、机制级完成检测；headless delegate 只用于只读评审与兜底（agy `--print` 只出方案不执行=假成功）；写档的非 tmux runner fail-closed。派完挂 `events --wait --event-type agent.dispatch.completed`，别轮询。运行中 `tail -f .lto/<run-id>/live/<job-id>.log`。autopilot 档位 supervised→auto-exec（worktree 沙箱）→autonomous（机械证据闸门，不 spawn 决策 agent，反思归你）；先观测后控制：当前 run 无已证实观测信号不放行。 不适用：确定性本地命令直接 runner 跑。
 
-**Ⅳ 验证与收敛**——高风险 task 派异构对抗审计：`audit --auto-dispatch`（`--prefer-runner` 把慢 runner 挪出收口关键路径）、`audit --discover-risks` 对抗「自报完整性」（未审 risk 被 closeout 拦）。拿到 findings：不投票（审者自报置信度只是元数据，核验仍逐条进行），亲自看源码核实每一条、大问题数须逐轮下降。ledger 由 Rust core `lto check --ledger <path> [--strict]` 判硬 verdict（NO_OBSERVATIONS/CONVERGED/CONVERGING/REBOUND/STALLED）；五维 diagnostics 和 forced-entropy 提示只给 host 参考，不改变 gate——**高风险 closeout 仍只认有观测且末轮降到 0**。手动派工的 reply 用 `collect-agent-run` 登记。不适用：确定性测试。
+**Ⅳ 验证与收敛**——两类对象都走异构评审。**（a）方向/设计合议**（P1「重大裁决先合议」的落地）：写 council brief（背景+候选方案+必答问题，第一问必须是「最强反驳」防橡皮图章）+ 每 runner 一份薄 goal 文件（只评审不实现、指定 verdict 输出路径），`dispatch-goal` 并行派 ≥2 家族，收齐 verdict 后 host 合成三方结论，分歧点自己核实再定案。**（b）高风险 task 派异构对抗审计**：`audit --auto-dispatch`（`--prefer-runner` 把慢 runner 挪出收口关键路径）、`audit --discover-risks` 对抗「自报完整性」（未审 risk 被 closeout 拦）。拿到 findings：不投票（审者自报置信度只是元数据，核验仍逐条进行），亲自看源码核实每一条、大问题数须逐轮下降。ledger 由 Rust core `lto check --ledger <path> [--strict]` 判硬 verdict（NO_OBSERVATIONS/CONVERGED/CONVERGING/REBOUND/STALLED）；五维 diagnostics 和 forced-entropy 提示只给 host 参考，不改变 gate——**高风险 closeout 仍只认有观测且末轮降到 0**。手动派工的 reply 用 `collect-agent-run` 登记。不适用：确定性测试。
 
 **Ⅴ 交付与发布**——部署必须按序：schema 先行可回滚 → 试运行 → 先只读 → 正式上线 → **走一遍真实用户路径**（不是 ping 服务活着）→ 清测试数据观察。收尾前四证据：documentation_alignment / historical_cleanup / clean_worktree / rebuild_package。`closeout --summary` 写 handoff+CHANGELOG；`release` 是 host-owned（.git 写操作 runner 沙箱做不了）。不适用：未过Ⅳ收敛闸门。
 
