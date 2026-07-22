@@ -1234,7 +1234,9 @@ mod tests {
             output_schema: None,
             parent_pattern: crate::agent_job::Pattern::Linear,
             budget: Budget {
-                timeout_sec: 1,
+                // 30s: fixture budget must survive loaded machines; tests that
+                // exercise timeout behavior override ready_timeout locally.
+                timeout_sec: 30,
                 max_tokens: None,
             },
             retry_policy: RetryPolicy {
