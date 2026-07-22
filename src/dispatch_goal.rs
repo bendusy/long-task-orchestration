@@ -74,7 +74,7 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     persist_notify_cmd(&mut ctx, options.notify_cmd.as_deref())?;
     let goal_path = absolutize(&options.goal)?;
     let goal_path =
-        materialize_goal_with_completion_protocol(&goal_path, &ctx.run_id, &options.runner)?;
+        materialize_goal_with_completion_protocol(&goal_path, repo, &ctx.run_id, &options.runner)?;
     let cwd = options.cwd.clone().unwrap_or_else(|| repo.to_path_buf());
     let degraded = |err: anyhow::Error| HookStatus {
         status: "degraded".to_string(),
@@ -375,7 +375,7 @@ fn run_dispatch(
     let repo_path = absolutize(repo)?;
     // ready_patterns / launch don't depend on window_id; prompt is rebuilt once
     // the real window_id is known so self-report can inline it (no env inheritance).
-    let mut plan = runner_plan(&options.runner, goal_path, &run_id, "pending");
+    let mut plan = runner_plan(&options.runner, goal_path, &repo_path, &run_id, "pending");
     let config = TmuxRunnerConfig {
         mode: TmuxMode::Fire,
         target: options.target.clone(),
@@ -428,6 +428,7 @@ fn run_dispatch(
         // Inline the real window_id into the self-report command (preference ②).
         plan.prompt = goal_prompt(
             &goal_path.display().to_string(),
+            &repo_path.display().to_string(),
             &run_id,
             &options.runner,
             window_id.as_deref().unwrap_or("unknown"),
@@ -496,9 +497,21 @@ struct GoalDispatchOutcome {
     completion_mode: String,
 }
 
-fn runner_plan(runner: &str, goal_path: &Path, run_id: &str, window_id: &str) -> GoalRunnerPlan {
+fn runner_plan(
+    runner: &str,
+    goal_path: &Path,
+    repo: &Path,
+    run_id: &str,
+    window_id: &str,
+) -> GoalRunnerPlan {
     let goal = goal_path.display().to_string();
-    let prompt = goal_prompt(&goal, run_id, runner, window_id);
+    let prompt = goal_prompt(
+        &goal,
+        &repo.display().to_string(),
+        run_id,
+        runner,
+        window_id,
+    );
     match runner {
         "codex" => GoalRunnerPlan {
             // Isolate from the user's global MCP servers (2026-07-15: bare
@@ -622,6 +635,7 @@ const COMPLETION_PROTOCOL_MARKER: &str = "<!-- lto:completion-protocol -->";
 /// window exists; the paste-line command still carries it for cleanup.
 fn materialize_goal_with_completion_protocol(
     goal_path: &Path,
+    repo: &Path,
     run_id: &str,
     runner: &str,
 ) -> anyhow::Result<PathBuf> {
@@ -630,8 +644,13 @@ fn materialize_goal_with_completion_protocol(
     if content.contains("agent-turn-completed") {
         return Ok(goal_path.to_path_buf());
     }
+    // --repo is mandatory here: dispatch often sets the agent's cwd to a git
+    // worktree (even one nested under .lto/), where run resolution from cwd
+    // finds zero runs and the self-report dies silently — both arms of two A/B
+    // runs failed to report exactly this way.
     let report = format!(
-        "lto agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --bell"
+        "lto --repo {} agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --bell",
+        shell_single_quote(&absolutize(repo)?.display().to_string()),
     );
     let footer = format!(
         "\n\n---\n{COMPLETION_PROTOCOL_MARKER}\n## 完成协议（dispatch 注入，不可省略）\n\n所有完成判据满足后，最后一步必须执行：\n\n```bash\n{report}\n```\n\n若被阻塞无法完成，改用 `--rc 1`。不执行此命令，任务视为未完成。\n"
@@ -650,9 +669,12 @@ fn materialize_goal_with_completion_protocol(
 /// goal file itself; only the path + self-report completion signal go here.
 /// window_id is inlined (not `$LTO_WINDOW_ID`) so the agent bash child does not
 /// depend on env inheritance from the REPL process.
-fn goal_prompt(goal: &str, run_id: &str, runner: &str, window_id: &str) -> String {
+fn goal_prompt(goal: &str, repo: &str, run_id: &str, runner: &str, window_id: &str) -> String {
+    // --repo inlined: the agent's cwd is often a worktree where run resolution
+    // from cwd finds nothing and the self-report dies silently.
     let report = format!(
-        "lto agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --window-id {window_id} --bell"
+        "lto --repo {} agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --window-id {window_id} --bell",
+        shell_single_quote(repo),
     );
     let prompt = format!(
         "Read the file {goal} and execute it. Follow only the instructions in that goal file. \
@@ -1198,13 +1220,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let goal = tmp.path().join("goal-x.md");
         fs::write(&goal, "# Goal\n\n做完就停。\n").unwrap();
-        let out = materialize_goal_with_completion_protocol(&goal, "run-1", "codex").unwrap();
+        let out =
+            materialize_goal_with_completion_protocol(&goal, Path::new("/repo"), "run-1", "codex")
+                .unwrap();
         assert_eq!(out, tmp.path().join("goal-x.dispatch.md"));
         let text = fs::read_to_string(&out).unwrap();
         assert!(text.starts_with("# Goal"), "original content must lead");
         assert!(text.contains(COMPLETION_PROTOCOL_MARKER));
+        // --repo must be inlined: agents run this from a worktree cwd where
+        // run resolution would otherwise find nothing.
         assert!(text.contains(
-            "lto agent-turn-completed --run-id run-1 --runner codex --source goal-self-report"
+            "lto --repo '/repo' agent-turn-completed --run-id run-1 --runner codex --source goal-self-report"
         ));
         // Original goal file must stay untouched.
         assert_eq!(fs::read_to_string(&goal).unwrap(), "# Goal\n\n做完就停。\n");
@@ -1215,7 +1241,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let goal = tmp.path().join("goal-y.md");
         fs::write(&goal, "# Goal\n最后运行 lto agent-turn-completed --rc 0\n").unwrap();
-        let out = materialize_goal_with_completion_protocol(&goal, "run-1", "pi").unwrap();
+        let out =
+            materialize_goal_with_completion_protocol(&goal, Path::new("/repo"), "run-1", "pi")
+                .unwrap();
         assert_eq!(out, goal);
         assert!(!tmp.path().join("goal-y.dispatch.md").exists());
     }
@@ -1258,7 +1286,13 @@ mod tests {
         assert!(!CODEX_STOP_HOOK.contains("--rc 0"));
         assert!(CODEX_STOP_HOOK.contains("--window-id"));
         for runner in ["pi", "agy"] {
-            let plan = runner_plan(runner, Path::new("/tmp/goal.md"), "r1", "@1");
+            let plan = runner_plan(
+                runner,
+                Path::new("/tmp/goal.md"),
+                Path::new("/repo"),
+                "r1",
+                "@1",
+            );
             let launch = plan.launch.as_deref().unwrap();
             assert!(launch.contains("--repo \"$LTO_REPO\""));
             assert!(launch.contains("--rc \"$LTO_AGENT_RC\""));
@@ -1282,7 +1316,7 @@ mod tests {
     #[test]
     fn runner_plan_uses_required_entrypoints() {
         let goal = Path::new("/tmp/goal.md");
-        let codex = runner_plan("codex", goal, "r1", "@9");
+        let codex = runner_plan("codex", goal, Path::new("/repo"), "r1", "@9");
         // codex no longer uses /goal skill; same text-mode prompt as pi/agy.
         assert!(codex.prompt.starts_with("Read the file /tmp/goal.md"));
         assert!(codex.prompt.contains("goal-self-report"));
@@ -1304,7 +1338,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            runner_plan("pi", goal, "r1", "@1").ready_patterns,
+            runner_plan("pi", goal, Path::new("/repo"), "r1", "@1").ready_patterns,
             vec!["0.0%".to_string(), "(auto)".to_string()]
         );
         assert_eq!(
@@ -1322,20 +1356,20 @@ mod tests {
             "codex launch must empty mcp_servers for isolation, got: {codex_launch}"
         );
         assert!(
-            runner_plan("pi", goal, "r1", "@1")
+            runner_plan("pi", goal, Path::new("/repo"), "r1", "@1")
                 .launch
                 .as_deref()
                 .unwrap()
                 .starts_with("LTO_RUN_ID='r1' pi --no-skills")
         );
         assert!(
-            !runner_plan("pi", goal, "r1", "@1")
+            !runner_plan("pi", goal, Path::new("/repo"), "r1", "@1")
                 .launch
                 .as_deref()
                 .unwrap()
                 .contains("--print")
         );
-        let pi_plan = runner_plan("pi", goal, "r1", "@2");
+        let pi_plan = runner_plan("pi", goal, Path::new("/repo"), "r1", "@2");
         assert!(pi_plan.prompt.starts_with("Read the file "));
         assert!(pi_plan.prompt.contains("goal-self-report"));
         assert!(pi_plan.prompt.contains("--window-id @2"));
@@ -1356,23 +1390,23 @@ mod tests {
         // agy must use the interactive entrypoint (`agy -i`), not `--print`
         // which only prints a plan without executing (bug #5/#6).
         assert!(
-            runner_plan("agy", goal, "r1", "@3")
+            runner_plan("agy", goal, Path::new("/repo"), "r1", "@3")
                 .launch
                 .as_deref()
                 .unwrap()
                 .starts_with("LTO_RUN_ID='r1' agy -i")
         );
         assert!(
-            !runner_plan("agy", goal, "r1", "@3")
+            !runner_plan("agy", goal, Path::new("/repo"), "r1", "@3")
                 .prompt
                 .contains("--print")
         );
         assert!(
-            runner_plan("agy", goal, "r1", "@3")
+            runner_plan("agy", goal, Path::new("/repo"), "r1", "@3")
                 .prompt
                 .contains("goal-self-report")
         );
-        assert!(runner_plan("agy", goal, "r1", "@3").needs_probe);
+        assert!(runner_plan("agy", goal, Path::new("/repo"), "r1", "@3").needs_probe);
 
         // Regression — two bugs must both stay fixed:
         //  v0.8.0: a bare `agy -i` errors "flag needs an argument" and never
@@ -1384,7 +1418,7 @@ mod tests {
         //  v0.9.1-followup: the placeholder MUST be empty ('') — a word like
         //          "start" makes agy treat it as a real instruction and explore
         //          the workspace, racing with/corrupting the real prompt.
-        let agy = runner_plan("agy", goal, "r1", "@4");
+        let agy = runner_plan("agy", goal, Path::new("/repo"), "r1", "@4");
         let launch = agy.launch.as_deref().unwrap();
         // `-i` is followed by a value (bug #1 stays fixed)...
         assert!(
@@ -1409,8 +1443,8 @@ mod tests {
         assert_eq!(agy.completion_mode, "goal-self-report");
         // agy takes the real prompt on a later line, like codex/pi.
         assert!(!agy.launch_includes_prompt);
-        assert!(!runner_plan("codex", goal, "r1", "@5").launch_includes_prompt);
-        assert!(!runner_plan("pi", goal, "r1", "@5").launch_includes_prompt);
+        assert!(!runner_plan("codex", goal, Path::new("/repo"), "r1", "@5").launch_includes_prompt);
+        assert!(!runner_plan("pi", goal, Path::new("/repo"), "r1", "@5").launch_includes_prompt);
         // The real prompt still exists (sent later), and it's the short self-report prompt.
         assert!(agy.prompt.contains("Read the file"));
         assert!(agy.prompt.contains("--window-id @4"));
@@ -1441,7 +1475,7 @@ mod tests {
     #[test]
     fn pi_dispatch_confirmation_does_not_reuse_ready_text() {
         let goal = Path::new("/tmp/goal.md");
-        let plan = runner_plan("pi", goal, "r1", "@1");
+        let plan = runner_plan("pi", goal, Path::new("/repo"), "r1", "@1");
 
         assert!(
             plan.confirm_patterns
