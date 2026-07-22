@@ -73,6 +73,8 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
     persist_notify_cmd(&mut ctx, options.notify_cmd.as_deref())?;
     let goal_path = absolutize(&options.goal)?;
+    let goal_path =
+        materialize_goal_with_completion_protocol(&goal_path, &ctx.run_id, &options.runner)?;
     let cwd = options.cwd.clone().unwrap_or_else(|| repo.to_path_buf());
     let degraded = |err: anyhow::Error| HookStatus {
         status: "degraded".to_string(),
@@ -602,6 +604,46 @@ fn process_exit_wrapper(launch: &str, runner: &str, run_id: &str) -> String {
         shell_single_quote(runner),
         runner,
     )
+}
+
+const COMPLETION_PROTOCOL_MARKER: &str = "<!-- lto:completion-protocol -->";
+
+/// Ensure the goal file the agent reads carries the completion protocol.
+///
+/// Both A/B arms of run 20260722-seed-ab finished real work but never ran the
+/// paste-line report command: execution agents satisfy the goal FILE's
+/// completion criteria and drop the ephemeral prompt line from attention over
+/// long runs. So the self-report command must live in the file itself. If the
+/// goal already mentions `agent-turn-completed`, dispatch it untouched;
+/// otherwise materialize a sibling `<stem>.dispatch.md` (same directory, so
+/// relative references inside the goal keep resolving) with the original
+/// content plus a completion-protocol footer, and point the agent at that.
+/// `--window-id` is intentionally omitted here — it is only known after the
+/// window exists; the paste-line command still carries it for cleanup.
+fn materialize_goal_with_completion_protocol(
+    goal_path: &Path,
+    run_id: &str,
+    runner: &str,
+) -> anyhow::Result<PathBuf> {
+    let content = fs::read_to_string(goal_path)
+        .with_context(|| format!("read goal file {}", goal_path.display()))?;
+    if content.contains("agent-turn-completed") {
+        return Ok(goal_path.to_path_buf());
+    }
+    let report = format!(
+        "lto agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --bell"
+    );
+    let footer = format!(
+        "\n\n---\n{COMPLETION_PROTOCOL_MARKER}\n## 完成协议（dispatch 注入，不可省略）\n\n所有完成判据满足后，最后一步必须执行：\n\n```bash\n{report}\n```\n\n若被阻塞无法完成，改用 `--rc 1`。不执行此命令，任务视为未完成。\n"
+    );
+    let stem = goal_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("goal");
+    let out = goal_path.with_file_name(format!("{stem}.dispatch.md"));
+    fs::write(&out, format!("{content}{footer}"))
+        .with_context(|| format!("materialize dispatch goal {}", out.display()))?;
+    Ok(out)
 }
 
 /// Build the short dispatch prompt (≤500 chars). Long constraints live in the
@@ -1149,6 +1191,33 @@ mod tests {
         assert!(slug.len() <= 20);
         assert!(!slug.ends_with('-'));
         assert_eq!(name, "lto:agy:abcdefghijklmnopqrs");
+    }
+
+    #[test]
+    fn materialize_appends_completion_protocol_when_goal_lacks_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        let goal = tmp.path().join("goal-x.md");
+        fs::write(&goal, "# Goal\n\n做完就停。\n").unwrap();
+        let out = materialize_goal_with_completion_protocol(&goal, "run-1", "codex").unwrap();
+        assert_eq!(out, tmp.path().join("goal-x.dispatch.md"));
+        let text = fs::read_to_string(&out).unwrap();
+        assert!(text.starts_with("# Goal"), "original content must lead");
+        assert!(text.contains(COMPLETION_PROTOCOL_MARKER));
+        assert!(text.contains(
+            "lto agent-turn-completed --run-id run-1 --runner codex --source goal-self-report"
+        ));
+        // Original goal file must stay untouched.
+        assert_eq!(fs::read_to_string(&goal).unwrap(), "# Goal\n\n做完就停。\n");
+    }
+
+    #[test]
+    fn materialize_keeps_goal_as_is_when_report_already_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let goal = tmp.path().join("goal-y.md");
+        fs::write(&goal, "# Goal\n最后运行 lto agent-turn-completed --rc 0\n").unwrap();
+        let out = materialize_goal_with_completion_protocol(&goal, "run-1", "pi").unwrap();
+        assert_eq!(out, goal);
+        assert!(!tmp.path().join("goal-y.dispatch.md").exists());
     }
 
     #[test]
