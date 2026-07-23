@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.10.1 — 修两个真 bug + README 说人话重写（2026-07-23）
+
+- **修 events 锁被误抢导致的重复 event_id**（Linux 偶发，v0.10.0 tag CI 首跑就是挂在这）：Linux 的 `ps -o comm=` 把进程名截断到 15 字节，存活的持锁进程被误判"已死"而遭抢锁，两个写入方同时进临界区。现在 Linux 直接读 `/proc/<pid>/exe` 拿完整名（含"二进制被重编译替换"时的 ` (deleted)` 后缀处理）。2 核 Linux 容器高负载 50 轮压测：修复前 2 次失败，修复后 0 次。
+- **修派工后 agent"干完了但没回报"**：真根因是回报命令没带 `--repo`——agent 的工作目录在 worktree 里时，`lto agent-turn-completed` 找不到 run，命令静默失败。现在粘贴行和注入 goal 的完成协议都内联主仓绝对路径。另外：goal 文件里没写回报命令时，dispatch 会在同目录生成 `<名字>.dispatch.md`（原文+完成协议附录）派给 agent，原文件不动。
+- **tmux 测试抗负载加固**：共享 fixture 的 1 秒预算在高负载机器上随机红，放宽到 30 秒（故意测超时的用例不受影响）。
+- **README 重写成人话**：按"解决什么问题"组织，删掉内部术语堆砌，命令示例全部保留可复制。
+
 ## seed-edit A/B 第二轮：events 锁假 stale 抢锁竞态修复，传统 goal vs seed goal 各派一个 codex
 
 - **Run ID**: `20260723-seed-ab2`
