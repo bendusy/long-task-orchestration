@@ -31,6 +31,9 @@ pub struct DispatchGoalOptions {
     pub notify_cmd: Option<String>,
     pub no_install_hooks: bool,
     pub uninstall_hooks: bool,
+    /// Skip per-runner behavioral-constraints injection (built-in codex block
+    /// and `$LTO_CONSTRAINTS_DIR` / `~/.config/lto/constraints/<runner>.md`).
+    pub no_runner_constraints: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -73,8 +76,18 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
     persist_notify_cmd(&mut ctx, options.notify_cmd.as_deref())?;
     let goal_path = absolutize(&options.goal)?;
-    let goal_path =
-        materialize_goal_with_completion_protocol(&goal_path, repo, &ctx.run_id, &options.runner)?;
+    let constraints = if options.no_runner_constraints {
+        None
+    } else {
+        runner_constraints(&options.runner)
+    };
+    let goal_path = materialize_goal_with_completion_protocol(
+        &goal_path,
+        repo,
+        &ctx.run_id,
+        &options.runner,
+        constraints.as_deref(),
+    )?;
     let cwd = options.cwd.clone().unwrap_or_else(|| repo.to_path_buf());
     let degraded = |err: anyhow::Error| HookStatus {
         status: "degraded".to_string(),
@@ -620,6 +633,55 @@ fn process_exit_wrapper(launch: &str, runner: &str, run_id: &str) -> String {
 }
 
 const COMPLETION_PROTOCOL_MARKER: &str = "<!-- lto:completion-protocol -->";
+const RUNNER_CONSTRAINTS_MARKER: &str = "<!-- lto:runner-constraints -->";
+
+/// Per-runner behavioral constraints injected into the dispatched goal file.
+///
+/// Built-in text exists only for codex（GPT-5.x 系）：实测爱绕弯子——自发扇出子代理
+/// "优化"未要求的产物、再开子代理检查自己、长篇复述烧 token（2026-07-23 社区反馈
+/// 固化）。其余 runner 默认不注入：约束提示是否弱化模型能力尚无证据，保持保守。
+/// 本机可通过 `$LTO_CONSTRAINTS_DIR`（默认 `~/.config/lto/constraints`）下的
+/// `<runner>.md` 覆盖文件为任意 runner 启用或替换文案；空文件表示对该 runner
+/// 显式关闭内置约束。约束走 goal 文件注入段，不进 ≤500 字符的 dispatch prompt。
+fn runner_constraints(runner: &str) -> Option<String> {
+    runner_constraints_from(runner, constraints_dir().as_deref())
+}
+
+fn constraints_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("LTO_CONSTRAINTS_DIR")
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/lto/constraints"))
+}
+
+fn runner_constraints_from(runner: &str, dir: Option<&Path>) -> Option<String> {
+    if let Some(dir) = dir
+        && let Ok(text) = fs::read_to_string(dir.join(format!("{runner}.md")))
+    {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        return Some(wrap_runner_constraints(text));
+    }
+    match runner {
+        "codex" => Some(wrap_runner_constraints(
+            "- **只做本 goal 要求的事**：禁止顺手优化/重构/美化未提及的代码；发现题外问题记进汇报，不动手改。\n\
+- **修改范围最小化**：满足完成判据的最小 diff；遵循 KISS，不引入未要求的抽象、依赖、配置。\n\
+- **禁止自发扇出子代理**：不为\"优化已有产物\"或\"自我检查\"开子代理/并行任务；goal 明确要求的除外。\n\
+- **默认简短、中文回复**：过程输出与最终汇报用中文要点式，只写做了什么/判据结果/遗留项，不复述 goal 内容。",
+        )),
+        _ => None,
+    }
+}
+
+fn wrap_runner_constraints(body: &str) -> String {
+    format!(
+        "\n\n---\n{RUNNER_CONSTRAINTS_MARKER}\n## 执行约束（dispatch 注入，优先级高于默认行为）\n\n{body}\n"
+    )
+}
 
 /// Ensure the goal file the agent reads carries the completion protocol.
 ///
@@ -627,10 +689,12 @@ const COMPLETION_PROTOCOL_MARKER: &str = "<!-- lto:completion-protocol -->";
 /// paste-line report command: execution agents satisfy the goal FILE's
 /// completion criteria and drop the ephemeral prompt line from attention over
 /// long runs. So the self-report command must live in the file itself. If the
-/// goal already mentions `agent-turn-completed`, dispatch it untouched;
-/// otherwise materialize a sibling `<stem>.dispatch.md` (same directory, so
-/// relative references inside the goal keep resolving) with the original
-/// content plus a completion-protocol footer, and point the agent at that.
+/// goal already mentions `agent-turn-completed` and carries the runner's
+/// behavioral constraints (if any), dispatch it untouched; otherwise
+/// materialize a sibling `<stem>.dispatch.md` (same directory, so relative
+/// references inside the goal keep resolving) with the original content plus
+/// the missing constraint/completion-protocol footers, and point the agent
+/// at that.
 /// `--window-id` is intentionally omitted here — it is only known after the
 /// window exists; the paste-line command still carries it for cleanup.
 fn materialize_goal_with_completion_protocol(
@@ -638,23 +702,29 @@ fn materialize_goal_with_completion_protocol(
     repo: &Path,
     run_id: &str,
     runner: &str,
+    constraints: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
     let content = fs::read_to_string(goal_path)
         .with_context(|| format!("read goal file {}", goal_path.display()))?;
-    if content.contains("agent-turn-completed") {
+    let needs_protocol = !content.contains("agent-turn-completed");
+    let constraints = constraints.filter(|_| !content.contains(RUNNER_CONSTRAINTS_MARKER));
+    if !needs_protocol && constraints.is_none() {
         return Ok(goal_path.to_path_buf());
     }
-    // --repo is mandatory here: dispatch often sets the agent's cwd to a git
-    // worktree (even one nested under .lto/), where run resolution from cwd
-    // finds zero runs and the self-report dies silently — both arms of two A/B
-    // runs failed to report exactly this way.
-    let report = format!(
-        "lto --repo {} agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --bell",
-        shell_single_quote(&absolutize(repo)?.display().to_string()),
-    );
-    let footer = format!(
-        "\n\n---\n{COMPLETION_PROTOCOL_MARKER}\n## 完成协议（dispatch 注入，不可省略）\n\n所有完成判据满足后，最后一步必须执行：\n\n```bash\n{report}\n```\n\n若被阻塞无法完成，改用 `--rc 1`。不执行此命令，任务视为未完成。\n"
-    );
+    let mut footer = constraints.map(str::to_owned).unwrap_or_default();
+    if needs_protocol {
+        // --repo is mandatory here: dispatch often sets the agent's cwd to a git
+        // worktree (even one nested under .lto/), where run resolution from cwd
+        // finds zero runs and the self-report dies silently — both arms of two A/B
+        // runs failed to report exactly this way.
+        let report = format!(
+            "lto --repo {} agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --bell",
+            shell_single_quote(&absolutize(repo)?.display().to_string()),
+        );
+        footer.push_str(&format!(
+            "\n\n---\n{COMPLETION_PROTOCOL_MARKER}\n## 完成协议（dispatch 注入，不可省略）\n\n所有完成判据满足后，最后一步必须执行：\n\n```bash\n{report}\n```\n\n若被阻塞无法完成，改用 `--rc 1`。不执行此命令，任务视为未完成。\n"
+        ));
+    }
     let stem = goal_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -1097,6 +1167,7 @@ mod tests {
             notify_cmd: None,
             no_install_hooks: false,
             uninstall_hooks: false,
+            no_runner_constraints: false,
         }
     }
 
@@ -1220,9 +1291,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let goal = tmp.path().join("goal-x.md");
         fs::write(&goal, "# Goal\n\n做完就停。\n").unwrap();
-        let out =
-            materialize_goal_with_completion_protocol(&goal, Path::new("/repo"), "run-1", "codex")
-                .unwrap();
+        let out = materialize_goal_with_completion_protocol(
+            &goal,
+            Path::new("/repo"),
+            "run-1",
+            "codex",
+            runner_constraints_from("codex", None).as_deref(),
+        )
+        .unwrap();
         assert_eq!(out, tmp.path().join("goal-x.dispatch.md"));
         let text = fs::read_to_string(&out).unwrap();
         assert!(text.starts_with("# Goal"), "original content must lead");
@@ -1234,6 +1310,14 @@ mod tests {
         ));
         // Original goal file must stay untouched.
         assert_eq!(fs::read_to_string(&goal).unwrap(), "# Goal\n\n做完就停。\n");
+        // codex additionally gets the behavioral-constraints block, before the
+        // completion protocol so the report command stays the literal last step.
+        assert!(text.contains(RUNNER_CONSTRAINTS_MARKER));
+        assert!(text.contains("修改范围最小化"));
+        assert!(
+            text.find(RUNNER_CONSTRAINTS_MARKER).unwrap()
+                < text.find(COMPLETION_PROTOCOL_MARKER).unwrap()
+        );
     }
 
     #[test]
@@ -1241,11 +1325,78 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let goal = tmp.path().join("goal-y.md");
         fs::write(&goal, "# Goal\n最后运行 lto agent-turn-completed --rc 0\n").unwrap();
-        let out =
-            materialize_goal_with_completion_protocol(&goal, Path::new("/repo"), "run-1", "pi")
-                .unwrap();
+        let out = materialize_goal_with_completion_protocol(
+            &goal,
+            Path::new("/repo"),
+            "run-1",
+            "pi",
+            runner_constraints_from("pi", None).as_deref(),
+        )
+        .unwrap();
         assert_eq!(out, goal);
         assert!(!tmp.path().join("goal-y.dispatch.md").exists());
+    }
+
+    #[test]
+    fn materialize_adds_codex_constraints_even_when_report_already_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let goal = tmp.path().join("goal-z.md");
+        let content = "# Goal\n最后运行 lto agent-turn-completed --rc 0\n";
+        fs::write(&goal, content).unwrap();
+        let constraints = runner_constraints_from("codex", None);
+        let out = materialize_goal_with_completion_protocol(
+            &goal,
+            Path::new("/repo"),
+            "run-1",
+            "codex",
+            constraints.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(out, tmp.path().join("goal-z.dispatch.md"));
+        let text = fs::read_to_string(&out).unwrap();
+        assert!(text.contains(RUNNER_CONSTRAINTS_MARKER));
+        // Goal already carries the report command: no second protocol footer.
+        assert!(!text.contains(COMPLETION_PROTOCOL_MARKER));
+        // Re-materializing the dispatched file must be a no-op (idempotent).
+        let again = materialize_goal_with_completion_protocol(
+            &out,
+            Path::new("/repo"),
+            "run-1",
+            "codex",
+            constraints.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(again, out);
+    }
+
+    #[test]
+    fn non_codex_runners_get_no_builtin_constraint_block() {
+        for runner in ["pi", "agy", "claude", "gemini"] {
+            assert!(
+                runner_constraints_from(runner, None).is_none(),
+                "runner {runner}"
+            );
+        }
+    }
+
+    #[test]
+    fn constraint_override_file_enables_any_runner_and_replaces_builtin() {
+        let dir = tempfile::tempdir().unwrap();
+        // Override file enables a runner that has no built-in block.
+        fs::write(dir.path().join("pi.md"), "以浅近文言作答。\n").unwrap();
+        let pi = runner_constraints_from("pi", Some(dir.path())).unwrap();
+        assert!(pi.contains(RUNNER_CONSTRAINTS_MARKER));
+        assert!(pi.contains("以浅近文言作答。"));
+        // Override file replaces the built-in codex block wholesale.
+        fs::write(dir.path().join("codex.md"), "只此一条。\n").unwrap();
+        let codex = runner_constraints_from("codex", Some(dir.path())).unwrap();
+        assert!(codex.contains("只此一条。"));
+        assert!(!codex.contains("修改范围最小化"));
+        // An empty override file explicitly disables the built-in block.
+        fs::write(dir.path().join("codex.md"), "\n").unwrap();
+        assert!(runner_constraints_from("codex", Some(dir.path())).is_none());
+        // No file for the runner falls back to the built-in (codex only).
+        assert!(runner_constraints_from("agy", Some(dir.path())).is_none());
     }
 
     #[test]

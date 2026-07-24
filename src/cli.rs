@@ -618,6 +618,11 @@ pub struct DispatchGoalCommand {
     no_install_hooks: bool,
     #[arg(long = "uninstall-hooks")]
     uninstall_hooks: bool,
+    /// Skip per-runner behavioral-constraints injection into the dispatched
+    /// goal (built-in codex block and ~/.config/lto/constraints/<runner>.md
+    /// overrides; dir overridable via $LTO_CONSTRAINTS_DIR).
+    #[arg(long = "no-runner-constraints")]
+    no_runner_constraints: bool,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -1359,6 +1364,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     notify_cmd: cmd.notify_cmd,
                     no_install_hooks: cmd.no_install_hooks,
                     uninstall_hooks: cmd.uninstall_hooks,
+                    no_runner_constraints: cmd.no_runner_constraints,
                 },
             )?;
         }
@@ -1387,6 +1393,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     notify_cmd: d.notify_cmd,
                     no_install_hooks: d.no_install_hooks,
                     uninstall_hooks: d.uninstall_hooks,
+                    no_runner_constraints: d.no_runner_constraints,
                 },
             )?;
             println!(

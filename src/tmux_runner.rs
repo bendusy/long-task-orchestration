@@ -378,10 +378,10 @@ async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerE
         // session so the host/user can switch to it and watch the dispatched
         // agent, instead of a detached `new-session -d` they cannot see
         // (am 0a3fa8f.md: 10 floating sessions the user never found).
-        // Outside tmux (headless/CI/non-tmux shell), current_session returns
+        // Outside tmux (headless/CI/non-tmux shell), current_anchor returns
         // None and we fall through to the unchanged detached path below.
-        if let Some(session) = current_session(&config.tmux_bin).await? {
-            return new_window_in_session(config, Some(session)).await;
+        if let Some(anchor) = current_anchor(&config.tmux_bin).await? {
+            return new_window_at_anchor(config, anchor).await;
         }
         let session = config.session.as_ref().ok_or_else(|| {
             TmuxRunnerError::Config("tmux_new_session requires tmux_session".to_string())
@@ -402,18 +402,22 @@ async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerE
             Err(TmuxRunnerError::CommandFailed { stderr, .. })
                 if contains_case_insensitive(&stderr, "duplicate session") =>
             {
-                new_window_in_session(config, Some(session.clone())).await
+                new_window_in_session(config, Some(session.clone()), None).await
             }
             Err(err) => Err(err),
         };
     }
 
     if config.new_window {
-        let target = match config.target.as_ref().or(config.session.as_ref()) {
-            Some(target) => Some(target.clone()),
-            None => current_session(&config.tmux_bin).await?,
-        };
-        return new_window_in_session(config, target).await;
+        // Explicit target/session wins; only fall back to the invoking pane's
+        // anchor when neither is given.
+        if let Some(target) = config.target.as_ref().or(config.session.as_ref()) {
+            return new_window_in_session(config, Some(target.clone()), None).await;
+        }
+        if let Some(anchor) = current_anchor(&config.tmux_bin).await? {
+            return new_window_at_anchor(config, anchor).await;
+        }
+        return new_window_in_session(config, None, None).await;
     }
 
     if let Some(target) = &config.target {
@@ -423,8 +427,8 @@ async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerE
         return Ok(target.clone());
     }
 
-    if let Some(session) = current_session(&config.tmux_bin).await? {
-        return new_window_in_session(config, Some(session)).await;
+    if let Some(anchor) = current_anchor(&config.tmux_bin).await? {
+        return new_window_at_anchor(config, anchor).await;
     }
 
     Err(TmuxRunnerError::Config(
@@ -435,6 +439,7 @@ async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerE
 async fn new_window_in_session(
     config: &TmuxRunnerConfig,
     target: Option<String>,
+    insert_after: Option<String>,
 ) -> Result<String, TmuxRunnerError> {
     let mut args = vec![
         "new-window".to_string(),
@@ -444,13 +449,29 @@ async fn new_window_in_session(
         "-n".to_string(),
         config.window_name.clone(),
     ];
-    if let Some(target) = target {
+    // `-a -t <window>` inserts right after that window; a bare `-t <session>`
+    // appends at the session tail (position then depends on session state).
+    if let Some(window) = insert_after {
+        args.push("-a".to_string());
+        args.push("-t".to_string());
+        args.push(window);
+    } else if let Some(target) = target {
         args.push("-t".to_string());
         args.push(target);
     }
     tmux_output(&config.tmux_bin, &args)
         .await
         .map(|target| target.trim().to_string())
+}
+
+/// Deterministic placement: when the anchor knows the invoking pane's window
+/// (host agent's window), insert the dispatch window right after it so
+/// dispatches always land next to the host instead of at the session tail.
+async fn new_window_at_anchor(
+    config: &TmuxRunnerConfig,
+    anchor: TmuxAnchor,
+) -> Result<String, TmuxRunnerError> {
+    new_window_in_session(config, Some(anchor.session), anchor.window_id).await
 }
 
 pub fn window_id_from_target(target: &str) -> Option<String> {
@@ -493,38 +514,51 @@ async fn ensure_target_is_idle_shell(
     )))
 }
 
-async fn current_session(tmux_bin: &str) -> Result<Option<String>, TmuxRunnerError> {
+/// Where the invoking process sits inside tmux. `window_id` is present only
+/// when resolved from `$TMUX_PANE` (the host agent's own pane) — the client
+/// fallback can't tell which window the caller lives in.
+struct TmuxAnchor {
+    session: String,
+    window_id: Option<String>,
+}
+
+async fn current_anchor(tmux_bin: &str) -> Result<Option<TmuxAnchor>, TmuxRunnerError> {
     let pane = match std::env::var("TMUX_PANE") {
         Ok(value) if !value.trim().is_empty() => Some(value),
         _ => None,
     };
     let Some(pane) = pane else {
-        return current_session_from_client(tmux_bin).await;
+        return current_anchor_from_client(tmux_bin).await;
     };
-    let session = match tmux_output(
+    let line = match tmux_output(
         tmux_bin,
         &[
             "display-message".to_string(),
             "-p".to_string(),
             "-t".to_string(),
             pane,
-            "#{session_name}".to_string(),
+            "#{session_name}\t#{window_id}".to_string(),
         ],
     )
     .await
     {
-        Ok(session) => session,
-        Err(_) => return current_session_from_client(tmux_bin).await,
+        Ok(line) => line,
+        Err(_) => return current_anchor_from_client(tmux_bin).await,
     };
+    let line = line.trim();
+    let (session, window_id) = line.split_once('\t').unwrap_or((line, ""));
     let session = session.trim();
     if session.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(session.to_string()))
+        return Ok(None);
     }
+    let window_id = window_id.trim();
+    Ok(Some(TmuxAnchor {
+        session: session.to_string(),
+        window_id: window_id.starts_with('@').then(|| window_id.to_string()),
+    }))
 }
 
-async fn current_session_from_client(tmux_bin: &str) -> Result<Option<String>, TmuxRunnerError> {
+async fn current_anchor_from_client(tmux_bin: &str) -> Result<Option<TmuxAnchor>, TmuxRunnerError> {
     match std::env::var("TMUX") {
         Ok(value) if !value.trim().is_empty() => {}
         _ => return Ok(None),
@@ -546,7 +580,10 @@ async fn current_session_from_client(tmux_bin: &str) -> Result<Option<String>, T
     if session.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(session.to_string()))
+        Ok(Some(TmuxAnchor {
+            session: session.to_string(),
+            window_id: None,
+        }))
     }
 }
 
