@@ -474,8 +474,14 @@ fn write_changelog(
                     .and_then(Value::as_str)
                     .or_else(|| evidence.get("command").and_then(Value::as_str))
                     .unwrap_or("");
-                let rc = evidence.get("rc").and_then(Value::as_i64);
-                let marker = if rc == Some(0) { "PASS" } else { "FAIL" };
+                // Evidence without an rc (manual notes, collected agent runs)
+                // carries no pass/fail verdict — marking it FAIL misreported
+                // every successful manual registration in the changelog.
+                let marker = match evidence.get("rc").and_then(Value::as_i64) {
+                    Some(0) => "PASS",
+                    Some(_) => "FAIL",
+                    None => "NOTE",
+                };
                 lines.push(format!("  - {marker} [{kind}] {}", truncate(summary, 80)));
             }
             for blocker in task
@@ -800,7 +806,11 @@ mod tests {
             "id": "T1",
             "title": "write tests",
             "status": "done",
-            "evidence": [{"kind": "test", "summary": "cargo test", "rc": 0}],
+            "evidence": [
+                {"kind": "test", "summary": "cargo test", "rc": 0},
+                {"kind": "test", "summary": "cargo clippy", "rc": 101},
+                {"kind": "manual", "summary": "collected pi dispatch"}
+            ],
             "blockers": [{"reason": "none now"}]
         }]);
         write_changelog(tmp.path(), &ctx, &options(false)).unwrap();
@@ -808,6 +818,9 @@ mod tests {
         assert!(text.starts_with("# Changelog\n\n## closeout gates"));
         assert!(text.contains("- **T1**: write tests (done)"));
         assert!(text.contains("PASS [test] cargo test"));
+        assert!(text.contains("FAIL [test] cargo clippy"));
+        // rc-less evidence carries no verdict: it must not be reported as FAIL.
+        assert!(text.contains("NOTE [manual] collected pi dispatch"));
         assert!(text.contains("blocked: none now"));
     }
 }

@@ -1,5 +1,21 @@
 # Changelog
 
+## 吸收 UnDercontrol 两条 hypothesis：资源面 CLI(get/describe) + 跨机 dispatch
+
+- **Run ID**: `20260724-ud-primitives`
+- **Closed**: 2026-07-24T03:59:38+00:00
+- **Summary**: A（get/describe 资源面）已上线并 dogfooding 验证；B（跨机 dispatch）经 codex+pi 独立审计判 NO-GO，采纳人工 handoff，重启需真实使用数据 + 解决 8 个 BLOCKER
+
+### Tasks
+
+- **a-p1-resource-cli**: A-P1: get/describe 资源面框架 + task 资源（pi 实施中） (done)
+  - NOTE [manual] commits e59fe4b+db5ee4a (history surgery: pi 原提交卷入未提交 dispatch 改动已拆为 3 个独立可编译 co
+- **b-remote-dispatch-spec**: B: 跨机 dispatch spec（合议定案：receipt+拉取导入为主线，只立 spec） (done)
+  - NOTE [manual] spec 交付但裁定 NO-GO：codex+pi 独立审计双双否决全自动协议（8 BLOCKER + 4 处 spec 事实错误）。采纳人工 handoff（
+  - NOTE [manual] collected codex dispatch
+  - NOTE [manual] collected pi dispatch
+
+
 ## v0.10.1 — 修两个真 bug + README 说人话重写（2026-07-23）
 
 - **修 events 锁被误抢导致的重复 event_id**（Linux 偶发，v0.10.0 tag CI 首跑就是挂在这）：Linux 的 `ps -o comm=` 把进程名截断到 15 字节，存活的持锁进程被误判"已死"而遭抢锁，两个写入方同时进临界区。现在 Linux 直接读 `/proc/<pid>/exe` 拿完整名（含"二进制被重编译替换"时的 ` (deleted)` 后缀处理）。2 核 Linux 容器高负载 50 轮压测：修复前 2 次失败，修复后 0 次。
