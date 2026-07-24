@@ -1,8 +1,38 @@
 # Spec: 跨机 dispatch（remote dispatch + receipt 回传）
 
-> 状态：**DRAFT / 未实施**。本文冻结协议与边界，实施拆成后续 goal。
-> 来源：UnDercontrol（oatnil.com）"agents on every machine you own" 的 hypothesis，经 codex/pi 异构合议 + host 定案（2026-07-24，run `20260724-ud-primitives`）。
+> 状态：**§3 的全自动协议 NO-GO，暂缓实施**。异构审计（codex/pi 独立并行，2026-07-24）双双判定当前设计不能进入实施；host 采纳。
+> **当前生效的是 §0 的人工 handoff 薄路径**；§3 全自动协议降级为"待证据支持的未来设计"，其 BLOCKER 清单见 §7。
+> 来源：UnDercontrol（oatnil.com）"agents on every machine you own" 的 hypothesis，经 codex/pi 异构合议 + host 定案（run `20260724-ud-primitives`）。
 > 定位：这是 **principle 4（每个 actuator 有界）** 的一次边界外扩，不是新增编排层。host 仍是 controller-in-chief。
+
+---
+
+## 0. 当前采纳路径：人工 handoff（零新协议）
+
+审计结论一致——全自动协议引入两份状态副本、SSH 不确定提交、分布式幂等、远端权限与恢复运维，成本远超"800–1200 行"的直觉估计；而**跨机派工的真实频率尚无基线数据**（principle 9：外部观点是 hypothesis，需 eval 证据才能进 core）。
+
+因此先用**现有命令**跑通闭环，不写新代码：
+
+```bash
+# 1. 本机：确认远端仓库状态（人工，一次性）
+ssh axis 'cd /path/repo && git rev-parse HEAD && git status --short'
+
+# 2. 本机：goal 传过去
+scp goal-x.md axis:/path/repo/
+
+# 3. 远端：人工起 lto 派工（远端自己有完整 run 或直接跑 agent CLI）
+ssh axis 'cd /path/repo && lto dispatch-goal --runner pi --goal goal-x.md ...'
+
+# 4. 远端跑完，把 reply 取回本机
+scp axis:/path/repo/reply-pi.md .
+
+# 5. 本机：登记进本 run 的证据链（已有命令，无需 receipt 协议）
+lto collect-agent-run --task-id <T> --runner pi --reply reply-pi.md --status ok
+```
+
+**收集什么证据再决定要不要自动化**：跨机派工频率、每次人工耗时、失败类型、证据丢失率。跑满 5–10 次真实派工后复盘；只有当"人工收集是主要瓶颈"被数据支持时，才重启 §3 的协议设计。
+
+**唯一允许的增量**（可选，若人工步骤 1 反复出错才做）：一个**只读** `lto remote-preflight --host <alias> --cwd <path>`，输出远端 HEAD/dirty 与 content-addressed goal bundle 指令。不做 receipt、不做轮询、不做远端状态镜像、不做 push-back。
 
 ---
 
@@ -33,7 +63,9 @@
 
 ---
 
-## 3. 架构裁决（合议定案，实施勿另起方案）
+## 3. 全自动协议设计（**NO-GO / 暂缓**，保留供未来重启）
+
+> 以下 §3–§6 是首版设计，异构审计判定不可实施。保留原文以便未来带着 §7 的 BLOCKER 清单重做。**读到这里请先读 §7，不要照本实施。**
 
 ### 3.1 目标寻址：显式字段，不用 `ssh:` URI
 
@@ -152,3 +184,35 @@ pub receipt_imported_at: Option<String>,
 3. **双 SSH 通道诱惑**：反向 push-back 一旦被当成主路径，就会出现两条正确性来源。spec 写死：**receipt 是唯一事实来源**。
 4. **redaction 边界**：远端文本一律视为不可信输入，导入前过本机 redact。
 5. **goal 里的绝对路径**：现完成协议内联本机 `--repo` 路径；remote 模式必须换成远端路径，且不得把本机私有路径泄露到远端文件（privacy self-check 覆盖）。
+
+---
+
+## 7. 审计裁定与 BLOCKER 清单（2026-07-24，codex + pi 独立并行审计）
+
+两家独立得出同一判断：**当前设计不能进入实施**。以下 BLOCKER 均已由审计方给出源码证据，host 已逐条复核属实。
+
+### 7.1 致命事实错误（首版 spec 写错的）
+
+| # | 事实 | 证据 |
+|---|---|---|
+| F1 | 远端 `dispatch-goal --run-id` 会走 `load_run`，而它要求远端已存在 `.lto/<run>/state.json`。§3.2 只 scp goal 就调用它——**流程根本跑不起来** | `src/commands/util.rs:126-131`（无 state.json 直接 bail）；`src/dispatch_goal.rs:76` |
+| F2 | §5 声称可复用 `src/process.rs` 的"注入式命令工厂"——**该设施不存在**，process.rs 只有 `shell_command` 与具体 git 辅助。测试策略据此失效 | `src/process.rs:16` |
+| F3 | `dispatch-and-wait` 只按 event_type 等待，无法按 dispatch_id 关联，**可能消费另一次派工的完成事件** | `src/cli.rs:1450` |
+| F4 | 超时路径无条件把"最新 active 窗口"标 retained，未绑定本次派工 | `src/dispatch_goal.rs:326` |
+
+### 7.2 BLOCKER（重启设计时必须先解决）
+
+1. **write-ahead intent**：必须先持久化 `prepared` 意图再执行 scp/ssh。首版顺序（远端启动后才记本机）会在两步间崩溃时留下无法关联的远端任务。
+2. **`dispatch_id` 冻结**：首版只给了示例值没给算法。需规定字符集、≥128-bit 唯一性、生成方、作用域、重试复用规则与 `supersedes` 语义。
+3. **events lock 内按 dispatch_id 幂等**：`events::emit` 只串行化 `event_id`，`events::read` 也只按 `event_id` 去重（`src/events.rs:74,153`）。并发/重试 collect 会产生重复 `agent.dispatch.completed`。幂等必须在 events lock 内完成，state 只存可重建的 `receipt_event_id/imported_at`。
+4. **远端 bootstrap 协议**：需要一个不依赖远端完整 state.json 的 worker/accept-once 路径（见 F1）。
+5. **关联等待与非终态 gate**：补 `dispatch-inspect` / `resolve --outcome` / `retry --supersedes`；`check`/`closeout` 目前**完全不消费 `dispatch_windows`**，会在远端状态未知时关闭 run（比"永远悬着"更糟）。
+6. **actuator 有界（principle 4 明确不合规）**：远端执行缺硬 timeout、max concurrency、permission snapshot、预算上限；`ssh cat` 无超时；shell 参数需安全构造。
+7. **隐私（principle 11 部分不合规）**：整份 goal 传到远端可能携带本机私有路径/秘密，首次 host/cwd trust **不是逐 payload 的披露确认**；trust 应绑定 SSH host fingerprint 而非 alias；receipt 需 `KNOWN_RECEIPT_KEYS` 白名单防远端塞不可信字段绕过 redact。
+8. **崩溃持久性**：rename 原子 ≠ 崩溃持久（缺 fsync file + fsync dir）；固定 `.tmp` 名允许同 ID 两写者互相覆盖；需唯一临时名 + write-once + "同内容 no-op / 不同内容拒绝"。跨文件系统（NFS/bind-mount）时 `mv` 退化为 cp+rm，preflight 需检查同 device。
+
+### 7.3 已采纳的其他修正
+
+- **删除 §3.3 的可选 push-back 通道**：无核心价值，只扩大协议与安全面（两家均建议）。
+- **状态枚举需扩充**：至少补 `prepared` / `submitted` / `preflight_rejected` / `ship_failed` / `receipt_invalid` / `corrupt` / `import_pending` / `collect_timeout` / `abandoned` / `superseded`；`DispatchWindowState.status` 现为无约束 `String`。
+- **切分作废**：首版 B-P1「纯数据+纯函数可完全单测」判断错误——真正的幂等要动 events lock 内逻辑与 state reconciliation。重启时按 P0 状态机与协议 fixture → P1 远端 worker/accept-once → P2 host transport + write-ahead → P3 幂等 collect/inspect/resolve/closeout gate。
