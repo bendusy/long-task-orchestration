@@ -1,5 +1,7 @@
 pub mod closeout;
 pub mod contract;
+pub mod describe;
+pub mod get;
 pub mod ledger_check;
 pub mod ops;
 pub mod prune;

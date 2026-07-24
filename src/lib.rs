@@ -21,6 +21,7 @@ pub mod plugin;
 pub mod plugin_eval_run;
 pub mod process;
 pub mod redact;
+pub mod resources;
 pub mod run_observability;
 pub mod scheduler;
 pub mod state;
