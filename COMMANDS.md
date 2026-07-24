@@ -2,9 +2,9 @@
 
 Source of truth: `src/cli.rs` `COMMANDS` plus the clap argument definitions in `src/cli.rs`.
 
-Command count: 28.
+Command count: 30.
 
-This is the `lto-rs --help` top-level row count: 27 Rust-owned business
+This is the `lto-rs --help` top-level row count: 29 Rust-owned business
 commands plus clap built-in `help`. The table below lists only the
 Rust-owned business commands tracked by `src/cli.rs` `COMMANDS`.
 
@@ -44,6 +44,8 @@ aliases do not appear in the public help table below.
 | `dispatch-and-wait` | Dispatch a goal and block for `agent.dispatch.completed` (primary: agent `goal-self-report`; optional side-channels: Codex Stop/`update_goal` proof, pi/agy process-exit with real rc), then print a success/failure summary. | `--runner <runner> --goal <path>` | all dispatch-goal options + `--timeout <secs>` (default 600) |
 | `agent-turn-completed` | Route a hook/process/self-report lifecycle signal as turn, session, or dispatch completion; only dispatch completion wakes goal waiters and may clean an owned window. Primary dispatch proof is `--source goal-self-report` (requires `--run-id`, uses caller rc). Codex Stop hook and `*-process-exit` remain optional side-channels. | None | `--run-id`, `--runner`, `--payload-file`, `--cwd`, `--session-id`, `--summary`, `--rc`, `--window-id`, `--source`, `--bell` (effective only for dispatch completion), `--notify-cmd` (host notifier template; trusted fields via `{run_id}`/`{runner}`/`{rc}`, untrusted summary via `$LTO_SUMMARY` env to avoid shell injection, e.g. an iaf call) |
 | `events` | Block until a matching run event appears. | None | `--run-id`, `--wait`, `--event-type`, `--after`, `--timeout`, `--json` |
+| `get` | List resources of a given kind (read-only). Currently only `task` is supported; other resource names error as not yet supported. Exact-match filters only. | `task` (resource) | `--run-id`, `--status`, `--phase`, `--json` |
+| `describe` | Show full context for one resource object (read-only). Currently only `task` is supported; other resource names error as not yet supported. Missing id exits non-zero and lists up to 5 available ids. | `task` (resource), `<id>` | `--run-id`, `--json` |
 
 Ledger verdicts come only from `src/ledger.rs`. `check --ledger` exits 0 for
 `NO_OBSERVATIONS`, `CONVERGED`, or `CONVERGING`; 1 for `REBOUND` or strict

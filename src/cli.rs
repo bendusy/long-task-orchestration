@@ -1,7 +1,7 @@
 use crate::audit_dispatch;
 use crate::audit_ledger;
 use crate::budget;
-use crate::commands::{closeout, contract, ledger_check, ops, recap, resume, util};
+use crate::commands::{closeout, contract, describe, get, ledger_check, ops, recap, resume, util};
 use crate::plugin;
 use crate::plugin_eval_run;
 use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
@@ -41,6 +41,8 @@ pub const COMMANDS: &[&str] = &[
     "agent-turn-completed",
     "plugin",
     "events",
+    "get",
+    "describe",
 ];
 
 #[derive(Debug, Parser)]
@@ -416,6 +418,51 @@ lto prune --run-id <id> --yes     # prune one specific closed run"
     },
     #[command(about = "Block until a matching run event appears")]
     Events(EventsCommand),
+    #[command(
+        about = "List resources of a given kind (read-only)",
+        long_about = "List resources of a given kind. Currently only `task` is supported.\n\
+\n\
+Examples:\n  \
+lto get task                                    # list tasks in the current run\n  \
+lto get task --status pending --phase intake   # exact-match filters\n  \
+lto get task --run-id <id> --json              # stable JSON envelope\n\
+\n\
+See also: lto describe (single object), lto recap (human progress)."
+    )]
+    Get {
+        /// Resource kind (currently: task). Other names error as not yet supported.
+        resource: String,
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Exact-match filter on task.status (task resource only).
+        #[arg(long)]
+        status: Option<String>,
+        /// Exact-match filter on task.phase (task resource only).
+        #[arg(long)]
+        phase: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
+        about = "Show full context for one resource object (read-only)",
+        long_about = "Show full context for one resource object. Currently only `task` is supported.\n\
+\n\
+Examples:\n  \
+lto describe task T1\n  \
+lto describe task T1 --run-id <id> --json\n\
+\n\
+See also: lto get (list/filter), lto next (decision brief)."
+    )]
+    Describe {
+        /// Resource kind (currently: task). Other names error as not yet supported.
+        resource: String,
+        /// Object id within the resource kind (e.g. task id).
+        id: String,
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1760,6 +1807,40 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 cmd.json,
             )?;
         }
+        Commands::Get {
+            resource,
+            run_id,
+            status,
+            phase,
+            json,
+        } => {
+            get::cmd_get(
+                &args.repo,
+                get::GetOptions {
+                    resource,
+                    run_id,
+                    status,
+                    phase,
+                    json,
+                },
+            )?;
+        }
+        Commands::Describe {
+            resource,
+            id,
+            run_id,
+            json,
+        } => {
+            describe::cmd_describe(
+                &args.repo,
+                describe::DescribeOptions {
+                    resource,
+                    id,
+                    run_id,
+                    json,
+                },
+            )?;
+        }
     }
     Ok(())
 }
@@ -2571,7 +2652,7 @@ mod tests {
     #[test]
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
-        assert_eq!(COMMANDS.len(), 27);
+        assert_eq!(COMMANDS.len(), 29);
     }
 
     #[test]
@@ -2600,6 +2681,16 @@ mod tests {
     fn audit_flags_are_registered() {
         Args::try_parse_from(["lto-rs", "audit", "--auto-dispatch"]).unwrap();
         Args::try_parse_from(["lto-rs", "audit", "--discover-risks"]).unwrap();
+    }
+
+    #[test]
+    fn get_and_describe_flags_are_registered() {
+        Args::try_parse_from(["lto-rs", "get", "task", "--status", "pending", "--json"]).unwrap();
+        Args::try_parse_from([
+            "lto-rs", "describe", "task", "T1", "--run-id", "r1", "--json",
+        ])
+        .unwrap();
+        Args::try_parse_from(["lto-rs", "get", "task", "--phase", "intake"]).unwrap();
     }
 
     #[test]
