@@ -35,6 +35,10 @@ $L next      # 下一步该干什么（事实简报）
 $L resume    # 喂给 agent 的恢复上下文
 $L recap     # 给人看的进度回顾
 
+# 3b. 只想查某个对象，别读整份 state
+$L get task --status blocked      # 列表+过滤（加 --json 给 agent 吃）
+$L describe task T1               # 单个任务的全部上下文
+
 # 4. 高风险的活，派别家模型来审
 $L audit --auto-dispatch
 $L audit --discover-risks
