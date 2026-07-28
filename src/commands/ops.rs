@@ -1363,50 +1363,7 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
             }
         }
         let run_id = job_file_run_id(repo, options.run_id.as_deref(), &jobs)?;
-        if let Some(run_id) = &run_id {
-            crate::event_emit::emit_runner_started_jobs(
-                repo,
-                run_id,
-                None,
-                None,
-                "runner.job_file",
-                &jobs,
-            );
-        }
-        let results = match submit_jobs(repo, jobs.clone()) {
-            Ok(results) => results,
-            Err(err) => {
-                if let Some(run_id) = &run_id {
-                    crate::event_emit::emit_runner_submission_failed_jobs(
-                        repo,
-                        run_id,
-                        None,
-                        None,
-                        "runner.job_file",
-                        &jobs,
-                        &err.to_string(),
-                    );
-                }
-                return Err(err);
-            }
-        };
-        if let Some(run_id) = run_id {
-            if let Ok(mut ctx) = util::load_run(repo, Some(&run_id)) {
-                emit_and_record_runner_results(repo, &mut ctx, None, "runner.job_file", &results)?;
-            } else {
-                crate::event_emit::emit_runner_results(
-                    repo,
-                    &run_id,
-                    None,
-                    None,
-                    "runner.job_file",
-                    &results,
-                );
-                let _ = crate::telemetry::save(repo, &run_id);
-            }
-        }
-        println!("{}", serde_json::to_string_pretty(&results)?);
-        return Ok(());
+        return run_job_file(repo, jobs, run_id, "runner.job_file");
     }
     let command_as_tmux_prompt =
         options.runner == "tmux" && options.command.is_some() && options.task_id.is_none();
@@ -2125,54 +2082,57 @@ pub fn cmd_hook(repo: &Path, options: HookOptions) -> anyhow::Result<()> {
     }
 }
 
+/// Submit jobs loaded from a `--job-file` and record the whole lifecycle:
+/// started event, submission-failure event, then results either into run state
+/// or as a bare event when the run cannot be loaded.
+///
+/// `context` is the event source label that distinguishes the three callers
+/// (`runner.job_file`, `run.parallel`, `run.pipeline`) — it is their only
+/// difference. Prompt/judge/autopilot submissions do NOT belong here: they
+/// carry a phase, escalate on failure, or convert errors into a held state.
+fn run_job_file(
+    repo: &Path,
+    jobs: Vec<AgentJob>,
+    run_id: Option<String>,
+    context: &str,
+) -> anyhow::Result<()> {
+    if let Some(run_id) = &run_id {
+        crate::event_emit::emit_runner_started_jobs(repo, run_id, None, None, context, &jobs);
+    }
+    let results = match submit_jobs(repo, jobs.clone()) {
+        Ok(results) => results,
+        Err(err) => {
+            if let Some(run_id) = &run_id {
+                crate::event_emit::emit_runner_submission_failed_jobs(
+                    repo,
+                    run_id,
+                    None,
+                    None,
+                    context,
+                    &jobs,
+                    &err.to_string(),
+                );
+            }
+            return Err(err);
+        }
+    };
+    if let Some(run_id) = run_id {
+        if let Ok(mut ctx) = util::load_run(repo, Some(&run_id)) {
+            emit_and_record_runner_results(repo, &mut ctx, None, context, &results)?;
+        } else {
+            crate::event_emit::emit_runner_results(repo, &run_id, None, None, context, &results);
+            let _ = crate::telemetry::save(repo, &run_id);
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&results)?);
+    Ok(())
+}
+
 pub fn cmd_parallel(repo: &Path, options: ParallelOptions) -> anyhow::Result<()> {
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
         let run_id = job_file_run_id(repo, options.run_id.as_deref(), &jobs)?;
-        if let Some(run_id) = &run_id {
-            crate::event_emit::emit_runner_started_jobs(
-                repo,
-                run_id,
-                None,
-                None,
-                "run.parallel",
-                &jobs,
-            );
-        }
-        let results = match submit_jobs(repo, jobs.clone()) {
-            Ok(results) => results,
-            Err(err) => {
-                if let Some(run_id) = &run_id {
-                    crate::event_emit::emit_runner_submission_failed_jobs(
-                        repo,
-                        run_id,
-                        None,
-                        None,
-                        "run.parallel",
-                        &jobs,
-                        &err.to_string(),
-                    );
-                }
-                return Err(err);
-            }
-        };
-        if let Some(run_id) = run_id {
-            if let Ok(mut ctx) = util::load_run(repo, Some(&run_id)) {
-                emit_and_record_runner_results(repo, &mut ctx, None, "run.parallel", &results)?;
-            } else {
-                crate::event_emit::emit_runner_results(
-                    repo,
-                    &run_id,
-                    None,
-                    None,
-                    "run.parallel",
-                    &results,
-                );
-                let _ = crate::telemetry::save(repo, &run_id);
-            }
-        }
-        println!("{}", serde_json::to_string_pretty(&results)?);
-        return Ok(());
+        return run_job_file(repo, jobs, run_id, "run.parallel");
     }
     run_many_task_commands(repo, options)
 }
@@ -2181,50 +2141,7 @@ pub fn cmd_pipeline(repo: &Path, options: PipelineOptions) -> anyhow::Result<()>
     if let Some(job_file) = &options.job_file {
         let jobs = load_jobs(job_file)?;
         let run_id = job_file_run_id(repo, options.run_id.as_deref(), &jobs)?;
-        if let Some(run_id) = &run_id {
-            crate::event_emit::emit_runner_started_jobs(
-                repo,
-                run_id,
-                None,
-                None,
-                "run.pipeline",
-                &jobs,
-            );
-        }
-        let results = match submit_jobs(repo, jobs.clone()) {
-            Ok(results) => results,
-            Err(err) => {
-                if let Some(run_id) = &run_id {
-                    crate::event_emit::emit_runner_submission_failed_jobs(
-                        repo,
-                        run_id,
-                        None,
-                        None,
-                        "run.pipeline",
-                        &jobs,
-                        &err.to_string(),
-                    );
-                }
-                return Err(err);
-            }
-        };
-        if let Some(run_id) = run_id {
-            if let Ok(mut ctx) = util::load_run(repo, Some(&run_id)) {
-                emit_and_record_runner_results(repo, &mut ctx, None, "run.pipeline", &results)?;
-            } else {
-                crate::event_emit::emit_runner_results(
-                    repo,
-                    &run_id,
-                    None,
-                    None,
-                    "run.pipeline",
-                    &results,
-                );
-                let _ = crate::telemetry::save(repo, &run_id);
-            }
-        }
-        println!("{}", serde_json::to_string_pretty(&results)?);
-        return Ok(());
+        return run_job_file(repo, jobs, run_id, "run.pipeline");
     }
     run_pipeline_task_commands(repo, options)
 }
@@ -3224,7 +3141,7 @@ fn run_tmux_autopilot_worker(
         needs_worktree: false,
         meta,
     };
-    let jobs = vec![job.clone()];
+    let jobs = vec![job];
     crate::event_emit::emit_runner_started_jobs(
         repo,
         run_id,
