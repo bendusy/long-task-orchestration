@@ -41,4 +41,4 @@ goal-2026-07-10-phase3-tmux-window.md
 
 # per-run audit findings stay local; goal briefs follow the repo convention
 # of being committed alongside the work they describe
-findings-audit-*.md
+findings-*.md
