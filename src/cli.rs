@@ -121,6 +121,10 @@ pub enum Commands {
         no_changelog: bool,
         #[arg(long)]
         force: bool,
+        #[arg(long, default_value_t = 300)]
+        reverify_timeout: u64,
+        #[arg(long)]
+        no_reverify: bool,
     },
     #[command(about = "Print an agent resume capsule for the active run")]
     Resume {
@@ -1330,6 +1334,8 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             allow_dirty,
             no_changelog,
             force,
+            reverify_timeout,
+            no_reverify,
         } => {
             closeout::cmd_closeout(
                 &args.repo,
@@ -1341,6 +1347,8 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     allow_dirty,
                     no_changelog,
                     force,
+                    reverify_timeout,
+                    no_reverify,
                 },
             )?;
         }
@@ -2928,6 +2936,42 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn closeout_reverify_flags_are_registered() {
+        let args = Args::try_parse_from([
+            "lto-rs",
+            "closeout",
+            "--summary",
+            "done",
+            "--reverify-timeout",
+            "9",
+            "--no-reverify",
+        ])
+        .unwrap();
+        let Commands::Closeout {
+            reverify_timeout,
+            no_reverify,
+            ..
+        } = args.command
+        else {
+            panic!("expected closeout command");
+        };
+        assert_eq!(reverify_timeout, 9);
+        assert!(no_reverify);
+
+        let defaults = Args::try_parse_from(["lto-rs", "closeout", "--summary", "done"]).unwrap();
+        let Commands::Closeout {
+            reverify_timeout,
+            no_reverify,
+            ..
+        } = defaults.command
+        else {
+            panic!("expected closeout command");
+        };
+        assert_eq!(reverify_timeout, 300);
+        assert!(!no_reverify);
     }
 
     #[test]

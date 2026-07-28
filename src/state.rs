@@ -228,12 +228,19 @@ fn clean_instruments(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn instrument_has_command(instrument: &str) -> bool {
+pub fn split_instrument(instrument: &str) -> (Option<&str>, &str) {
     let instrument = instrument.trim();
     match instrument.split_once("::") {
-        Some((_label, command)) => !command.trim().is_empty(),
-        None => !instrument.is_empty(),
+        Some((label, command)) => {
+            let label = label.trim();
+            ((!label.is_empty()).then_some(label), command.trim())
+        }
+        None => (None, instrument),
     }
+}
+
+fn instrument_has_command(instrument: &str) -> bool {
+    !split_instrument(instrument).1.is_empty()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -536,6 +543,16 @@ mod tests {
             vec![],
         );
         assert_eq!(mixed.completeness_missing().missing, vec!["--instrument"]);
+    }
+
+    #[test]
+    fn split_instrument_returns_optional_label_and_command() {
+        assert_eq!(
+            split_instrument(" smoke :: cargo test --locked "),
+            (Some("smoke"), "cargo test --locked")
+        );
+        assert_eq!(split_instrument("cargo test"), (None, "cargo test"));
+        assert_eq!(split_instrument("::true"), (None, "true"));
     }
 
     #[test]

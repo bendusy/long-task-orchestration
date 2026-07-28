@@ -13,6 +13,15 @@ pub struct CloseoutOptions {
     pub allow_dirty: bool,
     pub no_changelog: bool,
     pub force: bool,
+    pub reverify_timeout: u64,
+    pub no_reverify: bool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ReverifyResult {
+    attempted: usize,
+    passed: usize,
+    failed_labels: Vec<String>,
 }
 
 pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()> {
@@ -22,7 +31,7 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
         anyhow::bail!("missing run-state.md: {}", run_state_path.display());
     }
 
-    enforce_gates(repo, &ctx, &options)?;
+    let reverify = enforce_gates(repo, &ctx, &options)?;
     crate::events::safe_emit(
         repo,
         &ctx.run_id,
@@ -32,7 +41,13 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
             object_id: Some("closeout".to_string()),
             object_type: Some("gate".to_string()),
             summary: "closeout gates passed".to_string(),
-            fields: json!({"gate": "closeout", "status": "passed"}),
+            fields: json!({
+                "gate": "closeout",
+                "status": "passed",
+                "reverified_instruments": reverify.attempted,
+                "passed_instruments": reverify.passed,
+                "failed_instrument_labels": reverify.failed_labels,
+            }),
             ..crate::events::EventRecord::default()
         },
     );
@@ -154,7 +169,7 @@ fn enforce_gates(
     repo: &Path,
     ctx: &util::RunContext,
     options: &CloseoutOptions,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ReverifyResult> {
     if !options.force {
         let readiness = crate::state::assess_run_readiness(
             &ctx.state.goal,
@@ -187,6 +202,51 @@ fn enforce_gates(
                 contract.missing.join(", ")
             );
         }
+    }
+
+    let mut reverify = ReverifyResult::default();
+    if !options.force && !options.no_reverify && !ctx.state.delivery_contract.instruments.is_empty()
+    {
+        reverify.attempted = ctx.state.delivery_contract.instruments.len();
+        for instrument in &ctx.state.delivery_contract.instruments {
+            let (label, command) = crate::state::split_instrument(instrument);
+            let display = label.unwrap_or(command).to_string();
+            let (rc, _, stderr, _) =
+                util::run_command_capture(repo, command, None, options.reverify_timeout)
+                    .unwrap_or_else(|error| (1, String::new(), error.to_string(), 0.0));
+            if rc == 0 {
+                reverify.passed += 1;
+                continue;
+            }
+
+            reverify.failed_labels.push(display.clone());
+            eprintln!("closeout reverify failed: {display} (rc={rc})");
+            let mut stderr_tail = stderr.lines().rev().take(8).collect::<Vec<_>>();
+            stderr_tail.reverse();
+            if !stderr_tail.is_empty() {
+                eprintln!("stderr tail:\n{}", stderr_tail.join("\n"));
+            }
+        }
+        if !reverify.failed_labels.is_empty() {
+            emit_closeout_gate_blocked(
+                repo,
+                &ctx.run_id,
+                "delivery contract instruments failed reverify",
+                json!({
+                    "reverified_instruments": reverify.attempted,
+                    "passed_instruments": reverify.passed,
+                    "failed_instrument_labels": &reverify.failed_labels,
+                }),
+            );
+            anyhow::bail!(
+                "closeout refused: delivery contract instruments failed reverify: {} (use --force to override)",
+                reverify.failed_labels.join(", ")
+            );
+        }
+        println!(
+            "closeout reverify: {}/{} instruments passed",
+            reverify.passed, reverify.attempted
+        );
     }
 
     let ledger_path = ctx.run_dir.join("audit-ledger.md");
@@ -322,7 +382,7 @@ fn enforce_gates(
             );
         }
     }
-    Ok(())
+    Ok(reverify)
 }
 
 fn write_closeout_section(path: &Path, options: &CloseoutOptions) -> anyhow::Result<()> {
@@ -602,6 +662,8 @@ mod tests {
             allow_dirty: false,
             no_changelog: false,
             force,
+            reverify_timeout: 300,
+            no_reverify: false,
         }
     }
 
@@ -693,6 +755,87 @@ mod tests {
     }
 
     #[test]
+    fn enforce_gates_rejects_failed_instrument_reverify() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.delivery_contract = crate::state::DeliveryContract::new(
+            vec!["ship".into()],
+            Vec::new(),
+            vec!["fail::exit 1".into()],
+            Vec::new(),
+        );
+
+        let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
+        eprintln!("{err}");
+
+        assert!(err.to_string().contains("fail"));
+    }
+
+    #[test]
+    fn enforce_gates_accepts_successful_instrument_reverify() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.delivery_contract = crate::state::DeliveryContract::new(
+            vec!["ship".into()],
+            Vec::new(),
+            vec!["ok::true".into()],
+            Vec::new(),
+        );
+
+        let result = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap();
+
+        assert_eq!(result.attempted, 1);
+        assert_eq!(result.passed, 1);
+        assert!(result.failed_labels.is_empty());
+    }
+
+    #[test]
+    fn enforce_gates_preserves_empty_instrument_behavior() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx(tmp.path());
+
+        let result = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap();
+
+        assert_eq!(result, ReverifyResult::default());
+    }
+
+    #[test]
+    fn no_reverify_skips_failed_instrument() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.delivery_contract = crate::state::DeliveryContract::new(
+            vec!["ship".into()],
+            Vec::new(),
+            vec!["fail::exit 1".into()],
+            Vec::new(),
+        );
+        let mut options = options(false);
+        options.no_reverify = true;
+
+        let result = enforce_gates(tmp.path(), &ctx, &options).unwrap();
+
+        assert_eq!(result, ReverifyResult::default());
+    }
+
+    #[test]
+    fn reverify_timeout_rejects_slow_instrument() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+        ctx.state.delivery_contract = crate::state::DeliveryContract::new(
+            vec!["ship".into()],
+            Vec::new(),
+            vec!["slow::sleep 2".into()],
+            Vec::new(),
+        );
+        let mut options = options(false);
+        options.reverify_timeout = 1;
+
+        let err = enforce_gates(tmp.path(), &ctx, &options).unwrap_err();
+
+        assert!(err.to_string().contains("slow"));
+    }
+
+    #[test]
     fn enforce_gates_rejects_already_closed_run() {
         let tmp = tempfile::tempdir().unwrap();
         let mut ctx = ctx(tmp.path());
@@ -763,8 +906,17 @@ mod tests {
         ctx.state.gates = json!({"unresolved_blocks": [{"id": "B1"}]});
         ctx.state.risk_points = json!([{"id": "R1", "disposition": "open"}]);
         ctx.state.tasks = json!([{"id": "T1", "title": "deploy database migration"}]);
+        ctx.state.delivery_contract = crate::state::DeliveryContract::new(
+            vec!["ship".into()],
+            Vec::new(),
+            vec!["fail::exit 1".into()],
+            Vec::new(),
+        );
         fs::write(ctx.run_dir.join("audit-ledger.md"), unconverged_ledger()).unwrap();
-        enforce_gates(tmp.path(), &ctx, &options(true)).unwrap();
+        assert_eq!(
+            enforce_gates(tmp.path(), &ctx, &options(true)).unwrap(),
+            ReverifyResult::default()
+        );
     }
 
     #[test]
