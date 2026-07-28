@@ -1,4 +1,5 @@
 use crate::events::{self, EventRecord};
+use crate::process::shell_single_quote;
 use crate::state;
 use anyhow::Context;
 use serde_json::{Value, json};
@@ -240,10 +241,6 @@ fn finish_dispatch_window(
     );
     println!("runner.window.cleaned emitted for run {run_id} window {window_id}");
     Ok(())
-}
-
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r#"'\''"#))
 }
 
 fn save_run_state(repo: &Path, run_id: &str, state: &state::LtoState) -> anyhow::Result<()> {

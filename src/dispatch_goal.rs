@@ -1,5 +1,6 @@
 use crate::commands::util;
 use crate::events::{self, EventRecord};
+use crate::process::shell_single_quote;
 use crate::state::DispatchWindowState;
 use crate::tmux_runner::{self, SkipPrompt, TmuxDispatchSafety, TmuxMode, TmuxRunnerConfig};
 use anyhow::{Context, anyhow};
@@ -1134,10 +1135,6 @@ fn absolutize(path: &Path) -> anyhow::Result<PathBuf> {
     } else {
         Ok(std::env::current_dir()?.join(path))
     }
-}
-
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r#"'\''"#))
 }
 
 fn now_millis() -> u128 {

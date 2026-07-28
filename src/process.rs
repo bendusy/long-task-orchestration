@@ -28,6 +28,16 @@ pub fn shell_command(command: &str) -> Command {
     }
 }
 
+/// Wrap a value in POSIX single quotes for safe interpolation into a shell
+/// command line. Embedded single quotes are closed, escaped, and reopened.
+///
+/// Shared by every path that builds a shell line for an external agent
+/// (dispatch, turn completion, tmux send-keys) — the escaping is security
+/// relevant, so it must have exactly one definition.
+pub fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r#"'\''"#))
+}
+
 pub fn ensure_git_repo(repo: &Path) -> Result<(), GitCommandError> {
     let output = git_output(repo, ["rev-parse", "--is-inside-work-tree"])?;
     if output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true" {

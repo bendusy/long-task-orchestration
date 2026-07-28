@@ -1,5 +1,6 @@
 use crate::agent_job::{AgentJob, JobStatus};
 use crate::llm_judge::redact_text;
+use crate::process::shell_single_quote;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -1219,10 +1220,6 @@ fn sanitize_signal(value: &str) -> String {
             }
         })
         .collect()
-}
-
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r#"'\''"#))
 }
 
 fn now_millis() -> u128 {
