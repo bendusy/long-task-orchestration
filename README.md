@@ -50,6 +50,8 @@ $L closeout --summary "登录重构完成，测试和异构审计已收敛"
 
 `start` 只硬要求 `--goal` 和 `--done-when` 两项。想把交付目标写成可测量的硬指标（比如"召回率 ≥95%"），加 `--target` 和 `--instrument`（测量命令），`lto check` 会拿它当闸门。细节见 [run-state workflow](./references/run-state-workflow.md)。
 
+`closeout` 会在你这边把 `--instrument` 的命令再跑一遍，有一条红就拒绝收尾——派出去的 agent 说"全绿"不作数，判定不由它自签。跳过用 `--no-reverify`，单条超时用 `--reverify-timeout`（默认 300 秒）。
+
 ## 派活给别的 AI
 
 ```bash

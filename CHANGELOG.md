@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.11.0 — closeout 自己跑一遍验收，不再只信 agent 说"全绿"（2026-07-28）
+
+派出去的 agent 跑完验收命令、回来汇报"测试全过"，你只能选择信或不信——除非自己再跑一遍。这版把"再跑一遍"变成 closeout 的默认动作。
+
+- **closeout 复跑 delivery contract 的 instruments**：以前 `--instrument` 写的命令只在 `start` 时被检查"非空"，从没真跑过。现在 closeout 会在宿主这边逐条跑，rc 非 0 就拒绝收尾并列出失败的那条。验收标准仍然写在 goal 里给 agent 看（它该知道目标），但判定不再由它自签。
+- **首条失败即停**：一条红了就不再跑后面的，省掉白等和多余的副作用。
+- **失败时同时打印 stdout 和 stderr 的末尾**：`cargo test` 的断言详情走 stdout，只看 stderr 会得到一个没有原因的红灯。
+- **两个新开关**：`--reverify-timeout`（每条命令的超时，默认 300 秒）和 `--no-reverify`（这次不跑）。`--force` 照旧能绕过。
+- **廉价的拒绝排在前面**：run 已关闭、有未解决的 blocker——这两种情况以前会先把 instruments 全跑一遍才拒绝，现在直接拒绝，一条命令都不执行。工作树脏检查仍在复跑之后，这样 instrument 改脏了文件依然抓得到。
+
+**升级注意**：contract 里 instruments 为空的 run 行为完全不变。如果某个旧 run 的 instrument 写的是散文描述而非可执行命令（例如 `grep events.jsonl for O2 types`），复跑会失败——用 `contract set --replace-instrument` 改成真命令，或临时 `--no-reverify`。
+
+- 补记 `get` / `describe` 到 python-rust ownership 清单（v0.10.1 遗留的漂移）。
+
 ## closeout 复跑明卷：host 侧独立复跑 delivery contract 的 instruments，rc 非 0 拒绝 closeout
 
 - **Run ID**: `20260728-094215-closeout-host-delivery-contract-instrume-df8020a9`
