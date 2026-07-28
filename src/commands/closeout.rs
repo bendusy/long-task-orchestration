@@ -281,7 +281,6 @@ fn enforce_gates(
                 continue;
             }
 
-            reverify.failed_labels.push(display.clone());
             let stdout_tail = tail_lines(&stdout, 8);
             let stderr_tail = tail_lines(&stderr, 8);
             let mut failure_detail = format!("closeout reverify failed: {display} (rc={rc})");
@@ -291,6 +290,10 @@ fn enforce_gates(
             if !stderr_tail.is_empty() {
                 failure_detail.push_str(&format!("\nstderr tail:\n{stderr_tail}"));
             }
+            let refusal = format!(
+                "closeout refused: delivery contract instruments failed reverify: {display} (use --force to override)\n{failure_detail}"
+            );
+            reverify.failed_labels.push(display);
             emit_closeout_gate_blocked(
                 repo,
                 &ctx.run_id,
@@ -301,10 +304,7 @@ fn enforce_gates(
                     "failed_instrument_labels": &reverify.failed_labels,
                 }),
             );
-            anyhow::bail!(
-                "closeout refused: delivery contract instruments failed reverify: {} (use --force to override)\n{failure_detail}",
-                reverify.failed_labels.join(", ")
-            );
+            anyhow::bail!(refusal);
         }
         println!(
             "closeout reverify: {}/{} instruments passed",
