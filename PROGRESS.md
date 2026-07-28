@@ -99,3 +99,44 @@ COMMANDS.md
 PROGRESS.md
 src/commands/closeout.rs
 ```
+
+## 2026-07-29：runner 生命周期事件测试补齐
+
+### 基线
+
+```text
+$ cargo test --locked --all-targets 2>&1 | tail -5
+running 1 test
+test fixed_legacy_run_fixture_is_readable_by_rust_recap_resume_and_check ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+$ cargo test --locked --all-targets -- --list 2>/dev/null | rg ': test$' | wc -l
+449
+```
+
+### 反向验证
+
+临时以 `let _ = (run_id, &jobs);` 替换 `emit_runner_started_jobs(...)` 后：
+
+```text
+assertion `left == right` failed
+  left: []
+ right: ["run.parallel", "run.pipeline", "runner.job_file"]
+test commands::ops::tests::job_file_scheduler_paths_record_agent_runs_with_explicit_run_id ... FAILED
+test result: FAILED. 0 passed; 1 failed
+```
+
+复原生产代码后：
+
+```text
+test commands::ops::tests::job_file_scheduler_paths_record_agent_runs_with_explicit_run_id ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+### 进度
+
+- [x] 三条 job-file 路径均断言 `runner.started` 与正确 `context`。
+- [x] 非法 runner 经真实 `submit_jobs` 失败，断言 submission-failed 事件与 `context`。
+- [x] 成功结果仍由既有三项 `agent_runs` 断言覆盖。
+- [x] started emit 反向验证红后复绿。

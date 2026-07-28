@@ -5523,6 +5523,39 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
             job_ids,
             vec!["parallel-job-file", "pipeline-job-file", "runner-job-file"]
         );
+
+        let events = crate::events::read(&h.repo, "r1").unwrap();
+        let mut started_contexts = events
+            .iter()
+            .filter(|event| event["type"] == "runner.started")
+            .filter_map(|event| event["fields"]["context"].as_str())
+            .collect::<Vec<_>>();
+        started_contexts.sort();
+        assert_eq!(
+            started_contexts,
+            vec!["run.parallel", "run.pipeline", "runner.job_file"]
+        );
+    }
+
+    #[test]
+    fn job_file_submission_failure_emits_lifecycle_event() {
+        let h = Harness::new();
+        h.write_state(base_state());
+        let job_file = write_inline_codex_job_file(&h.repo, "invalid-runner-job-file");
+        let mut jobs = load_jobs(&job_file).unwrap();
+        jobs[0].runner = "unknown".into();
+
+        let err = run_job_file(&h.repo, jobs, Some("r1".into()), "runner.job_file").unwrap_err();
+        assert!(err.to_string().contains("unknown runner"));
+
+        let events = crate::events::read(&h.repo, "r1").unwrap();
+        let submission_failed = events
+            .iter()
+            .find(|event| {
+                event["type"] == "runner.finished" && event["fields"]["submission_failed"] == true
+            })
+            .unwrap();
+        assert_eq!(submission_failed["fields"]["context"], "runner.job_file");
     }
 
     #[test]
