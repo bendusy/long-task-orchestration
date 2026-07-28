@@ -1,5 +1,14 @@
 # Changelog
 
+## closeout 复跑明卷：host 侧独立复跑 delivery contract 的 instruments，rc 非 0 拒绝 closeout
+
+- **Run ID**: `20260728-094215-closeout-host-delivery-contract-instrume-df8020a9`
+- **Closed**: 2026-07-28T19:49:45+00:00
+- **Summary**: closeout 复跑明卷：host 侧独立复跑 delivery contract 的 instruments，rc 非 0 拒绝 closeout。异构审计(pi)+host 亲验发现 gate 排序 HIGH（任意 shell 先于 already-closed/unresolved 执行），已修；另修失败不早停、丢弃 stdout 两条 MEDIUM。合议(codex+pi)否掉原暗卷方案（同 uid 藏不住+删文件即绕过=负安全），改为标准公开、判定不自签。
+
+**Next**: 观察若干轮真实 closeout，确认复跑闸门在日常流程中不误伤；历史 run 中的散文式 instrument 需用 contract set --replace-instrument 迁移
+
+
 ## 吸收 UnDercontrol 两条 hypothesis：资源面 CLI(get/describe) + 跨机 dispatch
 
 - **Run ID**: `20260724-ud-primitives`
