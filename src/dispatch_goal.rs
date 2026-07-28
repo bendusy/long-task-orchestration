@@ -60,6 +60,71 @@ struct HookStatus {
     script_path: Option<PathBuf>,
 }
 
+/// Dispatch a goal and block until the agent reports completion.
+///
+/// Lives here rather than in the CLI arm because the waiting half is dispatch
+/// semantics, not argument parsing: it interprets the completion event's rc,
+/// and on timeout it retains the tmux window via
+/// [`retain_latest_dispatch_window`] so the run can be inspected.
+pub fn cmd_dispatch_and_wait(
+    repo: &Path,
+    options: DispatchGoalOptions,
+    timeout_sec: u64,
+) -> anyhow::Result<()> {
+    let run_id = util::resolve_run_id(repo, options.run_id.as_deref())
+        .context("dispatch-and-wait requires --run-id or .lto/current")?;
+    cmd_dispatch_goal(
+        repo,
+        DispatchGoalOptions {
+            run_id: Some(run_id.clone()),
+            ..options
+        },
+    )?;
+    println!("\nwaiting up to {timeout_sec}s for agent.dispatch.completed on run {run_id} ...");
+    let Some(event) = events::wait_for(
+        repo,
+        &run_id,
+        "agent.dispatch.completed",
+        None,
+        Duration::from_secs(timeout_sec),
+    )?
+    else {
+        retain_latest_dispatch_window(
+            repo,
+            &run_id,
+            &format!("dispatch-and-wait timeout after {timeout_sec}s"),
+        );
+        anyhow::bail!(
+            "TIMEOUT after {timeout_sec}s; the agent may still be running and its window was retained. Check with `lto events --wait --run-id {run_id}` or `tmux` directly."
+        );
+    };
+
+    let summary = event
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(no summary)");
+    let fields = event.get("fields");
+    let runner = fields
+        .and_then(|f| f.get("runner"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let rc = fields
+        .and_then(|f| f.get("rc"))
+        .and_then(|value| value.as_i64());
+    if rc != Some(0) {
+        anyhow::bail!(
+            "dispatch completed without success (runner={runner}, rc={}); window retained for troubleshooting",
+            rc.map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        );
+    }
+    println!("DONE runner={runner} rc=0 summary={summary}");
+    println!(
+        "Register the reply as evidence with: lto collect-agent-run --run-id {run_id} --runner {runner} --reply <path>"
+    );
+    Ok(())
+}
+
 pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::Result<()> {
     if options.uninstall_hooks {
         let codex = uninstall_codex_hook(repo)?;

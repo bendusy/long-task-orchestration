@@ -1425,16 +1425,10 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
         }
         Commands::DispatchAndWait(cmd) => {
             let d = cmd.dispatch;
-            // Resolve the run id before dispatch so we can wait on it after.
-            let run_id = d
-                .run_id
-                .clone()
-                .or_else(|| current_run_id(&args.repo))
-                .context("dispatch-and-wait requires --run-id or .lto/current")?;
-            crate::dispatch_goal::cmd_dispatch_goal(
+            crate::dispatch_goal::cmd_dispatch_and_wait(
                 &args.repo,
                 crate::dispatch_goal::DispatchGoalOptions {
-                    run_id: Some(run_id.clone()),
+                    run_id: d.run_id,
                     runner: d.runner,
                     goal: d.goal,
                     target: d.target,
@@ -1450,56 +1444,8 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     uninstall_hooks: d.uninstall_hooks,
                     no_runner_constraints: d.no_runner_constraints,
                 },
+                cmd.timeout,
             )?;
-            println!(
-                "\nwaiting up to {}s for agent.dispatch.completed on run {run_id} ...",
-                cmd.timeout
-            );
-            match crate::events::wait_for(
-                &args.repo,
-                &run_id,
-                "agent.dispatch.completed",
-                None,
-                std::time::Duration::from_secs(cmd.timeout),
-            )? {
-                Some(event) => {
-                    let summary = event
-                        .get("summary")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("(no summary)");
-                    let runner = event
-                        .get("fields")
-                        .and_then(|f| f.get("runner"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let rc = event
-                        .get("fields")
-                        .and_then(|fields| fields.get("rc"))
-                        .and_then(|value| value.as_i64());
-                    if rc != Some(0) {
-                        anyhow::bail!(
-                            "dispatch completed without success (runner={runner}, rc={}); window retained for troubleshooting",
-                            rc.map(|value| value.to_string())
-                                .unwrap_or_else(|| "unknown".to_string())
-                        );
-                    }
-                    println!("DONE runner={runner} rc=0 summary={summary}");
-                    println!(
-                        "Register the reply as evidence with: lto collect-agent-run --run-id {run_id} --runner {runner} --reply <path>"
-                    );
-                }
-                None => {
-                    crate::dispatch_goal::retain_latest_dispatch_window(
-                        &args.repo,
-                        &run_id,
-                        &format!("dispatch-and-wait timeout after {}s", cmd.timeout),
-                    );
-                    anyhow::bail!(
-                        "TIMEOUT after {}s; the agent may still be running and its window was retained. Check with `lto events --wait --run-id {run_id}` or `tmux` directly.",
-                        cmd.timeout
-                    );
-                }
-            }
         }
         Commands::Judge(cmd) => {
             ops::cmd_judge(
