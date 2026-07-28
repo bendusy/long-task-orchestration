@@ -35,3 +35,6 @@ engineering-cybernetics-essence/
 # host working docs referencing private domains — keep local only
 goal-2026-07-10-invocation-ux.md
 goal-2026-07-10-phase3-tmux-window.md
+
+# dispatch-goal materializes a sibling copy carrying the absolute repo path
+*.dispatch.md

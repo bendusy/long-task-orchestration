@@ -47,6 +47,8 @@ pseudo-command is intentionally not part of the ownership manifest.
 | `plugin` | Rust core | removed |
 | `dispatch-goal` | Rust core | removed |
 | `events` | Rust core | removed |
+| `get` | Rust core | removed |
+| `describe` | Rust core | removed |
 
 ## Hidden Compatibility Commands
 

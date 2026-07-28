@@ -26,7 +26,9 @@
     {"command": "memory", "owner": "rust-core", "python_role": "removed"},
     {"command": "plugin", "owner": "rust-core", "python_role": "removed"},
     {"command": "dispatch-goal", "owner": "rust-core", "python_role": "removed"},
-    {"command": "events", "owner": "rust-core", "python_role": "removed"}
+    {"command": "events", "owner": "rust-core", "python_role": "removed"},
+    {"command": "get", "owner": "rust-core", "python_role": "removed"},
+    {"command": "describe", "owner": "rust-core", "python_role": "removed"}
   ],
   "hidden_compatibility_commands": [
     {"command": "task-add", "owner": "rust-core", "python_role": "removed", "replacement": "task add"},

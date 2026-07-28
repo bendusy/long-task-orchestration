@@ -204,51 +204,6 @@ fn enforce_gates(
         }
     }
 
-    let mut reverify = ReverifyResult::default();
-    if !options.force && !options.no_reverify && !ctx.state.delivery_contract.instruments.is_empty()
-    {
-        reverify.attempted = ctx.state.delivery_contract.instruments.len();
-        for instrument in &ctx.state.delivery_contract.instruments {
-            let (label, command) = crate::state::split_instrument(instrument);
-            let display = label.unwrap_or(command).to_string();
-            let (rc, _, stderr, _) =
-                util::run_command_capture(repo, command, None, options.reverify_timeout)
-                    .unwrap_or_else(|error| (1, String::new(), error.to_string(), 0.0));
-            if rc == 0 {
-                reverify.passed += 1;
-                continue;
-            }
-
-            reverify.failed_labels.push(display.clone());
-            eprintln!("closeout reverify failed: {display} (rc={rc})");
-            let mut stderr_tail = stderr.lines().rev().take(8).collect::<Vec<_>>();
-            stderr_tail.reverse();
-            if !stderr_tail.is_empty() {
-                eprintln!("stderr tail:\n{}", stderr_tail.join("\n"));
-            }
-        }
-        if !reverify.failed_labels.is_empty() {
-            emit_closeout_gate_blocked(
-                repo,
-                &ctx.run_id,
-                "delivery contract instruments failed reverify",
-                json!({
-                    "reverified_instruments": reverify.attempted,
-                    "passed_instruments": reverify.passed,
-                    "failed_instrument_labels": &reverify.failed_labels,
-                }),
-            );
-            anyhow::bail!(
-                "closeout refused: delivery contract instruments failed reverify: {} (use --force to override)",
-                reverify.failed_labels.join(", ")
-            );
-        }
-        println!(
-            "closeout reverify: {}/{} instruments passed",
-            reverify.passed, reverify.attempted
-        );
-    }
-
     let ledger_path = ctx.run_dir.join("audit-ledger.md");
     if ledger_path.exists() && !options.force {
         let text = fs::read_to_string(&ledger_path)?;
@@ -309,6 +264,52 @@ fn enforce_gates(
             json!({"current_phase": ctx.state.current_phase}),
         );
         anyhow::bail!("run already closed (use --force to rewrite)");
+    }
+
+    let mut reverify = ReverifyResult::default();
+    if !options.force && !options.no_reverify && !ctx.state.delivery_contract.instruments.is_empty()
+    {
+        for instrument in &ctx.state.delivery_contract.instruments {
+            let (label, command) = crate::state::split_instrument(instrument);
+            let display = label.unwrap_or(command).to_string();
+            reverify.attempted += 1;
+            let (rc, stdout, stderr, _) =
+                util::run_command_capture(repo, command, None, options.reverify_timeout)
+                    .unwrap_or_else(|error| (1, String::new(), error.to_string(), 0.0));
+            if rc == 0 {
+                reverify.passed += 1;
+                continue;
+            }
+
+            reverify.failed_labels.push(display.clone());
+            let stdout_tail = tail_lines(&stdout, 8);
+            let stderr_tail = tail_lines(&stderr, 8);
+            let mut failure_detail = format!("closeout reverify failed: {display} (rc={rc})");
+            if !stdout_tail.is_empty() {
+                failure_detail.push_str(&format!("\nstdout tail:\n{stdout_tail}"));
+            }
+            if !stderr_tail.is_empty() {
+                failure_detail.push_str(&format!("\nstderr tail:\n{stderr_tail}"));
+            }
+            emit_closeout_gate_blocked(
+                repo,
+                &ctx.run_id,
+                "delivery contract instruments failed reverify",
+                json!({
+                    "reverified_instruments": reverify.attempted,
+                    "passed_instruments": reverify.passed,
+                    "failed_instrument_labels": &reverify.failed_labels,
+                }),
+            );
+            anyhow::bail!(
+                "closeout refused: delivery contract instruments failed reverify: {} (use --force to override)\n{failure_detail}",
+                reverify.failed_labels.join(", ")
+            );
+        }
+        println!(
+            "closeout reverify: {}/{} instruments passed",
+            reverify.passed, reverify.attempted
+        );
     }
 
     let dirty = util::tracked_dirty_paths(repo);
@@ -646,6 +647,12 @@ fn truncate(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
 
+fn tail_lines(value: &str, max: usize) -> String {
+    let mut lines = value.lines().rev().take(max).collect::<Vec<_>>();
+    lines.reverse();
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,9 +726,21 @@ mod tests {
     fn enforce_gates_rejects_unresolved_blocks() {
         let tmp = tempfile::tempdir().unwrap();
         let mut ctx = ctx(tmp.path());
+        let marker = tmp.path().join("unresolved-should-not-exist");
         ctx.state.gates = json!({"unresolved_blocks": [{"id": "B1"}]});
+        ctx.state.delivery_contract = crate::state::DeliveryContract::new(
+            vec!["ship".into()],
+            Vec::new(),
+            vec![format!("side-effect::touch {}", marker.display())],
+            Vec::new(),
+        );
         let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
         assert!(err.to_string().contains("1 unresolved blocks"));
+        eprintln!(
+            "assertion: unresolved gate left {} nonexistent",
+            marker.display()
+        );
+        assert!(!marker.exists(), "unresolved gate ran the instrument");
     }
 
     #[test]
@@ -758,17 +777,37 @@ mod tests {
     fn enforce_gates_rejects_failed_instrument_reverify() {
         let tmp = tempfile::tempdir().unwrap();
         let mut ctx = ctx(tmp.path());
+        let marker = tmp.path().join("later-instrument-should-not-exist");
         ctx.state.delivery_contract = crate::state::DeliveryContract::new(
             vec!["ship".into()],
             Vec::new(),
-            vec!["fail::exit 1".into()],
+            vec![
+                "fail::printf 'stdout diagnostic\\n'; printf 'stderr diagnostic\\n' >&2; exit 1"
+                    .into(),
+                format!("later::touch {}", marker.display()),
+            ],
             Vec::new(),
         );
 
         let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
         eprintln!("{err}");
 
-        assert!(err.to_string().contains("fail"));
+        let message = err.to_string();
+        assert!(message.contains("fail"));
+        assert!(message.contains("stdout diagnostic"));
+        assert!(message.contains("stderr diagnostic"));
+        eprintln!(
+            "assertion: first failure left {} nonexistent",
+            marker.display()
+        );
+        assert!(!marker.exists(), "instrument after first failure ran");
+        let events = crate::events::read(tmp.path(), &ctx.run_id).unwrap();
+        let gate = events
+            .iter()
+            .find(|event| event["type"] == "gate.evaluated")
+            .unwrap();
+        assert_eq!(gate["fields"]["detail"]["reverified_instruments"], 1);
+        assert_eq!(gate["fields"]["detail"]["passed_instruments"], 0);
     }
 
     #[test]
@@ -839,9 +878,21 @@ mod tests {
     fn enforce_gates_rejects_already_closed_run() {
         let tmp = tempfile::tempdir().unwrap();
         let mut ctx = ctx(tmp.path());
+        let marker = tmp.path().join("closed-should-not-exist");
         ctx.state.current_phase = "closed".to_string();
+        ctx.state.delivery_contract = crate::state::DeliveryContract::new(
+            vec!["ship".into()],
+            Vec::new(),
+            vec![format!("side-effect::touch {}", marker.display())],
+            Vec::new(),
+        );
         let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
         assert!(err.to_string().contains("run already closed"));
+        eprintln!(
+            "assertion: closed gate left {} nonexistent",
+            marker.display()
+        );
+        assert!(!marker.exists(), "closed gate ran the instrument");
     }
 
     #[test]
