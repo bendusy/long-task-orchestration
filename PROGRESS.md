@@ -174,7 +174,8 @@ $ rg -n 'shell_quote' src/commands/ops.rs
 - [x] 删除六处生产冗余 clone 与一处测试 clone，并跑定向编译、测试。
 - [x] blocker 判定改 `any`，并跑定向编译、测试。
 - [x] `DependencyPlan::new` 直接返回 `Self`，并跑定向编译、测试。
-- [ ] 六条全局收口、测试计数、白名单核对与 commit。
+- [x] 六条全局收口与测试计数。
+- [x] 白名单核对；实现已入 `701df6a`，收口证据另作 scoped commit。
 
 ### 第 1 项实跑
 
@@ -228,6 +229,52 @@ Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.36s
 $ cargo test --locked commands::ops::tests::build_state_verdict_fails_when_any_task_has_blockers -- --nocapture
 test commands::ops::tests::build_state_verdict_fails_when_any_task_has_blockers ... ok
 test result: ok. 1 passed; 0 failed
+```
+
+### 全局收口
+
+```text
+$ cargo fmt --all --check
+(no output, rc=0)
+
+$ cargo clippy --locked --all-targets -- -D warnings
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+
+$ cargo test --locked --all-targets
+test result: ok. 409 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+$ python3 scripts/check_docs_consistency.py
+DOCS CONSISTENCY OK
+
+$ python3 scripts/check_python_rust_ownership.py
+RUST OWNERSHIP OK
+
+$ git diff --check
+(no output, rc=0)
+
+$ cargo test --locked --all-targets -- --list 2>/dev/null | rg ': test$' | wc -l
+451
+
+$ find src -name '*.rs' -exec grep -Hn "fn shell_quote\|fn shell_single_quote" {} \;
+src/process.rs:37:pub fn shell_single_quote(value: &str) -> String {
+```
+
+全套首跑曾有两条无关 tmux 稳定输出超时；各自单跑皆复绿，原命令第二跑全绿，未改 `tmux_runner.rs`。
+
+```text
+test tmux_runner::tests::send_text_pastes_large_payload_before_enter ... FAILED
+test tmux_runner::tests::signal_mode_appends_and_waits_for_tmux_signal ... FAILED
+test result: FAILED. 407 passed; 2 failed
+
+$ cargo test --locked tmux_runner::tests::send_text_pastes_large_payload_before_enter -- --nocapture
+test tmux_runner::tests::send_text_pastes_large_payload_before_enter ... ok
+
+$ cargo test --locked tmux_runner::tests::signal_mode_appends_and_waits_for_tmux_signal -- --nocapture
+test tmux_runner::tests::signal_mode_appends_and_waits_for_tmux_signal ... ok
 ```
 
 ### 第 4 项实跑
