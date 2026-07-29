@@ -140,3 +140,121 @@ test result: ok. 1 passed; 0 failed
 - [x] 非法 runner 经真实 `submit_jobs` 失败，断言 submission-failed 事件与 `context`。
 - [x] 成功结果仍由既有三项 `agent_runs` 断言覆盖。
 - [x] started emit 反向验证红后复绿。
+
+## 2026-07-29：精简第 4 批
+
+### 开工证据与基线
+
+- `architecture_alignment`: shell 转义复用 `src/process.rs` 唯一安全实现；clone 与 blocker 判定留在原调用点作局部删减；`DependencyPlan` 仍属 scheduler 内部类型，不改 CLI、state、gate 或文件协议。
+- `first_principles`: 去掉同字节安全实现的重复定义、无消费语义的 clone、只为判空而复制的 JSON，及无失败路径的 `Result`；行为与契约不变。
+- `simplification_dedupe`: 不增 helper、抽象、依赖或文件；只复用现有 `shell_single_quote`，其余皆直接删减。
+- `value_measurement`: 基线为 408 lib + 42 集成（共 450）全绿；`redundant_clone` 基线为生产 6 告警、测试另 1 告警；及格线为测试数不减、生产告警下降、goal 六条收口全绿。
+
+```text
+$ cargo test --locked --all-targets
+test result: ok. 408 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+$ cargo clippy --locked --all-targets -- -W clippy::redundant_clone
+warning: `lto-rs` (lib) generated 6 warnings
+warning: `lto-rs` (lib test) generated 7 warnings (6 duplicates)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.65s
+
+$ rg -n 'shell_quote' src/commands/ops.rs
+3239,3240,3241,3242,3243,3245: 6 call sites
+3298: 1 local definition
+```
+
+### 进度
+
+- [x] 归一 `shell_single_quote` 并跑定向编译、测试。
+- [x] 删除六处生产冗余 clone 与一处测试 clone，并跑定向编译、测试。
+- [x] blocker 判定改 `any`，并跑定向编译、测试。
+- [x] `DependencyPlan::new` 直接返回 `Self`，并跑定向编译、测试。
+- [ ] 六条全局收口、测试计数、白名单核对与 commit。
+
+### 第 1 项实跑
+
+```text
+$ cargo check --locked --all-targets
+Checking lto-rs v0.11.0 (...)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.94s
+
+$ cargo test --locked commands::ops::tests::tmux_worker_prompt_preserves_quoted_command_contract -- --nocapture
+test commands::ops::tests::tmux_worker_prompt_preserves_quoted_command_contract ... ok
+test result: ok. 1 passed; 0 failed; 407 filtered out
+
+$ find src -name '*.rs' -exec grep -Hn "fn shell_quote\|fn shell_single_quote" {} \;
+src/process.rs:37:pub fn shell_single_quote(value: &str) -> String {
+```
+
+### 第 2 项实跑
+
+```text
+$ cargo check --locked --all-targets
+Checking lto-rs v0.11.0 (...)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.67s
+
+$ cargo test --locked agent_turn::tests::goal_self_report_rc0_marks_dispatch_completed -- --nocapture
+test agent_turn::tests::goal_self_report_rc0_marks_dispatch_completed ... ok
+test result: ok. 1 passed; 0 failed
+
+$ cargo test --locked commands::closeout::tests -- --nocapture
+test result: ok. 17 passed; 0 failed
+
+$ cargo test --locked commands::ops::tests::collect_agent_run_emits_runner_and_model_fields -- --nocapture
+test commands::ops::tests::collect_agent_run_emits_runner_and_model_fields ... ok
+test result: ok. 1 passed; 0 failed
+
+$ cargo test --locked commands::ops::tests::cmd_runner_job_file_requires_headless_write_override -- --nocapture
+test commands::ops::tests::cmd_runner_job_file_requires_headless_write_override ... ok
+test result: ok. 1 passed; 0 failed
+
+$ cargo clippy --locked --all-targets -- -W clippy::redundant_clone
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.80s
+(no warnings, rc=0)
+```
+
+### 第 3 项实跑与反向验证
+
+```text
+$ cargo check --locked --all-targets
+Checking lto-rs v0.11.0 (...)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.36s
+
+$ cargo test --locked commands::ops::tests::build_state_verdict_fails_when_any_task_has_blockers -- --nocapture
+test commands::ops::tests::build_state_verdict_fails_when_any_task_has_blockers ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+### 第 4 项实跑
+
+```text
+$ cargo check --locked --all-targets
+Checking lto-rs v0.11.0 (...)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.60s
+
+$ cargo test --locked scheduler::tests::dependency_child_waits_for_host_merge_but_independent_job_runs -- --nocapture
+test scheduler::tests::dependency_child_waits_for_host_merge_but_independent_job_runs ... ok
+test result: ok. 1 passed; 0 failed
+
+$ cargo test --locked scheduler::tests::submit_respects_concurrency_cap_and_order -- --nocapture
+test scheduler::tests::submit_respects_concurrency_cap_and_order ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+反向验证：临时将 `!blockers.is_empty()` 反置为 `blockers.is_empty()`；初版样例含空数组，误触错误谓词而未红，遂改为“一个无字段、一个非空 blocker”。第二次反置确实变红；还原后复绿。
+
+```text
+verdict: pass
+reason: still blocked
+test commands::ops::tests::build_state_verdict_fails_when_any_task_has_blockers ... FAILED
+test result: FAILED. 0 passed; 1 failed
+
+$ cargo test --locked commands::ops::tests::build_state_verdict_fails_when_any_task_has_blockers -- --nocapture
+test commands::ops::tests::build_state_verdict_fails_when_any_task_has_blockers ... ok
+test result: ok. 1 passed; 0 failed
+```

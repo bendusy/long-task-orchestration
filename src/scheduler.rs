@@ -166,7 +166,7 @@ impl Scheduler {
 
     pub async fn submit(&self, jobs: Vec<AgentJob>) -> Result<Vec<AgentResult>, SchedulerError> {
         validate_batch(&jobs, &self.config)?;
-        let plan = DependencyPlan::new(&jobs)?;
+        let plan = DependencyPlan::new(&jobs);
         let runners = unique_runners(&jobs);
         let health = self.healthcheck(&runners).await;
         let scheduler = Arc::new(self.clone());
@@ -591,7 +591,7 @@ struct DependencyPlan {
 }
 
 impl DependencyPlan {
-    fn new(jobs: &[AgentJob]) -> Result<Self, SchedulerError> {
+    fn new(jobs: &[AgentJob]) -> Self {
         let index = jobs
             .iter()
             .enumerate()
@@ -606,7 +606,7 @@ impl DependencyPlan {
                 parents_by_idx[child_idx].insert(parent_idx);
             }
         }
-        Ok(Self { parents_by_idx })
+        Self { parents_by_idx }
     }
 
     fn has_edges(&self) -> bool {

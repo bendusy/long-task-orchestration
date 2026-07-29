@@ -104,7 +104,7 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         "source": options.source,
         "completion_scope": if dispatch_completed { "dispatch" } else if event_type == "agent.session.ended" { "session" } else { "turn" },
         // Alias completion_proof == goal_completion_proof for docs/consumers.
-        "goal_completion_proof": goal_completion_proof.clone(),
+        "goal_completion_proof": goal_completion_proof,
         "completion_proof": goal_completion_proof,
         "payload_sha256": payload_hash,
         "known_payload_schema": payload.is_some(),

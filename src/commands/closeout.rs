@@ -86,8 +86,8 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
             phase: Some(ctx.state.current_phase.clone()),
             summary: options.summary.clone(),
             fields: json!({
-                "next_action": options.next_action.clone(),
-                "blocked_by": options.blocked_by.clone(),
+                "next_action": options.next_action,
+                "blocked_by": options.blocked_by,
             }),
             ..crate::events::EventRecord::default()
         },
@@ -229,7 +229,7 @@ fn enforce_gates(
                 repo,
                 &ctx.run_id,
                 "audit ledger not converged",
-                json!({"ledger_verdict": verdict.as_str(), "ledger_sequence": sequence.clone()}),
+                json!({"ledger_verdict": verdict.as_str(), "ledger_sequence": sequence}),
             );
             anyhow::bail!(
                 "closeout refused: ledger verdict is {}, not CONVERGED ({}) (use --force to override)",
@@ -601,7 +601,7 @@ fn emit_closeout_gate_blocked(repo: &Path, run_id: &str, reason: &str, fields: V
                 "gate": "closeout",
                 "status": "failed",
                 "reason": reason,
-                "detail": fields.clone(),
+                "detail": fields,
             }),
             ..crate::events::EventRecord::default()
         },

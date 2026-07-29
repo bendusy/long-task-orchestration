@@ -6,6 +6,7 @@ use crate::budget::{self, BudgetStatus};
 use crate::commands::util;
 use crate::ledger::{self, LedgerDiagnostics, LedgerVerdict};
 use crate::llm_judge;
+use crate::process::shell_single_quote;
 use crate::scheduler::Scheduler;
 use crate::worktree;
 use anyhow::Context;
@@ -2050,7 +2051,7 @@ pub fn cmd_collect_agent_run(repo: &Path, options: CollectAgentRunOptions) -> an
             summary: format!("collected {} status={canonical_status}", options.runner),
             fields: json!({
                 "runner": options.runner.clone(),
-                "model": result.model.clone(),
+                "model": result.model,
                 "status": canonical_status,
                 "tokens": meta.get("tokens").cloned().unwrap_or(Value::Null),
                 "elapsed_sec": options.elapsed_sec,
@@ -3236,13 +3237,13 @@ fn tmux_worker_prompt(
          mkdir -p {parent}\n\
          printf '{{\"task_id\":%s,\"rc\":%s,\"carrier\":\"tmux\"}}\\n' {task_json} \"$lto_worker_rc\" > {contract}\n\
          exit 0",
-        repo = shell_quote(&repo.display().to_string()),
-        command = shell_quote(command),
-        parent = shell_quote(&parent.display().to_string()),
-        task_json = shell_quote(&task_json),
-        contract = shell_quote(&contract_path.display().to_string()),
+        repo = shell_single_quote(&repo.display().to_string()),
+        command = shell_single_quote(command),
+        parent = shell_single_quote(&parent.display().to_string()),
+        task_json = shell_single_quote(&task_json),
+        contract = shell_single_quote(&contract_path.display().to_string()),
     );
-    Ok(format!("bash -lc {}", shell_quote(&inner)))
+    Ok(format!("bash -lc {}", shell_single_quote(&inner)))
 }
 
 fn read_tmux_worker_contract(path: &Path) -> anyhow::Result<Option<Value>> {
@@ -3293,10 +3294,6 @@ fn sanitize_worker_id(value: &str) -> String {
     } else {
         sanitized
     }
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r#"'\''"#))
 }
 
 fn update_autopilot_digest(ctx: &mut util::RunContext) -> anyhow::Result<()> {
@@ -4111,16 +4108,12 @@ fn build_state_verdict(
     let has_failures = test_results
         .iter()
         .any(|result| result.get("result").and_then(Value::as_str) != Some("pass"));
-    let active_blockers = tasks
-        .iter()
-        .flat_map(|task| {
-            task.get("blockers")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
-    let verdict = if has_failures || !active_blockers.is_empty() {
+    let has_active_blockers = tasks.iter().any(|task| {
+        task.get("blockers")
+            .and_then(Value::as_array)
+            .is_some_and(|blockers| !blockers.is_empty())
+    });
+    let verdict = if has_failures || has_active_blockers {
         "fail"
     } else {
         "pass"
@@ -5411,7 +5404,7 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
             allow_headless_write: false,
             prompt: None,
             prompt_file: None,
-            job_file: Some(job_file.clone()),
+            job_file: Some(job_file),
             job_id: None,
             tmux_target: None,
             tmux_mode: None,
@@ -5987,6 +5980,33 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
         let text = serde_json::to_string(&projection).unwrap();
         assert!(!text.contains("token=SECRET"));
         assert!(!text.contains("/Users/example/private"));
+    }
+
+    #[test]
+    fn build_state_verdict_fails_when_any_task_has_blockers() {
+        let tasks = json!([
+            {"id": "T1"},
+            {"id": "T2", "blockers": [{"reason": "still blocked"}]}
+        ]);
+        let options = JudgeOptions {
+            run_id: None,
+            task_id: None,
+            phase: None,
+            runner: "codex".into(),
+            rerun_tests: false,
+            case_dir: None,
+            brief: None,
+            baseline_reply: None,
+            candidate_reply: None,
+            candidate_runner: None,
+            judge_runner: None,
+            execute: false,
+        };
+
+        let verdict = build_state_verdict(tasks.as_array().unwrap(), &[], "head", &options);
+
+        assert!(verdict.contains("verdict: fail"), "{verdict}");
+        assert!(verdict.contains("reason: still blocked"), "{verdict}");
     }
 
     #[test]
