@@ -51,6 +51,11 @@ pub fn cmd_record(repo: &Path, options: RecordOptions) -> anyhow::Result<()> {
     let entries = state::parse_decision_entries(&ctx.state.user_decisions);
     let now = state::iso_now();
     let actual = util::git_status(repo);
+    if actual.head == "unknown" {
+        eprintln!(
+            "WARN decision record: HEAD 解析失败，anchor_head 将写入 unknown；建议在 Git 仓库根运行"
+        );
+    }
     let record = DecisionRecord {
         id: next_id(&entries, &now),
         text,
@@ -471,6 +476,31 @@ mod tests {
         assert_eq!(record.scope.paths, vec!["src/state.rs"]);
         let events = events::read(&h.repo, "r1").unwrap();
         assert_eq!(events[0]["type"], "decision.recorded");
+    }
+
+    #[test]
+    fn record_allows_unknown_head_and_persists_unknown_anchor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("not-a-git-repo");
+        fs::create_dir_all(repo.join(".lto/r1")).unwrap();
+        fs::write(repo.join(".lto/current"), "r1\n").unwrap();
+        state::save_state(repo.join(".lto/r1/state.json"), &base_state("unknown")).unwrap();
+
+        cmd_record(
+            &repo,
+            RecordOptions {
+                run_id: Some("r1".into()),
+                text: "Keep fail-safe recording".into(),
+                scope_phase: None,
+                scope_paths: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let saved = state::load_state(repo.join(".lto/r1/state.json")).unwrap();
+        let entries = state::parse_decision_entries(&saved.user_decisions);
+        let record = entries[0].as_record().unwrap();
+        assert_eq!(record.anchor.head, "unknown");
     }
 
     #[test]
