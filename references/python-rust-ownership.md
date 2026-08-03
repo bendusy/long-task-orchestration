@@ -23,6 +23,7 @@ pseudo-command is intentionally not part of the ownership manifest.
 |---|---|---|
 | `start` | Rust core | removed |
 | `contract` | Rust core | removed |
+| `decision` | Rust core | removed |
 | `check` | Rust core | removed |
 | `closeout` | Rust core | removed |
 | `resume` | Rust core | removed |

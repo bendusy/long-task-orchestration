@@ -1,4 +1,4 @@
-use crate::commands::util;
+use crate::commands::{decision, util};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -81,7 +81,8 @@ pub fn cmd_resume(repo: &Path, options: ResumeOptions) -> anyhow::Result<()> {
         revalidate.clear();
     }
 
-    print_capsule(repo, &ctx, &warnings, &revalidate);
+    let decision_report = decision::freshness_report_at(repo, &ctx.state, &actual.head);
+    print_capsule(repo, &ctx, &warnings, &revalidate, &decision_report);
     if revalidate.is_empty() {
         Ok(())
     } else {
@@ -93,7 +94,13 @@ pub fn cmd_resume(repo: &Path, options: ResumeOptions) -> anyhow::Result<()> {
     }
 }
 
-fn print_capsule(repo: &Path, ctx: &util::RunContext, warnings: &[String], revalidate: &[String]) {
+fn print_capsule(
+    repo: &Path,
+    ctx: &util::RunContext,
+    warnings: &[String],
+    revalidate: &[String],
+    decisions: &decision::DecisionFreshnessReport,
+) {
     let state = &ctx.state;
     let head = if state.workspace.head.trim().is_empty() {
         "unknown"
@@ -131,6 +138,8 @@ fn print_capsule(repo: &Path, ctx: &util::RunContext, warnings: &[String], reval
     if unresolved > 0 {
         println!("Unresolved Blocks: {unresolved}");
     }
+    println!();
+    println!("{}", decision::render_freshness_text(decisions));
 
     let artifacts = util::latest_artifacts(repo, &ctx.run_id, 6);
     if !artifacts.is_empty() {

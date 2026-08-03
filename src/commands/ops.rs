@@ -3,7 +3,7 @@ use crate::agent_job::{
     readonly_intent_to_policy,
 };
 use crate::budget::{self, BudgetStatus};
-use crate::commands::util;
+use crate::commands::{decision, util};
 use crate::ledger::{self, LedgerDiagnostics, LedgerVerdict};
 use crate::llm_judge;
 use crate::process::shell_single_quote;
@@ -1104,6 +1104,7 @@ fn phase_report(
     } else {
         "all_required_present"
     };
+    let decisions = decision::freshness_report(repo, state);
     json!({
         "run_id": state.run_id,
         "target_phase": target,
@@ -1111,6 +1112,7 @@ fn phase_report(
         "phase_direction": phase_direction(current, target),
         "evidence_status": evidence_status,
         "human_gate_required": true,
+        "decisions": decision::freshness_json(&decisions),
         "checks": checks,
     })
 }
@@ -1286,6 +1288,14 @@ fn print_phase_report(report: &Value) {
             check.get("id").and_then(Value::as_str).unwrap_or("?"),
             check.get("detail").and_then(Value::as_str).unwrap_or("")
         );
+    }
+    if let Some(value) = report.get("decisions")
+        && let Ok(decisions) =
+            serde_json::from_value::<decision::DecisionFreshnessReport>(value.clone())
+    {
+        for line in decision::render_freshness_text(&decisions).lines() {
+            println!("  {line}");
+        }
     }
     println!("  HUMAN human_gate_required: true");
 }
@@ -5022,6 +5032,48 @@ mod tests {
         assert!(checks.iter().any(|check| {
             check["id"] == "delivery_contract_complete" && check["status"] == "ok"
         }));
+    }
+
+    #[test]
+    fn phase_report_includes_decision_freshness_without_gating_check() {
+        let h = Harness::new();
+        h.init_git();
+        let head = util::git_status(&h.repo).head;
+        let mut state = base_state();
+        state.workspace.head = head.clone();
+        state.user_decisions = json!([{
+            "id": "d-check",
+            "text": "keep the host gate",
+            "scope": {"phase": null, "paths": []},
+            "anchor": {
+                "head": head,
+                "phase": "audit",
+                "recorded_at": "2026-08-03T00:00:00Z"
+            },
+            "reaffirmed_at": null
+        }]);
+        h.write_state(state);
+
+        let outcome = collect_check(
+            &h.repo,
+            &CheckOptions {
+                run_id: Some("r1".into()),
+                strict: true,
+                to_phase: Some("implementation".into()),
+                json: true,
+            },
+        );
+
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        let report = outcome.phase_report.unwrap();
+        assert_eq!(report["decisions"]["anchored"], 1);
+        assert_eq!(report["decisions"]["rebase_required"][0]["id"], "d-check");
+        assert!(
+            report["decisions"]["rebase_required"][0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("phase drift")
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::commands::util;
 use crate::events::{self, EventRecord};
 use crate::state::{self, DecisionAnchor, DecisionEntry, DecisionRecord, DecisionScope, LtoState};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -25,7 +25,7 @@ pub struct ReaffirmOptions {
     pub id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionRebaseRequired {
     pub id: String,
     pub text: String,
@@ -33,7 +33,7 @@ pub struct DecisionRebaseRequired {
     pub reaffirm_command: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionFreshnessReport {
     pub anchored: usize,
     pub legacy: usize,
@@ -431,6 +431,20 @@ mod tests {
         }
     }
 
+    fn typed_record(id: &str, head: &str, phase: &str) -> DecisionRecord {
+        DecisionRecord {
+            id: id.into(),
+            text: format!("decision {id}"),
+            scope: DecisionScope::default(),
+            anchor: DecisionAnchor {
+                head: head.into(),
+                phase: phase.into(),
+                recorded_at: "before".into(),
+            },
+            reaffirmed_at: None,
+        }
+    }
+
     #[test]
     fn record_writes_anchor_and_event() {
         let h = GitHarness::new();
@@ -520,5 +534,60 @@ mod tests {
             events::read(&h.repo, "r1").unwrap()[0]["type"],
             "decision.reaffirmed"
         );
+        let fresh = freshness_report(&h.repo, &saved);
+        assert_eq!(fresh.anchored, 1);
+        assert!(fresh.rebase_required.is_empty());
+    }
+
+    #[test]
+    fn freshness_reports_head_forward_drift() {
+        let h = GitHarness::new();
+        let first = h.write_commit("a.txt", "a\n", "base");
+        let mut state = base_state(&first);
+        state.user_decisions = json!([typed_record("d-head", &first, "implementation")]);
+        h.write_state(state);
+        h.write_commit("b.txt", "b\n", "advance");
+
+        let report = freshness_report(
+            &h.repo,
+            &state::load_state(h.repo.join(".lto/r1/state.json")).unwrap(),
+        );
+
+        assert_eq!(report.anchored, 1);
+        assert_eq!(report.rebase_required.len(), 1);
+        assert!(report.rebase_required[0].reason.contains("HEAD advanced"));
+        assert!(render_freshness_text(&report).contains("DECISION_REBASE_REQUIRED"));
+    }
+
+    #[test]
+    fn freshness_reports_phase_drift_without_ttl() {
+        let h = GitHarness::new();
+        let head = h.write_commit("a.txt", "a\n", "base");
+        let mut state = base_state(&head);
+        state.user_decisions = json!([typed_record("d-phase", &head, "audit")]);
+        h.write_state(state);
+
+        let saved = state::load_state(h.repo.join(".lto/r1/state.json")).unwrap();
+        let report = freshness_report(&h.repo, &saved);
+
+        assert_eq!(report.rebase_required.len(), 1);
+        assert!(report.rebase_required[0].reason.contains("phase drift"));
+    }
+
+    #[test]
+    fn freshness_groups_legacy_entries_without_blocking() {
+        let h = GitHarness::new();
+        let head = h.write_commit("a.txt", "a\n", "base");
+        let mut state = base_state(&head);
+        state.user_decisions = json!([{"legacy": true}, "old scalar"]);
+        h.write_state(state);
+
+        let saved = state::load_state(h.repo.join(".lto/r1/state.json")).unwrap();
+        let report = freshness_report(&h.repo, &saved);
+
+        assert_eq!(report.anchored, 0);
+        assert_eq!(report.legacy, 2);
+        assert!(report.rebase_required.is_empty());
+        assert!(render_freshness_text(&report).contains("无锚点（legacy），建议补录"));
     }
 }
