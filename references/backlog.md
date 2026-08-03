@@ -18,6 +18,7 @@
 | ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
 | ⑨ | Scheduler runner lifecycle events / O2 caller-side wiring | ★★ 高 | P1 | ✅ 已实现 | O2 采纳 Option A：调用方 emit runner started/finished/retry/healthcheck，`scheduler.rs` 保持无 run_id / 无事件 I/O |
 | ⑩ | Host 合议 goal → tmux 短会话 loop → 异构审计 → 亲验闭环 playbook | ★★ 高 | P1 | ✅ 已实现 | T1/T2 Rust tmux 派工底座落地；playbook 进 `workflow-playbook.md`；closed check 默认拒绝无 evidence 的 done task |
+| ⑭ | 自驱唤醒（定时 tick + should-run 决策核 + 退避 + spend 记账） | — | **不做** | ⛔ 2026-08-03 否决 | 与 LoopX 对比合议后 REJECT：无「宿主触发已成瓶颈」的实证，且自建调度器违背薄 harness；LoopX 自身也是纯 no-LLM 决策核、唤醒 100% 借宿主。重估条件见 ⑭ 段 |
 | ⑬ | 三项低优先技术债（`has_high_risk_task` 两处重复 / `redact_text` 同名异义 / 复杂命令缺 `after_help` examples） | ☆ 低 | P3 顺手做 | 未做 | 详见 ⑬ 段；均为 2026-08-03 仓库整理时从待删的 findings/spec 迁入，防止随文件消失 |
 
 ## 依赖链
@@ -150,6 +151,17 @@
 - **RunnerFamily::Unknown 隔离**（agy HIGH → 误报，不修）：host 亲验——`derive(PartialEq,Eq)` + `Unknown(String)` 带名，不同名 Unknown 是不同族（隔离成立）；AUDITOR_POOL 写死已知 runner，Unknown 实际不出现在审计选择。不构成真洞。
 - 已知非新问题（不立项）：readonly intent 对 agy 升 workspace-write（pi HIGH）——`runner-readonly-contract.md` 早记录，agy 无 read-only 档，设计如此。
 
+## ⑭ 自驱唤醒（⛔ 2026-08-03 否决，原 `self-driving-wake-loop.md`）
+
+原设计（2026-06-20）：LTO 自己定时醒来推进 run，不等 host 调用。2026-08-03 与开源项目 LoopX 做机制对比，派 codex/pi 异构合议后 **REJECT**：
+
+- **没有瓶颈实证**：没有任何一次真实 run 显示"等 host 触发"造成了交付延迟。为一个未被观测到的问题建调度器，正是 principle 2（先观测后控制）要拦的。
+- **违背薄 harness**：定时器 + 退避状态机 + spend 记账 + replan 加起来就是一个常驻调度器，而 LTO 的定位是 harness 不是调度器。
+- **对照组也不这么做**：LoopX 同样不含定时器——它是纯本地无 LLM 的决策核，唤醒 100% 借宿主（Claude Code 侧就是原生 `/loop`）。所以"同类项目都自驱"这个前提本身不成立。
+- **前置缺陷**：真要做也得先修 `autopilot` 的记账时机（已于 2026-08-03 修复，见 CHANGELOG v0.11.2）。
+
+**重估条件**（同时满足才重开）：① 有连续真实 run 证据表明 host 触发遗漏造成了交付损失，且排除任务定义/runner 健康/人工 gate 未完成这三种解释；② 定时触发仍借宿主（`/loop`、cron、ScheduleWakeup），LTO 不常驻、不监听外部事件、不自建调度队列；③ 每次自动触发仍是有上限的单步，语义判断/phase 切换/closeout 一律停在 human gate。
+
 ## ⑬ 三项低优先技术债（P3，顺手做即可，2026-08-03 迁入）
 
 来源：`findings-dedup-pi.md`、`findings-audit-pi.md`、`docs/superpowers/specs/2026-07-01-lto-usability-retention-design.md`——这三份文档在 2026-08-03 仓库整理时随已交付的 scratch 一并删除（git 历史留底），其中仍有效的待办迁到这里，避免"删文件顺带丢账"。
@@ -157,6 +169,7 @@
 - **`has_high_risk_task` 两处逐字节重复**（`src/commands/closeout.rs` 与 `src/commands/ops.rs` 各一份）。关键词表分两处维护，漂移后会出现"一处拦高风险、一处不拦"。下次改 closeout/ops 风险逻辑时顺手合并到一处。**目前无证据表明已漂移**，所以不单独立轮。
 - **`redact_text` 同名异义**（`src/redact.rs:48` 保形版 vs `src/llm_judge.rs:72` 折叠截断版）。纯命名债，不是安全问题——redaction regex 的单一真源在 `redact.rs` 已成立。改名消歧即可（如 judge 侧改 `redact_for_prompt`）。
 - **复杂命令缺 `after_help` 示例**（`grep after_help src/cli.rs` 为空）。原 usability spec 八项里唯一未做的一项；同 spec 的 B1（枚举值+默认值进 `--help`）已落地并覆盖了大部分"agent 调错参数"的根因，所以这条是锦上添花。
+- **孤儿 sidecar 提示**：`next`/`recap` 扫到未被 `collect-agent-run` 收集的 `.meta.json` sidecar 时应提示 host 去收集，否则那次派工的证据不进 `agent_runs`。方案 A 落地时就标了"暂未做，按需补"（原 `agent-runs-decoupling-diagnosis.md`，已随已交付文档删除）。
 - **closeout reverify 的已知限制**（host 于 2026-07-28 主动裁决延后，非遗漏）：无总预算上界；rc 不区分 spawn 失败/超时/非零退出；无 label 时命令明文写入事件；`--force`/`--no-reverify` 跳过时事件无法区分跳过原因。场景变化再重估。
 
 > 维护：项落地后更新本表「状态」列并在 `CHANGELOG.md` 记一笔；新 deferred 入此表，勿散落记忆。
