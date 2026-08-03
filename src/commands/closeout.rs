@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
+const HUMAN_GATE_SELF_CHECK_REMINDER: &str = "亲验自查：你的亲验脚本本身验过吗（ADDED vs MODIFIED？target 是否 active？write 是否确认成功？）";
+
 #[derive(Debug, Clone)]
 pub struct CloseoutOptions {
     pub run_id: Option<String>,
@@ -30,6 +32,9 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
     if !run_state_path.exists() {
         anyhow::bail!("missing run-state.md: {}", run_state_path.display());
     }
+
+    println!("human gate summary: host verification remains required");
+    println!("{HUMAN_GATE_SELF_CHECK_REMINDER}");
 
     let reverify = enforce_gates(repo, &ctx, &options)?;
     crate::events::safe_emit(
@@ -912,6 +917,14 @@ mod tests {
         let ctx = ctx(tmp.path());
         let err = enforce_gates(tmp.path(), &ctx, &options(false)).unwrap_err();
         assert!(err.to_string().contains("tracked uncommitted change"));
+    }
+
+    #[test]
+    fn human_gate_self_check_reminder_covers_the_three_host_checks() {
+        assert!(HUMAN_GATE_SELF_CHECK_REMINDER.contains("亲验"));
+        assert!(HUMAN_GATE_SELF_CHECK_REMINDER.contains("ADDED vs MODIFIED"));
+        assert!(HUMAN_GATE_SELF_CHECK_REMINDER.contains("target 是否 active"));
+        assert!(HUMAN_GATE_SELF_CHECK_REMINDER.contains("write 是否确认成功"));
     }
 
     #[test]
