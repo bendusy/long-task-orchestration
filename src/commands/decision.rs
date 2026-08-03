@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn list_json_marks_typed_and_legacy_entries() {
-        let entries = vec![
+        let entries = [
             DecisionEntry::Legacy(json!({"old": true})),
             DecisionEntry::Typed(DecisionRecord {
                 id: "d-1".into(),
