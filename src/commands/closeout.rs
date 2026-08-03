@@ -5,6 +5,8 @@ use std::fs;
 use std::path::Path;
 
 const HUMAN_GATE_SELF_CHECK_REMINDER: &str = "亲验自查：你的亲验脚本本身验过吗（ADDED vs MODIFIED？target 是否 active？write 是否确认成功？）";
+const NO_CHANGELOG_HINT: &str =
+    "use --no-changelog after commit for admin closeout without new tracked dirt";
 
 #[derive(Debug, Clone)]
 pub struct CloseoutOptions {
@@ -175,6 +177,16 @@ fn enforce_gates(
     ctx: &util::RunContext,
     options: &CloseoutOptions,
 ) -> anyhow::Result<ReverifyResult> {
+    let dirty = util::tracked_dirty_paths(repo);
+    if !dirty.is_empty() && !options.allow_dirty {
+        let sample = dirty.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+        eprintln!(
+            "WARN closeout: {} tracked uncommitted change(s) detected (e.g. {}). {NO_CHANGELOG_HINT}; closeout will still refuse until code changes are committed or stashed.",
+            dirty.len(),
+            sample
+        );
+    }
+
     if !options.force {
         let readiness = crate::state::assess_run_readiness(
             &ctx.state.goal,
@@ -317,7 +329,6 @@ fn enforce_gates(
         );
     }
 
-    let dirty = util::tracked_dirty_paths(repo);
     if !dirty.is_empty() && !options.allow_dirty {
         let sample = dirty.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
         emit_closeout_gate_blocked(
@@ -327,7 +338,7 @@ fn enforce_gates(
             json!({"tracked_dirty_count": dirty.len(), "sample": sample}),
         );
         anyhow::bail!(
-            "closeout refused: {} tracked uncommitted change(s) outside .lto (e.g. {}). Commit or stash code changes first; use --no-changelog after commit for admin closeout without new tracked dirt.",
+            "closeout refused: {} tracked uncommitted change(s) outside .lto (e.g. {}). Commit or stash code changes first; {NO_CHANGELOG_HINT}.",
             dirty.len(),
             sample
         );
@@ -925,6 +936,13 @@ mod tests {
         assert!(HUMAN_GATE_SELF_CHECK_REMINDER.contains("ADDED vs MODIFIED"));
         assert!(HUMAN_GATE_SELF_CHECK_REMINDER.contains("target 是否 active"));
         assert!(HUMAN_GATE_SELF_CHECK_REMINDER.contains("write 是否确认成功"));
+    }
+
+    #[test]
+    fn dirty_worktree_warning_exposes_the_no_changelog_hint_before_refusal() {
+        assert!(NO_CHANGELOG_HINT.contains("use --no-changelog after commit"));
+        let refusal = format!("closeout refused: tracked changes; {NO_CHANGELOG_HINT}.");
+        assert!(refusal.contains(NO_CHANGELOG_HINT));
     }
 
     #[test]
