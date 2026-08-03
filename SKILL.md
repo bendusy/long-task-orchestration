@@ -78,7 +78,7 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 
 ## ③ DOMAIN MAP · 六域卡
 
-**Ⅰ 接管与恢复**——进项目第一件事 `lto runs`（`.lto/` 是本项目真源与本地记忆，am 只是下游投影）。`resume` 喂 AI（git head/task 状态，防 compact 丢上下文）；`recap` 给人（当初要做啥/为什么/做到哪/还剩啥），tmux 下 `prefix+L` 弹窗即看当前目录 recap（本机 `~/.tmux.conf` 绑定，非 lto 内置）；`recap --mine` 跨 run 挖掘。冲突时信证据不信旧指令。不适用：新 run 立项（→Ⅱ）。
+**Ⅰ 接管与恢复**——进项目第一件事 `lto runs`（`.lto/` 是本项目真源与本地记忆，am 只是下游投影）。`resume` 喂 AI（git head/task 状态，防 compact 丢上下文；并列出锚点漂移待人工重确认的裁决 `DECISION_REBASE_REQUIRED`）；`recap` 给人（当初要做啥/为什么/做到哪/还剩啥），tmux 下 `prefix+L` 弹窗即看当前目录 recap（本机 `~/.tmux.conf` 绑定，非 lto 内置）；`recap --mine` 跨 run 挖掘。冲突时信证据不信旧指令。不适用：新 run 立项（→Ⅱ）。
 
 **Ⅱ 立项与契约**——先问「该不该做」（刹车1）。`start --goal --done-when` 两项硬必填，`--why/--host` 只告警；空 contract 合法，非空时 `--target` ↔ `--instrument [LABEL::]CMD` 必须成对，`--constraint/--entropy-check` 缺失只告警。已有 run 用 `contract set` 修补，legacy 非法 instrument 用 `--replace-instrument`；`preflight` 独立报告环境与 active/显式 run readiness（`--json` 只改输出，`--record` 只落环境快照）。进开发前四证据：architecture_alignment / first_principles / simplification_dedupe / value_measurement（细节见 run-state-workflow.md）。不适用：已有 active run 的恢复（→Ⅰ）。
 
@@ -88,7 +88,7 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 
 **Ⅴ 交付与发布**——部署必须按序：schema 先行可回滚 → 试运行 → 先只读 → 正式上线 → **走一遍真实用户路径**（不是 ping 服务活着）→ 清测试数据观察。收尾前四证据：documentation_alignment / historical_cleanup / clean_worktree / rebuild_package。`closeout --summary` 写 handoff+CHANGELOG；`release` 是 host-owned（.git 写操作 runner 沙箱做不了）。不适用：未过Ⅳ收敛闸门。
 
-**Ⅵ 学习与维护**——每个决定**当时就记**（`scripts/write_decision.py` 写 ADR + 登记 artifact）；装 am 时 `memory publish` 走 am 原生 CLI（唯一 sink），没装 am 本地 `.lto/` 就是全部记忆。`lto prune` 手动清理 closed+超期 run 大件（默认 dry-run，`--yes` 才删，active run 永不动）。历史 telemetry 只作 advisory，不自动路由。
+**Ⅵ 学习与维护**——每个决定**当时就记**：人工裁决用 `lto decision record` 落锚点（记下当时 HEAD+phase，漂移时 resume/check 列出待 `reaffirm`，不自动失效不做 TTL）；ADR 文档层另有 `scripts/write_decision.py`（写 ADR + 登记 artifact），两层并存不合并；装 am 时 `memory publish` 走 am 原生 CLI（唯一 sink），没装 am 本地 `.lto/` 就是全部记忆。`lto prune` 手动清理 closed+超期 run 大件（默认 dry-run，`--yes` 才删，active run 永不动）。历史 telemetry 只作 advisory，不自动路由。
 
 ## ④ AUTHORITY & SOURCE · 权威层级
 
