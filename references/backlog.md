@@ -135,7 +135,7 @@
   - pi.sh 读 `LTO_SESSION_ID` → `pi -p --session-id <id>`。**向后兼容**：env 未设时不传 `--session-id`，行为同旧（bash -x 实测验证 A 无 session-id / B 有）。
   - **host 实测铁证**：新进程 resume 同 `--session-id` 命中 cache——`pi -p --session-id` cacheRead=1408，记住跨进程 fact；RPC 续接 cacheRead=2816 input 仅 223。**pi input 不膨胀**。
   - 同 auditor 跨 audit 轮（每轮独立 `lto audit` 进程）复用同 session → 第二轮起 context 走 cacheRead。risk discovery 与 auto-dispatch 用同一 session-id 函数，跨两阶段也 warm。
-- **RPC 常驻 runner 已证伪（不做）**：一度设想 `pi --mode rpc` 常驻进程批内复用，**实测证伪**——① audit 异构派工，同次 submit 无多个 pi job（批内复用前提不成立）；② warm cache 真实命中是跨轮（跨 submit），而 **headless `pi -p --session-id` 跨进程就命中 cache**，根本不需要 RPC 常驻进程那套工程（进程池/并发接缝/协议处理）。详见 `references/specs/2026-06-17-goal-pi-rpc-resident-runner.md`（已标 ⛔ 证伪）。
+- **RPC 常驻 runner 已证伪（不做）**：一度设想 `pi --mode rpc` 常驻进程批内复用，**实测证伪**——① audit 异构派工，同次 submit 无多个 pi job（批内复用前提不成立）；② warm cache 真实命中是跨轮（跨 submit），而 **headless `pi -p --session-id` 跨进程就命中 cache**，根本不需要 RPC 常驻进程那套工程（进程池/并发接缝/协议处理）。当时的 spec 已随其余已交付 spec 删除（git 历史留底），证伪结论保留在此。
 - **跨 runner 调查结论（DeepWiki+官方+实测 2026-06-17）**：pi=session 复用最干净（input 不膨胀，audit 主力）；codex=resume 命中 cache 但 **input 累积膨胀**（33K→67K，长会话变贵）故**不加** session 复用；agy=本就拒 read-only 不审计，session 复用无意义。所以 session 复用只在 pi.sh 落地。
 - **不破坏**：异构性不变（仍跨族 failover）；只是去掉每次冷启重载的浪费 + warm cache 跨轮。
 - **撤回的错误方向**：原 ⑪ 写「给 audit 加 runner 优先级绕开 pi」是**治标且方向错**——pi 慢是调度方式（冷启重载）不是 pi 本身,绕开它没解决根因（agy/claude headless 同样冷启）。先修调度效率，不是排序。

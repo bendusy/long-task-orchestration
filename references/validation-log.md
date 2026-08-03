@@ -2,7 +2,7 @@
 
 ## 2026-06-16：Python fallback removal gate A/B Rust port parity
 
-**目标**：为 `references/specs/2026-06-16-python-removal-via-rust-port.md`
+**目标**：为 当时的 spec（已随已交付文档删除，见 git 历史）
 的阶段 A/B 提供当前 worktree 证据。结论是 Rust 已接管
 `plugin source-note` 与 `plugin eval-run` 命令面；Python 仍保留为显式
 fallback，完整删除必须等待人工 gate 和阶段 C wrapper/docs/tests 清理。
@@ -49,7 +49,7 @@ Python fallback 删除。
 
 ## 2026-06-16：Phase 2.5 CLI command surface simplification
 
-**目标**：按 `references/specs/2026-06-16-goal-python-retirement-and-debt-cleanup.md`
+**目标**：按 当时的 spec（已随已交付文档删除，见 git 历史）
 要求先落设计，再降低顶层命令认知负担。
 
 | Gate | 命令/动作 | 结果 |
