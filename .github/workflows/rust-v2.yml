@@ -2,7 +2,7 @@ name: rust-v2
 
 on:
   push:
-    branches: [main, feat/runner-fixes]
+    branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main]
