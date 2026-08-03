@@ -1542,8 +1542,6 @@ pub fn cmd_next(repo: &Path, options: NextOptions) -> anyhow::Result<()> {
 
 pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<()> {
     let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
-    ctx.state.budget.turns_used = ctx.state.budget.turns_used.saturating_add(1);
-    util::save_run(&mut ctx)?;
     let rollup = util::token_rollup(&ctx.state);
     let budget = budget::check_budget(
         Some(&ctx.state.budget),
@@ -1645,6 +1643,10 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
         return Ok(());
     }
     if options.auto_exec || options.autonomous {
+        if has_actionable_autopilot_task(&ctx.state, &options) {
+            ctx.state.budget.turns_used = ctx.state.budget.turns_used.saturating_add(1);
+            util::save_run(&mut ctx)?;
+        }
         auto_exec_tasks(repo, &mut ctx, &options)?;
     } else {
         println!(
@@ -1656,6 +1658,42 @@ pub fn cmd_autopilot(repo: &Path, options: AutopilotOptions) -> anyhow::Result<(
     update_autopilot_digest(&mut ctx)?;
     util::save_run(&mut ctx)?;
     Ok(())
+}
+
+fn has_actionable_autopilot_task(
+    state: &crate::state::LtoState,
+    options: &AutopilotOptions,
+) -> bool {
+    let carrier = select_worker_carrier(options);
+    util::json_array(&state.tasks).iter().any(|task| {
+        let status = task
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("pending");
+        if !matches!(status, "pending" | "in_progress") {
+            return false;
+        }
+        let command = task
+            .get("commands_run")
+            .and_then(Value::as_array)
+            .and_then(|items| items.last())
+            .and_then(Value::as_str)
+            .or_else(|| task.get("planned_command").and_then(Value::as_str));
+        let Some(command) = command else {
+            return false;
+        };
+        if task.get("retry_count").and_then(Value::as_u64).unwrap_or(0) >= 3 {
+            return false;
+        }
+        match carrier {
+            WorkerCarrier::Tmux => true,
+            WorkerCarrier::Sandbox => {
+                let effect = crate::effect::classify_effect(command);
+                effect.level != crate::effect::EffectLevel::NeedsSemanticJudgement
+                    && (!options.autonomous || effect.level != crate::effect::EffectLevel::Network)
+            }
+        }
+    })
 }
 
 pub fn cmd_release(repo: &Path, options: ReleaseOptions) -> anyhow::Result<()> {
@@ -5249,6 +5287,108 @@ printf 'fake codex saw %s\n' "$(head -n 1 "$prompt_file")" > "$reply_file"
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn autopilot_budget_exceeded_does_not_count_turn() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.budget.max_turns = Some(1);
+        state.budget.turns_used = 1;
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "planned_command": "true",
+            "commands_run": [],
+            "evidence": [],
+            "retry_count": 0
+        }]);
+        h.write_state(state);
+
+        cmd_autopilot(
+            &h.repo,
+            AutopilotOptions {
+                run_id: Some("r1".into()),
+                auto_exec: true,
+                autonomous: false,
+                timeout: 5,
+                worker_runner: "sandbox".into(),
+                tmux_target: None,
+                tmux_bin: None,
+                tmux_ready_timeout_sec: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(h.state().budget.turns_used, 1);
+    }
+
+    #[test]
+    fn autopilot_autonomous_gate_rejection_does_not_count_turn() {
+        let h = Harness::new();
+        let mut state = base_state();
+        state.budget.turns_used = 2;
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "planned_command": "true",
+            "commands_run": [],
+            "evidence": [],
+            "retry_count": 0
+        }]);
+        h.write_state(state);
+
+        cmd_autopilot(
+            &h.repo,
+            AutopilotOptions {
+                run_id: Some("r1".into()),
+                auto_exec: false,
+                autonomous: true,
+                timeout: 5,
+                worker_runner: "sandbox".into(),
+                tmux_target: None,
+                tmux_bin: None,
+                tmux_ready_timeout_sec: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(h.state().budget.turns_used, 2);
+    }
+
+    #[test]
+    fn autopilot_normal_execution_counts_exactly_one_persisted_turn() {
+        let h = Harness::new();
+        h.init_git();
+        let mut state = base_state();
+        state.tasks = json!([{
+            "id": "T1",
+            "status": "pending",
+            "planned_command": "true",
+            "commands_run": [],
+            "evidence": [],
+            "retry_count": 0
+        }]);
+        h.write_state(state);
+
+        cmd_autopilot(
+            &h.repo,
+            AutopilotOptions {
+                run_id: Some("r1".into()),
+                auto_exec: true,
+                autonomous: false,
+                timeout: 5,
+                worker_runner: "sandbox".into(),
+                tmux_target: None,
+                tmux_bin: None,
+                tmux_ready_timeout_sec: None,
+            },
+        )
+        .unwrap();
+
+        let state = h.state();
+        assert_eq!(state.budget.turns_used, 1);
+        assert_eq!(state.tasks[0]["status"], "done");
     }
 
     #[test]
