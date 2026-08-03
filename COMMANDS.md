@@ -2,9 +2,9 @@
 
 Source of truth: `src/cli.rs` `COMMANDS` plus the clap argument definitions in `src/cli.rs`.
 
-Command count: 30.
+Command count: 31.
 
-This is the `lto-rs --help` top-level row count: 29 Rust-owned business
+This is the `lto-rs --help` top-level row count: 30 Rust-owned business
 commands plus clap built-in `help`. The table below lists only the
 Rust-owned business commands tracked by `src/cli.rs` `COMMANDS`.
 
@@ -19,6 +19,7 @@ aliases do not appear in the public help table below.
 |---|---|---|---|
 | `start` | Create a new Rust v2 run directory and current marker. Non-empty goal/done-when are hard requirements; why/host are advisory. An empty delivery contract is valid; otherwise target and instrument must be paired, while constraint/entropy-check omissions warn. `--instrument [LABEL::]CMD` accepts an optional stable label; without `::`, the entire value is the command. | `--goal`, `--done-when` | `--run-id`, `--why`, `--host`, `--target`, `--constraint`, `--instrument`, `--entropy-check`, `--force` |
 | `contract` | Repair typed goal/done-when/host metadata and append delivery-contract fields without editing `state.json` by hand. `contract set` validates the merged result before writing and uses the same `[LABEL::]CMD` instrument syntax as `start`; `--replace-instrument` explicitly replaces invalid legacy instrument values. | Subcommand: `set` | `contract set --run-id --goal --done-when --host --target --constraint --instrument --replace-instrument --entropy-check` (delivery fields are repeatable; append and replace instrument modes conflict) |
+| `decision` | Record, list, or reaffirm human decisions anchored to the current Git HEAD and run phase. Legacy unstructured entries remain visible and are marked for typed backfill. | Subcommand: `record`, `list`, or `reaffirm` | `record --run-id --text --scope-phase --scope-path`; `list --run-id --json`; `reaffirm --run-id --id` |
 | `check` | Check a run's gates/phase evidence and ledger, or evaluate one standalone ledger with the Rust evaluator. Bare run-mode `--strict` enforces base readiness and non-empty-contract target/instrument requirements; `--to` adds phase evidence. Run-mode text and JSON include verdict plus five-dimensional diagnostics; advisory fields never gate. | None | Run mode: `--run-id`, `--strict`, `--to`, `--json`; standalone mode: `--ledger <path> [--strict]` (`--ledger` conflicts with `--run-id`, `--to`, and `--json`) |
 | `closeout` | Gate closeout, including base readiness and non-empty-contract target/instrument requirements. Already-closed and unresolved-block refusals happen before any instrument; by default instruments run from the repo root with a 300s timeout per command, stop at the first failure, and report up to 8 trailing lines from each non-empty stdout/stderr stream. In `gate.evaluated`, `reverified_instruments` is the number actually attempted before success or the first failure, not the configured total. On success, update state/run-state and write handoff and changelog. | `--summary` | `--run-id`, `--next-action`, `--blocked-by`, `--allow-dirty`, `--no-changelog`, `--force`, `--reverify-timeout`, `--no-reverify` |
 | `resume` | Print an active-session capsule and detect HEAD drift. | None | `--run-id` |

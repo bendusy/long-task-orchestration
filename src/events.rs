@@ -41,6 +41,8 @@ pub const KNOWN_EVENT_TYPES: &[&str] = &[
     "judge.skipped",
     "decision.voted",
     "decision.escalated",
+    "decision.recorded",
+    "decision.reaffirmed",
 ];
 
 const ACTOR_KINDS: &[&str] = &["host", "lto", "runner", "auditor", "human"];

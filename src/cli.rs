@@ -1,7 +1,9 @@
 use crate::audit_dispatch;
 use crate::audit_ledger;
 use crate::budget;
-use crate::commands::{closeout, contract, describe, get, ledger_check, ops, recap, resume, util};
+use crate::commands::{
+    closeout, contract, decision, describe, get, ledger_check, ops, recap, resume, util,
+};
 use crate::plugin;
 use crate::plugin_eval_run;
 use crate::state::{self, DeliveryContract, LtoState, WorkspaceSnapshot};
@@ -16,6 +18,7 @@ use std::path::{Path, PathBuf};
 pub const COMMANDS: &[&str] = &[
     "start",
     "contract",
+    "decision",
     "check",
     "closeout",
     "resume",
@@ -87,6 +90,11 @@ pub enum Commands {
     Contract {
         #[command(subcommand)]
         command: ContractCommand,
+    },
+    #[command(about = "Record and inspect human decision anchors")]
+    Decision {
+        #[command(subcommand)]
+        command: DecisionCommand,
     },
     #[command(about = "Check run gates, phase evidence, and ledger status")]
     Check {
@@ -553,6 +561,35 @@ pub enum ContractCommand {
         replace_instrument: Vec<String>,
         #[arg(long = "entropy-check")]
         entropy_check: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DecisionCommand {
+    #[command(about = "Record a human decision anchored to the current HEAD and phase")]
+    Record {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        text: String,
+        #[arg(long = "scope-phase")]
+        scope_phase: Option<String>,
+        #[arg(long = "scope-path")]
+        scope_path: Vec<String>,
+    },
+    #[command(about = "List typed and legacy human decisions")]
+    List {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(about = "Reaffirm a typed decision at the current HEAD and phase")]
+    Reaffirm {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        id: String,
     },
 }
 
@@ -1309,6 +1346,28 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                         entropy_checks: entropy_check,
                     },
                 )?;
+            }
+        },
+        Commands::Decision { command } => match command {
+            DecisionCommand::Record {
+                run_id,
+                text,
+                scope_phase,
+                scope_path,
+            } => decision::cmd_record(
+                &args.repo,
+                decision::RecordOptions {
+                    run_id,
+                    text,
+                    scope_phase,
+                    scope_paths: scope_path,
+                },
+            )?,
+            DecisionCommand::List { run_id, json } => {
+                decision::cmd_list(&args.repo, decision::ListOptions { run_id, json })?
+            }
+            DecisionCommand::Reaffirm { run_id, id } => {
+                decision::cmd_reaffirm(&args.repo, decision::ReaffirmOptions { run_id, id })?
             }
         },
         Commands::Recap {
@@ -2614,7 +2673,7 @@ mod tests {
     #[test]
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
-        assert_eq!(COMMANDS.len(), 29);
+        assert_eq!(COMMANDS.len(), 30);
     }
 
     #[test]
