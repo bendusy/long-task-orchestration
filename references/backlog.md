@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|
 | ① | `events.jsonl` / `telemetry.json` 被动事件流 | ★★★ 最高 | **P0** | ✅ 已实现 | **地基**：解锁 ②③ |
 | ② | `DEFERRED_V0` llm_judge 质量评分 + 假阳率 | ★★ 高 | P1 | ✅ 已实现 | judge 异构判读 + frozen hash，单独成层不进 promote |
-| ⑥ | **跨 run 数据挖掘 → 进化**（按 runner模型×status×时间 聚合，挖真实有效性喂回 host） | ★★★ 最高 | **P0-next** | ✅ **已实现** (2026-06-17) | L4 hill-climbing 已通过 `recap --mine` 实现只读聚合与建议 |
+| ⑥ | **跨 run 数据挖掘 → 进化**（按 runner模型×status×时间 聚合，挖真实有效性喂回 host） | ★★★ 最高 | **P0-next** | 🟡 **部分**：聚合已实现 (2026-06-17)，stage 化 nextAction 未做 | `recap --mine` 出只读聚合 + 阈值 WARN；但 `state.next_action` 仍是裸字符串（`state.rs`），无 `nextAction{stage,command,why}` 结构与 actionable 计数 |
 | ⑦ | **`AgentResult` 落 `model` 字段**（让 ⑥ 区分同 runner 不同 model） | ★★ 高 | **P1** | ✅ 已实现 | scheduler 单点回填 job.model；⑥ 挖掘出 model 分布；向后兼容 |
 | ③ | `autopilot --autonomous` 机械闸门+机械执行（不 spawn 决策 agent） | ★ 中 | P2 | ✅ 已实现 | 证据闸门读⑥；run-scoped scheduler results 回填 `state.agent_runs`；codex 审 2BLOCKER+3HIGH 修；历史 `--decide` 未接到当前 CLI |
 | ④ | `memory_sink` 记忆回写落地 | ★ 中 | P2 | ✅ 已实现 | am 0.7.0 AmCliSink 落地真跑；am 可选，无 am 优雅降级 |
@@ -79,7 +79,8 @@
 - **关键复用**：`interventions.py` 已有 `aggregate_across_runs` / `recurring_friction` / `render_cross_run_advisory`——**跨 run 挖掘摩擦的成熟模式已存在**。⑥ 是把同样模式套到 events.jsonl + ② 的 judge 结果上，新增维度：**按 runner 模型分组**（哪个模型在哪类任务有效），不只是按 category。
 - **缺口锚点**：`events.py` 当前**只有单 run 读取，零跨 run 聚合**（已核实）。
 - **⚠️ 实现状态（2026-06-17 已实现）**：现已全面打通。通过 `lto recap --mine` 跨 run 扫描所有 `.lto/*/events.jsonl`，按 `(runner × task_type × 时间窗)` 聚合派工次数、失败率、耗时、retry、审计收敛轮次等，只读出 tuning brief (客观测量/主观非测量)。这标志着 L4 hill-climbing 成功落地。
-- **Rust 重做方向（业界对标，2026-06-17）**：参考 `Nimrobo/superdense`（L4 产品化）的数据模型——session → enrichers 派生信号（run cost / errors / tool counts / first-intent / fingerprint / plan-mode / session-kind / subagent-summary）→ curation → reward snapshot；`next` 可学其 `nextAction{stage, command, why}` 机制（stage 化 + actionable 计数），但 **stage 要换成 LTO 自己领域**（挖 runner 有效性 → 识别反复翻车路径 → 出 tuning brief），不照搬 superdense 的 outcome stage。详见 am `2026-06-17-技术-从LTO架构承接loop启发的演进判断`。
+- **⚠️ 未完成部分（2026-08-03 源码复核）**：上一条只覆盖「聚合与 brief」。下一条的 stage 化 **未实现**——`grep -rn "struct NextAction\|stage.*actionable" src/` 零命中，`state.rs` 的 `next_action` 仍是裸 `Value`。所以 ⑥ 的状态是 🟡 部分，别按「✅ 已实现」引用。
+- **Rust 重做方向（业界对标，2026-06-17；stage 化仍待做）**：参考 `Nimrobo/superdense`（L4 产品化）的数据模型——session → enrichers 派生信号（run cost / errors / tool counts / first-intent / fingerprint / plan-mode / session-kind / subagent-summary）→ curation → reward snapshot；`next` 可学其 `nextAction{stage, command, why}` 机制（stage 化 + actionable 计数），但 **stage 要换成 LTO 自己领域**（挖 runner 有效性 → 识别反复翻车路径 → 出 tuning brief），不照搬 superdense 的 outcome stage。详见 am `2026-06-17-技术-从LTO架构承接loop启发的演进判断`。
 - **铁律**：挖掘出的是**证据和派生信号**，不是命令——LTO 出 brief，host 决定调优，绝不自动 route/promote/晋升（沿用 control-loop 不变量）。judge 的主观分参与挖掘时仍标「主观非测量」。这正是 LTO L4 与 LangChain L4「自动改写 harness」的分歧线（LTO 守人在环，站 superdense「goal 永不自动改」一侧）。
 
 ## ⑧ ACP 协议 fallback runner（远期观察，协议稳了再接）

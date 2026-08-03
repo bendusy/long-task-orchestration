@@ -105,9 +105,9 @@ pub fn cmd_reaffirm(repo: &Path, options: ReaffirmOptions) -> anyhow::Result<()>
     for entry in &mut updated_entries {
         match entry {
             DecisionEntry::Typed(record) if record.id == options.id => {
-                record.anchor.head = actual.head.clone();
+                record.anchor.head = actual.head;
                 record.anchor.phase = ctx.state.current_phase.clone();
-                record.reaffirmed_at = Some(now.clone());
+                record.reaffirmed_at = Some(now);
                 updated = true;
                 break;
             }
