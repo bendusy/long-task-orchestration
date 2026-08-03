@@ -1164,11 +1164,11 @@ fn validate_runner(runner: &str) -> anyhow::Result<()> {
     }
 }
 
-/// `--target` and `--new-window` are mutually exclusive, but neither is
-/// required. With both unset, `prepare_target` auto-detects the attached
-/// tmux session and opens a visible window there — the "try hard to use
-/// tmux" default so a host that forgets the flag still lands in the current
-/// cc session instead of bailing or spawning a detached session it can't see.
+/// --target and --new-window are mutually exclusive, but neither is required.
+/// With both unset, prepare_target uses the current pane when its foreground
+/// command is an idle shell; a busy pane falls back to a visible new window
+/// with a warning. An explicit busy target fails closed and suggests retrying
+/// with --new-window.
 fn validate_dispatch_target(target: Option<&str>, new_window: bool) -> anyhow::Result<()> {
     if target.is_some() && new_window {
         anyhow::bail!("pass at most one of --target or --new-window");

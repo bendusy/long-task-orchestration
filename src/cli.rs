@@ -178,7 +178,9 @@ The single-step `lto dispatch-goal` and `lto events --wait` remain available for
     #[command(
         about = "Dispatch a goal file to codex, pi, or agy through tmux",
         long_about = "Dispatch a goal file to an external agent (codex/pi/agy) in a real tmux TUI. \
-With no --target/--new-window it opens a visible window in your current tmux session. \
+With no --target/--new-window it uses the current pane when its foreground command is an idle \
+bash/zsh/fish/sh; a busy pane warns and automatically falls back to a visible new window. \
+An explicit busy --target fails closed and suggests retrying with --new-window. \
 Primary completion is goal-self-report (agent runs lto agent-turn-completed --source \
 goal-self-report); Codex Stop/update_goal and process-exit remain optional side-channels.\n\
 \n\

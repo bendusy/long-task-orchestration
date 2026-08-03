@@ -429,12 +429,26 @@ async fn prepare_target(config: &TmuxRunnerConfig) -> Result<String, TmuxRunnerE
     }
 
     if let Some(anchor) = current_anchor(&config.tmux_bin).await? {
-        return new_window_at_anchor(config, anchor).await;
+        return prepare_default_target(config, anchor).await;
     }
 
     Err(TmuxRunnerError::Config(
         "tmux target required; pass tmux_target, tmux_session+tmux_new_window, or tmux_session+tmux_new_session".to_string(),
     ))
+}
+
+async fn prepare_default_target(
+    config: &TmuxRunnerConfig,
+    anchor: TmuxAnchor,
+) -> Result<String, TmuxRunnerError> {
+    if let Some(pane) = anchor.pane_id.as_deref() {
+        let command = current_pane_command(config, pane).await?;
+        if is_idle_shell_command(&command) {
+            return Ok(pane.to_string());
+        }
+        eprintln!("{}", busy_candidate_warning(pane, &command));
+    }
+    new_window_at_anchor(config, anchor).await
 }
 
 async fn new_window_in_session(
@@ -491,7 +505,21 @@ async fn ensure_target_is_idle_shell(
     config: &TmuxRunnerConfig,
     target: &str,
 ) -> Result<(), TmuxRunnerError> {
-    let command = tmux_output(
+    let command = current_pane_command(config, target).await?;
+    if is_idle_shell_command(&command) {
+        return Ok(());
+    }
+    let command = pane_command_name(&command);
+    Err(TmuxRunnerError::Config(format!(
+        "target pane busy: {target} is running {command:?}; retry without --target and with --new-window"
+    )))
+}
+
+async fn current_pane_command(
+    config: &TmuxRunnerConfig,
+    target: &str,
+) -> Result<String, TmuxRunnerError> {
+    tmux_output(
         &config.tmux_bin,
         &[
             "display-message".to_string(),
@@ -501,18 +529,26 @@ async fn ensure_target_is_idle_shell(
             "#{pane_current_command}".to_string(),
         ],
     )
-    .await?;
+    .await
+}
+
+fn pane_command_name(command: &str) -> &str {
     let command = command.trim().trim_start_matches('-');
-    let command = Path::new(command)
+    Path::new(command)
         .file_name()
         .and_then(|value| value.to_str())
-        .unwrap_or(command);
-    if matches!(command, "bash" | "zsh" | "fish" | "sh") {
-        return Ok(());
-    }
-    Err(TmuxRunnerError::Config(format!(
-        "target pane busy: {target} is running {command:?}; choose an idle bash/zsh/fish/sh pane"
-    )))
+        .unwrap_or(command)
+}
+
+fn is_idle_shell_command(command: &str) -> bool {
+    matches!(pane_command_name(command), "bash" | "zsh" | "fish" | "sh")
+}
+
+fn busy_candidate_warning(target: &str, command: &str) -> String {
+    format!(
+        "WARN dispatch-goal: current candidate pane {target} is busy (running {:?}); automatically using --new-window",
+        pane_command_name(command)
+    )
 }
 
 /// Where the invoking process sits inside tmux. `window_id` is present only
@@ -521,6 +557,7 @@ async fn ensure_target_is_idle_shell(
 struct TmuxAnchor {
     session: String,
     window_id: Option<String>,
+    pane_id: Option<String>,
 }
 
 async fn current_anchor(tmux_bin: &str) -> Result<Option<TmuxAnchor>, TmuxRunnerError> {
@@ -531,6 +568,7 @@ async fn current_anchor(tmux_bin: &str) -> Result<Option<TmuxAnchor>, TmuxRunner
     let Some(pane) = pane else {
         return current_anchor_from_client(tmux_bin).await;
     };
+    let pane_id = pane.clone();
     let line = match tmux_output(
         tmux_bin,
         &[
@@ -556,6 +594,7 @@ async fn current_anchor(tmux_bin: &str) -> Result<Option<TmuxAnchor>, TmuxRunner
     Ok(Some(TmuxAnchor {
         session: session.to_string(),
         window_id: window_id.starts_with('@').then(|| window_id.to_string()),
+        pane_id: Some(pane_id),
     }))
 }
 
@@ -584,6 +623,7 @@ async fn current_anchor_from_client(tmux_bin: &str) -> Result<Option<TmuxAnchor>
         Ok(Some(TmuxAnchor {
             session: session.to_string(),
             window_id: None,
+            pane_id: None,
         }))
     }
 }
@@ -1335,6 +1375,33 @@ sys.exit(0)
         bin
     }
 
+    fn fake_tmux_busy_candidate(tmp: &Path) -> PathBuf {
+        let bin = tmp.join("tmux-busy-candidate");
+        let log = tmp.join("tmux-busy-candidate-log.jsonl");
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import json, pathlib, sys
+log = pathlib.Path(r'''{log}''')
+args = sys.argv[1:]
+with log.open("a") as f:
+    f.write(json.dumps(args) + "\n")
+if args and args[0] == "display-message":
+    if any("pane_current_command" in arg for arg in args):
+        print("codex")
+    else:
+        print("sess\t@7")
+    sys.exit(0)
+if args and args[0] == "new-window":
+    print("@42.0")
+sys.exit(0)
+"#,
+            log = log.display(),
+        );
+        std_fs::write(&bin, script).unwrap();
+        make_executable(&bin);
+        bin
+    }
+
     fn fake_tmux_duplicate_session(tmp: &Path) -> PathBuf {
         let bin = tmp.join("tmux");
         let log = tmp.join("tmux-log.jsonl");
@@ -1924,6 +1991,43 @@ sys.exit(0)
 
         assert!(err.to_string().contains("target pane busy"), "{err}");
         assert!(err.to_string().contains("codex"), "{err}");
+        assert!(err.to_string().contains("--new-window"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn busy_current_candidate_automatically_uses_new_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_tmux_busy_candidate(tmp.path());
+        let config = TmuxRunnerConfig {
+            tmux_bin: bin.display().to_string(),
+            mode: TmuxMode::Fire,
+            target: None,
+            session: None,
+            new_window: false,
+            new_session: false,
+            window_name: "lto:codex:test".to_string(),
+            signal_name: "done".to_string(),
+            sentinel_path: None,
+            ready_patterns: Vec::new(),
+            skip_prompts: Vec::new(),
+            dispatch_safety: TmuxDispatchSafety::default(),
+            ready_timeout: Duration::from_secs(1),
+            poll_interval: Duration::from_millis(1),
+            capture_lines: 20,
+        };
+        let anchor = TmuxAnchor {
+            session: "sess".to_string(),
+            window_id: Some("@7".to_string()),
+            pane_id: Some("%7".to_string()),
+        };
+
+        let target = prepare_default_target(&config, anchor).await.unwrap();
+
+        assert_eq!(target, "@42.0");
+        assert!(busy_candidate_warning("%7", "codex").contains("--new-window"));
+        let log = std_fs::read_to_string(tmp.path().join("tmux-busy-candidate-log.jsonl")).unwrap();
+        assert!(log.contains("new-window"));
+        assert!(log.contains("@7"));
     }
 
     #[test]
