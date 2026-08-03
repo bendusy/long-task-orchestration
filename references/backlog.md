@@ -18,6 +18,7 @@
 | ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
 | ⑨ | Scheduler runner lifecycle events / O2 caller-side wiring | ★★ 高 | P1 | ✅ 已实现 | O2 采纳 Option A：调用方 emit runner started/finished/retry/healthcheck，`scheduler.rs` 保持无 run_id / 无事件 I/O |
 | ⑩ | Host 合议 goal → tmux 短会话 loop → 异构审计 → 亲验闭环 playbook | ★★ 高 | P1 | ✅ 已实现 | T1/T2 Rust tmux 派工底座落地；playbook 进 `workflow-playbook.md`；closed check 默认拒绝无 evidence 的 done task |
+| ⑬ | 三项低优先技术债（`has_high_risk_task` 两处重复 / `redact_text` 同名异义 / 复杂命令缺 `after_help` examples） | ☆ 低 | P3 顺手做 | 未做 | 详见 ⑬ 段；均为 2026-08-03 仓库整理时从待删的 findings/spec 迁入，防止随文件消失 |
 
 ## 依赖链
 
@@ -148,5 +149,14 @@
 - **shell_command 可绕 classify_effect**（pi HIGH → 误报，不修）：深核坐实——test_cmd **根本不过 classify_effect gate**（该 gate 只在 worktree.rs/ops.rs 沙箱原语，host 已亲验）；test_cmd 是受信操作者配置（等价 CI script，能写 job-spec 者已有 RCE），`sh -c` 是必需语义。pi 把沙箱 gate 嫁接到 test_cmd 凑攻击链。加 test_cmd 的 gate 会误杀合法测试命令、零安全收益（CLAUDE.md「形似不等于同病」同款）。**不修**。
 - **RunnerFamily::Unknown 隔离**（agy HIGH → 误报，不修）：host 亲验——`derive(PartialEq,Eq)` + `Unknown(String)` 带名，不同名 Unknown 是不同族（隔离成立）；AUDITOR_POOL 写死已知 runner，Unknown 实际不出现在审计选择。不构成真洞。
 - 已知非新问题（不立项）：readonly intent 对 agy 升 workspace-write（pi HIGH）——`runner-readonly-contract.md` 早记录，agy 无 read-only 档，设计如此。
+
+## ⑬ 三项低优先技术债（P3，顺手做即可，2026-08-03 迁入）
+
+来源：`findings-dedup-pi.md`、`findings-audit-pi.md`、`docs/superpowers/specs/2026-07-01-lto-usability-retention-design.md`——这三份文档在 2026-08-03 仓库整理时随已交付的 scratch 一并删除（git 历史留底），其中仍有效的待办迁到这里，避免"删文件顺带丢账"。
+
+- **`has_high_risk_task` 两处逐字节重复**（`src/commands/closeout.rs` 与 `src/commands/ops.rs` 各一份）。关键词表分两处维护，漂移后会出现"一处拦高风险、一处不拦"。下次改 closeout/ops 风险逻辑时顺手合并到一处。**目前无证据表明已漂移**，所以不单独立轮。
+- **`redact_text` 同名异义**（`src/redact.rs:48` 保形版 vs `src/llm_judge.rs:72` 折叠截断版）。纯命名债，不是安全问题——redaction regex 的单一真源在 `redact.rs` 已成立。改名消歧即可（如 judge 侧改 `redact_for_prompt`）。
+- **复杂命令缺 `after_help` 示例**（`grep after_help src/cli.rs` 为空）。原 usability spec 八项里唯一未做的一项；同 spec 的 B1（枚举值+默认值进 `--help`）已落地并覆盖了大部分"agent 调错参数"的根因，所以这条是锦上添花。
+- **closeout reverify 的已知限制**（host 于 2026-07-28 主动裁决延后，非遗漏）：无总预算上界；rc 不区分 spawn 失败/超时/非零退出；无 label 时命令明文写入事件；`--force`/`--no-reverify` 跳过时事件无法区分跳过原因。场景变化再重估。
 
 > 维护：项落地后更新本表「状态」列并在 `CHANGELOG.md` 记一笔；新 deferred 入此表，勿散落记忆。
