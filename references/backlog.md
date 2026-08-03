@@ -18,6 +18,7 @@
 | ⑧ | ACP 协议 fallback runner（任意 ACP agent 兜底派工） | ☆ 低 | **观察** | 远期 | acpx v0.9 alpha / ACP 协议 v0.13 仍 v1-v2 重构；协议稳了再接，不绑 acpx |
 | ⑨ | Scheduler runner lifecycle events / O2 caller-side wiring | ★★ 高 | P1 | ✅ 已实现 | O2 采纳 Option A：调用方 emit runner started/finished/retry/healthcheck，`scheduler.rs` 保持无 run_id / 无事件 I/O |
 | ⑩ | Host 合议 goal → tmux 短会话 loop → 异构审计 → 亲验闭环 playbook | ★★ 高 | P1 | ✅ 已实现 | T1/T2 Rust tmux 派工底座落地；playbook 进 `workflow-playbook.md`；closed check 默认拒绝无 evidence 的 done task |
+| ⑮ | 可观测性三件套未完成部分（`tracing` 分级日志 + `logs` / `doctor` 失败查询命令） | ★ 中 | P2 | 未做 | 详见 ⑮ 段；2026-08-03 从待删的 observability spec 迁入 |
 | ⑭ | 自驱唤醒（定时 tick + should-run 决策核 + 退避 + spend 记账） | — | **不做** | ⛔ 2026-08-03 否决 | 与 LoopX 对比合议后 REJECT：无「宿主触发已成瓶颈」的实证，且自建调度器违背薄 harness；LoopX 自身也是纯 no-LLM 决策核、唤醒 100% 借宿主。重估条件见 ⑭ 段 |
 | ⑬ | 三项低优先技术债（`has_high_risk_task` 两处重复 / `redact_text` 同名异义 / 复杂命令缺 `after_help` examples） | ☆ 低 | P3 顺手做 | 未做 | 详见 ⑬ 段；均为 2026-08-03 仓库整理时从待删的 findings/spec 迁入，防止随文件消失 |
 
@@ -151,6 +152,18 @@
 - **RunnerFamily::Unknown 隔离**（agy HIGH → 误报，不修）：host 亲验——`derive(PartialEq,Eq)` + `Unknown(String)` 带名，不同名 Unknown 是不同族（隔离成立）；AUDITOR_POOL 写死已知 runner，Unknown 实际不出现在审计选择。不构成真洞。
 - 已知非新问题（不立项）：readonly intent 对 agy 升 workspace-write（pi HIGH）——`runner-readonly-contract.md` 早记录，agy 无 read-only 档，设计如此。
 
+## ⑮ 可观测性三件套的未完成部分（P2，2026-08-03 迁入）
+
+来源：`references/specs/2026-06-16-goal-observability-rust-implementation.md`（已随其余已交付 spec 删除，git 历史留底）。该 spec 的 O2 事件接线部分已全部落地（见 ⑨），但另外三项从未实现，也从未被记为"有意不做"——所以补记在此，避免删文件顺带丢账。
+
+2026-08-03 实证：`Cargo.toml` 无 `tracing` 依赖，`grep -rl 'tracing::' src/` 零命中，全仓 65 处仍裸用 `println!`/`eprintln!`；`lto logs` 与 `lto doctor` 均报 unrecognized subcommand。
+
+- **O1-1 `tracing` 分级日志**：当前所有输出走 `println!`/`eprintln!`，无法按级别过滤，也无结构化字段。
+- **O3-2 `logs` 命令**：按 run / 时间 / 级别查历史输出。目前只能自己翻 `.lto/<run-id>/`。
+- **O3-3 `doctor` 失败查询**：现有 `preflight` 只探测环境健康，不回答"这个 run 里什么失败了、为什么"。
+
+**为什么值得做**：LTO 自己的 dev-workflow 插件把「doctor/healthcheck + failure-query」列为可观测性验收门，而 LTO 自身不达标——吃自己狗粮时这一项是红的。**为什么不紧急**：`println!` 照常工作，缺的是过滤和查询体验，不阻断任何功能。
+
 ## ⑭ 自驱唤醒（⛔ 2026-08-03 否决，原 `self-driving-wake-loop.md`）
 
 原设计（2026-06-20）：LTO 自己定时醒来推进 run，不等 host 调用。2026-08-03 与开源项目 LoopX 做机制对比，派 codex/pi 异构合议后 **REJECT**：
@@ -159,6 +172,8 @@
 - **违背薄 harness**：定时器 + 退避状态机 + spend 记账 + replan 加起来就是一个常驻调度器，而 LTO 的定位是 harness 不是调度器。
 - **对照组也不这么做**：LoopX 同样不含定时器——它是纯本地无 LLM 的决策核，唤醒 100% 借宿主（Claude Code 侧就是原生 `/loop`）。所以"同类项目都自驱"这个前提本身不成立。
 - **前置缺陷**：真要做也得先修 `autopilot` 的记账时机（已于 2026-08-03 修复，见 CHANGELOG v0.11.2）。
+
+**已落地的那半截**（重开时不必从零开始）：原 spec 的 Phase 1（`lto events --wait` 阻塞等事件）和 Phase 2（`notify.rs` 的 TCP connect-drop `wake_run`，由 `agent_turn.rs` 调用）都是当前代码事实，被否决的只是"LTO 自己定时醒来"这一层。Phase 3（per-runtime hook adapter）和 Phase 4（`events.cursor` 游标 + `max-wakes` 预算 + 死循环防护）未做——2026-08-03 实证：`find src -iname '*hook*'` 与 `grep max_wakes src/` 均零命中。
 
 **重估条件**（同时满足才重开）：① 有连续真实 run 证据表明 host 触发遗漏造成了交付损失，且排除任务定义/runner 健康/人工 gate 未完成这三种解释；② 定时触发仍借宿主（`/loop`、cron、ScheduleWakeup），LTO 不常驻、不监听外部事件、不自建调度队列；③ 每次自动触发仍是有上限的单步，语义判断/phase 切换/closeout 一律停在 human gate。
 
