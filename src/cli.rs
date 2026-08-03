@@ -1829,11 +1829,17 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
             "WARN host runtime is unknown; 需补充: lto contract set --run-id {run_id} --host \"<runtime>\"（unknown 不做同族排除）"
         );
     }
-    let auditors = audit_dispatch::pick_auditors_preferred(
+    let selection = audit_dispatch::pick_auditors_for_run(
+        repo,
+        &run_id,
         &host,
         options.allow_same_family,
         &options.prefer_runner,
-    );
+    )?;
+    for warning in &selection.warnings {
+        eprintln!("{warning}");
+    }
+    let auditors = selection.auditors;
     let audit_dir = run_dir.join("audit");
     fs::create_dir_all(&audit_dir)?;
     crate::event_emit::emit_audit_dispatched(repo, &run_id, &host, &auditors, "prepare", None);

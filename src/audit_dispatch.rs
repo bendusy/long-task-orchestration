@@ -56,6 +56,85 @@ pub fn pick_auditors_preferred(
     if ordered.is_empty() { base } else { ordered }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditorSelection {
+    pub auditors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Filter only the current run's audit failures. An explicit preference is a
+/// host override and therefore bypasses this historical failure filter while
+/// retaining the existing heterogeneous-pool selection rules.
+pub fn pick_auditors_for_run(
+    repo: &Path,
+    run_id: &str,
+    host: &str,
+    allow_same_family: bool,
+    prefer: &[String],
+) -> anyhow::Result<AuditorSelection> {
+    let base = pick_auditors_preferred(host, allow_same_family, prefer);
+    if !prefer.is_empty() {
+        return Ok(AuditorSelection {
+            auditors: base,
+            warnings: Vec::new(),
+        });
+    }
+
+    let failure_streaks = audit_failure_streaks(repo, run_id)?;
+    let mut auditors = Vec::new();
+    let mut warnings = Vec::new();
+    for runner in base {
+        let Some(failures) = failure_streaks.get(&runner).copied() else {
+            auditors.push(runner);
+            continue;
+        };
+        if failures < 2 {
+            auditors.push(runner);
+            continue;
+        }
+        warnings.push(format!(
+            "WARN auto-dispatch skipped runner {runner}: {failures} consecutive audit failures in run {run_id}; override with --prefer-runner {runner}"
+        ));
+    }
+
+    Ok(AuditorSelection { auditors, warnings })
+}
+
+fn audit_failure_streaks(repo: &Path, run_id: &str) -> anyhow::Result<BTreeMap<String, usize>> {
+    let mut streaks = BTreeMap::new();
+    for event in crate::events::read(repo, run_id)? {
+        if event.get("type").and_then(Value::as_str) != Some("runner.finished") {
+            continue;
+        }
+        let fields = event.get("fields").and_then(Value::as_object);
+        let Some(fields) = fields else { continue };
+        let Some(context) = fields.get("context").and_then(Value::as_str) else {
+            continue;
+        };
+        if !matches!(context, "audit.auto_dispatch" | "audit.risk_discovery") {
+            continue;
+        }
+        let Some(runner) = fields.get("runner").and_then(Value::as_str).or_else(|| {
+            event
+                .get("actor")
+                .and_then(|actor| actor.get("id"))
+                .and_then(Value::as_str)
+        }) else {
+            continue;
+        };
+        let Some(status) = fields.get("status").and_then(Value::as_str) else {
+            continue;
+        };
+        let streak = streaks.entry(runner.to_string()).or_insert(0);
+        if status == "ok" {
+            *streak = 0;
+        } else {
+            *streak += 1;
+        }
+    }
+    Ok(streaks)
+}
+
 pub fn pick_healthy_discoverer(repo: &Path, auditors: &[String], host: &str) -> Option<String> {
     let runners_dir = default_runners_dir(repo);
     pick_healthy_discoverer_with_runners_dir(repo, auditors, host, &runners_dir)
@@ -296,6 +375,43 @@ mod tests {
     }
 
     #[test]
+    fn two_consecutive_audit_failures_skip_runner_and_warn() {
+        let tmp = tempfile::tempdir().unwrap();
+        emit_audit_result(tmp.path(), "r1", "codex", "failed", "audit.auto_dispatch");
+        emit_audit_result(tmp.path(), "r1", "codex", "timeout", "audit.risk_discovery");
+
+        let selection = pick_auditors_for_run(tmp.path(), "r1", "claude", false, &[]).unwrap();
+        assert!(!selection.auditors.contains(&"codex".to_string()));
+        assert_eq!(selection.warnings.len(), 1);
+        assert!(selection.warnings[0].contains("WARN"));
+        assert!(selection.warnings[0].contains("2 consecutive audit failures"));
+        assert!(selection.warnings[0].contains("--prefer-runner codex"));
+    }
+
+    #[test]
+    fn one_audit_failure_does_not_skip_runner() {
+        let tmp = tempfile::tempdir().unwrap();
+        emit_audit_result(tmp.path(), "r1", "codex", "failed", "audit.auto_dispatch");
+
+        let selection = pick_auditors_for_run(tmp.path(), "r1", "claude", false, &[]).unwrap();
+        assert!(selection.auditors.contains(&"codex".to_string()));
+        assert!(selection.warnings.is_empty());
+    }
+
+    #[test]
+    fn explicit_prefer_runner_bypasses_failure_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        emit_audit_result(tmp.path(), "r1", "codex", "failed", "audit.auto_dispatch");
+        emit_audit_result(tmp.path(), "r1", "codex", "failed", "audit.auto_dispatch");
+
+        let selection =
+            pick_auditors_for_run(tmp.path(), "r1", "claude", false, &["codex".to_string()])
+                .unwrap();
+        assert_eq!(selection.auditors, vec!["codex"]);
+        assert!(selection.warnings.is_empty());
+    }
+
+    #[test]
     fn discoverer_fails_closed_for_all_unhealthy_and_probe_failure_paths() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
@@ -403,6 +519,26 @@ mod tests {
         writeln!(file, "{payload}").unwrap();
         writeln!(file, "JSON").unwrap();
         make_executable(&script);
+    }
+
+    fn emit_audit_result(repo: &Path, run_id: &str, runner: &str, status: &str, context: &str) {
+        crate::events::emit(
+            repo,
+            run_id,
+            crate::events::EventRecord {
+                event_type: "runner.finished".to_string(),
+                actor_kind: "runner".to_string(),
+                actor_id: Some(runner.to_string()),
+                summary: format!("{runner} {status}"),
+                fields: json!({
+                    "runner": runner,
+                    "status": status,
+                    "context": context,
+                }),
+                ..crate::events::EventRecord::default()
+            },
+        )
+        .unwrap();
     }
 
     #[cfg(unix)]
