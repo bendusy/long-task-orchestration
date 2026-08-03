@@ -53,6 +53,78 @@ pub struct DeliveryContract {
     pub extra: Map<String, Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionRecord {
+    pub id: String,
+    pub text: String,
+    pub scope: DecisionScope,
+    pub anchor: DecisionAnchor,
+    #[serde(default)]
+    pub reaffirmed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DecisionScope {
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionAnchor {
+    pub head: String,
+    pub phase: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DecisionEntry {
+    Typed(DecisionRecord),
+    Legacy(Value),
+}
+
+impl DecisionEntry {
+    pub fn as_record(&self) -> Option<&DecisionRecord> {
+        match self {
+            Self::Typed(record) => Some(record),
+            Self::Legacy(_) => None,
+        }
+    }
+
+    pub fn into_value(self) -> Value {
+        match self {
+            Self::Typed(record) => serde_json::to_value(record).unwrap_or(Value::Null),
+            Self::Legacy(value) => value,
+        }
+    }
+}
+
+pub fn parse_decision_entries(value: &Value) -> Vec<DecisionEntry> {
+    match value {
+        Value::Array(entries) => entries
+            .iter()
+            .map(|entry| {
+                serde_json::from_value::<DecisionRecord>(entry.clone())
+                    .map(DecisionEntry::Typed)
+                    .unwrap_or_else(|_| DecisionEntry::Legacy(entry.clone()))
+            })
+            .collect(),
+        Value::Null => Vec::new(),
+        other => vec![DecisionEntry::Legacy(other.clone())],
+    }
+}
+
+pub fn decision_entries_to_value(entries: &[DecisionEntry]) -> Value {
+    Value::Array(
+        entries
+            .iter()
+            .cloned()
+            .map(DecisionEntry::into_value)
+            .collect(),
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunReadinessAssessment {
     pub missing: Vec<&'static str>,
@@ -451,6 +523,61 @@ mod tests {
         assert_eq!(parsed.extra["future_key"]["kept"], Value::Bool(true));
         let out = serde_json::to_value(parsed).unwrap();
         assert_eq!(out["future_key"]["kept"], Value::Bool(true));
+    }
+
+    #[test]
+    fn typed_decision_record_roundtrips_through_user_decisions() {
+        let record = DecisionRecord {
+            id: "d-1".to_string(),
+            text: "Keep human approval as an anchor".to_string(),
+            scope: DecisionScope {
+                phase: Some("implementation".to_string()),
+                paths: vec!["src/state.rs".to_string()],
+            },
+            anchor: DecisionAnchor {
+                head: "a".repeat(40),
+                phase: "implementation".to_string(),
+                recorded_at: "2026-08-03T12:00:00Z".to_string(),
+            },
+            reaffirmed_at: None,
+        };
+        let value = decision_entries_to_value(&[DecisionEntry::Typed(record.clone())]);
+
+        let parsed = parse_decision_entries(&value);
+
+        assert_eq!(parsed, vec![DecisionEntry::Typed(record)]);
+    }
+
+    #[test]
+    fn legacy_decision_entries_survive_mixed_parse_and_roundtrip() {
+        let legacy_object = serde_json::json!({
+            "kind": "manual",
+            "summary": "old decision shape",
+            "recorded_at": "yesterday"
+        });
+        let typed = DecisionRecord {
+            id: "d-2".to_string(),
+            text: "Use the current evidence".to_string(),
+            scope: DecisionScope::default(),
+            anchor: DecisionAnchor {
+                head: "b".repeat(40),
+                phase: "audit".to_string(),
+                recorded_at: "2026-08-03T12:01:00Z".to_string(),
+            },
+            reaffirmed_at: Some("2026-08-03T12:02:00Z".to_string()),
+        };
+        let source = serde_json::json!([
+            legacy_object,
+            serde_json::to_value(&typed).unwrap(),
+            "legacy scalar"
+        ]);
+
+        let parsed = parse_decision_entries(&source);
+
+        assert!(matches!(&parsed[0], DecisionEntry::Legacy(value) if value == &source[0]));
+        assert_eq!(parsed[1].as_record(), Some(&typed));
+        assert!(matches!(&parsed[2], DecisionEntry::Legacy(value) if value == &source[2]));
+        assert_eq!(decision_entries_to_value(&parsed), source);
     }
 
     #[test]
