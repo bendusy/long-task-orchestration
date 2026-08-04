@@ -148,6 +148,37 @@ pub(crate) fn save_state_preserving_c2(
 ) -> anyhow::Result<()> {
     let _run_lock = lock_existing_state_path(state_path, run_id)?;
     let current = state::load_state(state_path)?;
+    merge_concurrent_state(current, next);
+    state::save_state(state_path, next)
+}
+
+fn merge_concurrent_state(current: LtoState, next: &mut LtoState) {
+    merge_stable_by_key(
+        &current.dispatch_windows,
+        &mut next.dispatch_windows,
+        |window| window.window_id.clone(),
+    );
+    merge_json_array_by_key(&current.risk_points, &mut next.risk_points, json_id_key);
+    merge_json_array_by_key(
+        &current.phase_transitions,
+        &mut next.phase_transitions,
+        phase_transition_key,
+    );
+    merge_json_array_by_key(
+        &current.user_decisions,
+        &mut next.user_decisions,
+        json_id_key,
+    );
+    merge_json_array_by_key(
+        &current.decision_escalate_points,
+        &mut next.decision_escalate_points,
+        decision_escalate_key,
+    );
+    merge_agent_runs(&current.agent_runs, &mut next.agent_runs);
+
+    if next.notify_cmd.is_none() {
+        next.notify_cmd = current.notify_cmd;
+    }
 
     // Contract metadata has one typed writer. Other commands may keep a run
     // snapshot across slow work, so preserve the latest contract fields while
@@ -157,7 +188,94 @@ pub(crate) fn save_state_preserving_c2(
     next.done_when = current.done_when;
     next.host_runtime = current.host_runtime;
     next.delivery_contract = current.delivery_contract;
-    state::save_state(state_path, next)
+}
+
+fn merge_stable_by_key<T: Clone>(current: &[T], next: &mut Vec<T>, key: impl Fn(&T) -> String) {
+    let mut merged = current.to_vec();
+    let mut positions = BTreeMap::new();
+    for (index, item) in merged.iter().enumerate() {
+        positions.insert(key(item), index);
+    }
+    for item in next.iter() {
+        let item_key = key(item);
+        if let Some(index) = positions.get(&item_key).copied() {
+            merged[index] = item.clone();
+        } else {
+            positions.insert(item_key, merged.len());
+            merged.push(item.clone());
+        }
+    }
+    *next = merged;
+}
+
+fn merge_json_array_by_key(current: &Value, next: &mut Value, key: fn(&Value) -> String) {
+    if let Some(current) = current.as_array()
+        && let Some(next) = next.as_array_mut()
+    {
+        merge_stable_by_key(current, next, key);
+        return;
+    }
+    if json_collection_is_empty(next) && !json_collection_is_empty(current) {
+        *next = current.clone();
+    }
+}
+
+fn merge_agent_runs(current: &Value, next: &mut Value) {
+    match (current.as_object(), next.as_object()) {
+        (Some(current), Some(next_runs)) => {
+            let mut merged = current.clone();
+            for (task_key, mut next_entries) in next_runs.clone() {
+                if let Some(current_entries) = merged.get(&task_key) {
+                    merge_json_array_by_key(current_entries, &mut next_entries, json_value_key);
+                }
+                merged.insert(task_key, next_entries);
+            }
+            *next = Value::Object(merged);
+        }
+        _ => merge_json_array_by_key(current, next, json_value_key),
+    }
+}
+
+fn json_collection_is_empty(value: &Value) -> bool {
+    value.as_array().is_some_and(Vec::is_empty) || value.as_object().is_some_and(Map::is_empty)
+}
+
+fn json_id_key(value: &Value) -> String {
+    json_field_key(value, "id").unwrap_or_else(|| json_value_key(value))
+}
+
+fn decision_escalate_key(value: &Value) -> String {
+    json_field_key(value, "id")
+        .or_else(|| json_field_key(value, "key"))
+        .unwrap_or_else(|| json_value_key(value))
+}
+
+fn phase_transition_key(value: &Value) -> String {
+    let fields = ["from", "to", "at", "head"];
+    let parts = fields
+        .iter()
+        .map(|field| value.get(*field).filter(|value| !value.is_null()))
+        .collect::<Option<Vec<_>>>();
+    parts
+        .map(|parts| {
+            parts
+                .into_iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("|")
+        })
+        .unwrap_or_else(|| json_value_key(value))
+}
+
+fn json_field_key(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .filter(|value| !value.is_null())
+        .map(|value| format!("{field}:{}", value))
+}
+
+fn json_value_key(value: &Value) -> String {
+    value.to_string()
 }
 
 pub fn save_run_locked(ctx: &RunContext) -> anyhow::Result<()> {
@@ -813,9 +931,24 @@ pub fn git_add_plan_commands(tag: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{self, LtoState};
+    use crate::state::{self, DispatchWindowState, LtoState};
     use serde_json::json;
     use std::process::Command;
+    use std::sync::{Arc, Barrier};
+
+    fn dispatch_window(window_id: &str, status: &str) -> DispatchWindowState {
+        DispatchWindowState {
+            window_id: window_id.into(),
+            target: format!("{window_id}.1"),
+            runner: "codex".into(),
+            tmux_bin: "tmux".into(),
+            cleanup_on_success: true,
+            status: status.into(),
+            created_at: "2026-08-04T00:00:00Z".into(),
+            finished_at: None,
+            retention_reason: None,
+        }
+    }
 
     #[test]
     fn load_run_reads_current_marker_and_state_json() {
@@ -844,6 +977,197 @@ mod tests {
 
         assert!(error.to_string().contains("no state.json for missing"));
         assert!(!tmp.path().join(".lto").exists());
+    }
+
+    #[test]
+    fn sequential_stale_saves_preserve_both_dispatch_window_additions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_path = tmp.path().join("state.json");
+        let initial = LtoState {
+            run_id: "r1".into(),
+            dispatch_windows: vec![dispatch_window("W1", "active")],
+            ..LtoState::default()
+        };
+        state::save_state(&state_path, &initial).unwrap();
+        let mut snapshot_a = initial.clone();
+        let mut snapshot_b = initial;
+        snapshot_a
+            .dispatch_windows
+            .push(dispatch_window("W2", "active"));
+        snapshot_b
+            .dispatch_windows
+            .push(dispatch_window("W3", "active"));
+
+        let barrier = Arc::new(Barrier::new(2));
+        let state_path_a = state_path.clone();
+        let barrier_a = Arc::clone(&barrier);
+        let writer_a = std::thread::spawn(move || {
+            barrier_a.wait();
+            save_state_preserving_c2(&state_path_a, "r1", &mut snapshot_a).unwrap();
+        });
+        let state_path_b = state_path.clone();
+        let writer_b = std::thread::spawn(move || {
+            barrier.wait();
+            save_state_preserving_c2(&state_path_b, "r1", &mut snapshot_b).unwrap();
+        });
+        writer_a.join().unwrap();
+        writer_b.join().unwrap();
+
+        let persisted = state::load_state(&state_path).unwrap();
+        let mut ids = persisted
+            .dispatch_windows
+            .iter()
+            .map(|window| window.window_id.as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["W1", "W2", "W3"]);
+    }
+
+    #[test]
+    fn merge_concurrent_state_prefers_next_dispatch_window_for_the_same_id() {
+        let current = LtoState {
+            dispatch_windows: vec![dispatch_window("W1", "active")],
+            ..LtoState::default()
+        };
+        let mut updated = dispatch_window("W1", "cleaned");
+        updated.finished_at = Some("2026-08-04T01:00:00Z".into());
+        let mut next = LtoState {
+            dispatch_windows: vec![updated],
+            ..LtoState::default()
+        };
+
+        merge_concurrent_state(current, &mut next);
+
+        assert_eq!(next.dispatch_windows.len(), 1);
+        assert_eq!(next.dispatch_windows[0].status, "cleaned");
+        assert_eq!(
+            next.dispatch_windows[0].finished_at.as_deref(),
+            Some("2026-08-04T01:00:00Z")
+        );
+    }
+
+    #[test]
+    fn merge_concurrent_state_preserves_current_contract_fields() {
+        let current = LtoState {
+            goal: "new goal".into(),
+            why: "new why".into(),
+            done_when: "new acceptance".into(),
+            host_runtime: "codex".into(),
+            delivery_contract: state::DeliveryContract::new(
+                vec!["target".into()],
+                vec!["constraint".into()],
+                vec!["check::true".into()],
+                vec!["entropy".into()],
+            ),
+            ..LtoState::default()
+        };
+        let mut next = LtoState {
+            goal: "stale goal".into(),
+            why: "stale why".into(),
+            done_when: "stale acceptance".into(),
+            host_runtime: "pi".into(),
+            ..LtoState::default()
+        };
+
+        merge_concurrent_state(current, &mut next);
+
+        assert_eq!(next.goal, "new goal");
+        assert_eq!(next.why, "new why");
+        assert_eq!(next.done_when, "new acceptance");
+        assert_eq!(next.host_runtime, "codex");
+        assert_eq!(next.delivery_contract.targets, vec!["target"]);
+    }
+
+    #[test]
+    fn merge_concurrent_state_keeps_tasks_authoritative_from_next() {
+        let current = LtoState {
+            tasks: json!([{"id": "T1"}, {"id": "T2"}, {"id": "T3"}]),
+            ..LtoState::default()
+        };
+        let mut next = LtoState {
+            tasks: json!([{"id": "T1"}, {"id": "T3"}]),
+            ..LtoState::default()
+        };
+
+        merge_concurrent_state(current, &mut next);
+
+        assert_eq!(json_array(&next.tasks).len(), 2);
+        assert_eq!(next.tasks[1]["id"], "T3");
+    }
+
+    #[test]
+    fn merge_concurrent_state_has_stable_append_order() {
+        let current = LtoState {
+            dispatch_windows: vec![
+                dispatch_window("W1", "active"),
+                dispatch_window("W2", "active"),
+            ],
+            ..LtoState::default()
+        };
+        let input = LtoState {
+            dispatch_windows: vec![
+                dispatch_window("W1", "cleaned"),
+                dispatch_window("W3", "active"),
+            ],
+            ..LtoState::default()
+        };
+        let mut first = input.clone();
+        let mut second = input;
+
+        merge_concurrent_state(current.clone(), &mut first);
+        merge_concurrent_state(current, &mut second);
+
+        assert_eq!(first.dispatch_windows, second.dispatch_windows);
+        let ids = first
+            .dispatch_windows
+            .iter()
+            .map(|window| window.window_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["W1", "W2", "W3"]);
+    }
+
+    #[test]
+    fn merge_concurrent_state_preserves_all_append_only_json_collections() {
+        let current = LtoState {
+            phase_transitions: json!([
+                {"from": "intake", "to": "audit", "at": "t1", "head": "h1"}
+            ]),
+            risk_points: json!([{"id": "R1", "status": "open"}]),
+            agent_runs: json!({"T1": [{"job_id": "J1", "status": "ok"}]}),
+            decision_escalate_points: json!([{"id": "E1", "status": "open"}]),
+            user_decisions: json!([{"id": "D1", "text": "old"}]),
+            notify_cmd: Some("notify current".into()),
+            ..LtoState::default()
+        };
+        let mut next = LtoState {
+            phase_transitions: json!([
+                {"from": "audit", "to": "implementation", "at": "t2", "head": "h2"}
+            ]),
+            risk_points: json!([
+                {"id": "R1", "status": "verified"},
+                {"id": "R2", "status": "open"}
+            ]),
+            agent_runs: json!({
+                "T1": [{"job_id": "J2", "status": "ok"}],
+                "T2": [{"job_id": "J3", "status": "ok"}]
+            }),
+            decision_escalate_points: json!([{"id": "E2", "status": "open"}]),
+            user_decisions: json!([{"id": "D1", "text": "new"}]),
+            notify_cmd: None,
+            ..LtoState::default()
+        };
+
+        merge_concurrent_state(current, &mut next);
+
+        assert_eq!(json_array(&next.phase_transitions).len(), 2);
+        assert_eq!(json_array(&next.risk_points).len(), 2);
+        assert_eq!(next.risk_points[0]["status"], "verified");
+        assert_eq!(next.agent_runs["T1"].as_array().unwrap().len(), 2);
+        assert_eq!(next.agent_runs["T2"].as_array().unwrap().len(), 1);
+        assert_eq!(json_array(&next.decision_escalate_points).len(), 2);
+        assert_eq!(json_array(&next.user_decisions).len(), 1);
+        assert_eq!(next.user_decisions[0]["text"], "new");
+        assert_eq!(next.notify_cmd.as_deref(), Some("notify current"));
     }
 
     #[test]
