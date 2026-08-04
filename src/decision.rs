@@ -315,10 +315,16 @@ pub fn merge_candidates(results: &[AgentResult]) -> Vec<DirectionVote> {
             continue;
         }
         if !result.findings.is_empty()
-            && let Some(mut candidates) = parse_direction_vote_values(&result.findings)
+            && let Some(mut parsed) = parse_direction_vote_values(&result.findings)
         {
-            fill_missing_sources(&mut candidates, &result.runner);
-            out.extend(candidates);
+            if parsed.skipped_count > 0 {
+                eprintln!(
+                    "warning: runner {} had {} malformed direction vote(s) skipped (schema mismatch)",
+                    result.runner, parsed.skipped_count
+                );
+            }
+            fill_missing_sources(&mut parsed.candidates, &result.runner);
+            out.extend(parsed.candidates);
             continue;
         }
         if let Some(mut candidates) = parse_direction_votes_text(&result.reply_text) {
@@ -388,33 +394,51 @@ fn parse_direction_votes_text(text: &str) -> Option<Vec<DirectionVote>> {
 
 fn parse_direction_votes_json(text: &str) -> Option<Vec<DirectionVote>> {
     let value = serde_json::from_str::<Value>(text.trim()).ok()?;
-    parse_direction_vote_value(&value)
+    Some(parse_direction_vote_value(&value)?.candidates)
 }
 
-fn parse_direction_vote_values(values: &[Value]) -> Option<Vec<DirectionVote>> {
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ParsedDirectionVotes {
+    candidates: Vec<DirectionVote>,
+    skipped_count: usize,
+}
+
+fn parse_direction_vote_values(values: &[Value]) -> Option<ParsedDirectionVotes> {
     if values.is_empty() {
         return None;
     }
-    let mut candidates = Vec::new();
+    let mut parsed = ParsedDirectionVotes::default();
     for value in values {
-        candidates.extend(parse_direction_vote_value(value)?);
+        match parse_direction_vote_value(value) {
+            Some(mut value_votes) => {
+                parsed.candidates.append(&mut value_votes.candidates);
+                parsed.skipped_count += value_votes.skipped_count;
+            }
+            None => parsed.skipped_count += 1,
+        }
     }
-    Some(candidates)
+    (!parsed.candidates.is_empty()).then_some(parsed)
 }
 
-fn parse_direction_vote_value(value: &Value) -> Option<Vec<DirectionVote>> {
+fn parse_direction_vote_value(value: &Value) -> Option<ParsedDirectionVotes> {
     if let Some(items) = value.as_array() {
-        let mut candidates = Vec::new();
+        let mut parsed = ParsedDirectionVotes::default();
         for item in items {
-            candidates.push(parse_direction_vote_object(item)?);
+            match parse_direction_vote_object(item) {
+                Some(candidate) => parsed.candidates.push(candidate),
+                None => parsed.skipped_count += 1,
+            }
         }
-        return Some(candidates);
+        return (!parsed.candidates.is_empty()).then_some(parsed);
     }
     if let Some(items) = value.get("candidates").and_then(Value::as_array) {
         return parse_direction_vote_values(items);
     }
     if value.get("decision").is_some() {
-        return Some(vec![parse_direction_vote_object(value)?]);
+        return Some(ParsedDirectionVotes {
+            candidates: vec![parse_direction_vote_object(value)?],
+            skipped_count: 0,
+        });
     }
     None
 }
@@ -1312,6 +1336,93 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn direction_vote_parser_keeps_valid_values_when_one_value_is_malformed() {
+        let parsed = parse_direction_vote_values(&[
+            serde_json::json!({
+                "decision": "pick_task",
+                "value": "T1",
+                "reasoning": "first"
+            }),
+            serde_json::json!({
+                "decision": "pick_task",
+                "value": 42,
+                "reasoning": "malformed"
+            }),
+            serde_json::json!({
+                "decision": "pick_pattern",
+                "value": "linear",
+                "reasoning": "third"
+            }),
+        ])
+        .expect("valid votes should survive a malformed value");
+
+        println!("parsed valid votes: {}", parsed.candidates.len());
+        assert_eq!(parsed.candidates.len(), 2);
+        assert_eq!(parsed.skipped_count, 1);
+        assert_eq!(parsed.candidates[0].value, "T1");
+        assert_eq!(parsed.candidates[1].value, "linear");
+    }
+
+    #[test]
+    fn direction_vote_parser_returns_none_when_all_values_are_malformed() {
+        let parsed = parse_direction_vote_values(&[
+            serde_json::json!({"decision": "pick_task", "value": 1}),
+            serde_json::json!({"decision": "unknown", "value": "T2"}),
+            serde_json::json!("not a vote"),
+        ]);
+
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn direction_vote_parser_keeps_all_valid_values_in_order() {
+        let parsed = parse_direction_vote_values(&[
+            serde_json::json!({
+                "decision": "pick_task",
+                "value": "T1",
+                "reasoning": "first"
+            }),
+            serde_json::json!({
+                "decision": "pick_pattern",
+                "value": "linear",
+                "reasoning": "second"
+            }),
+            serde_json::json!({
+                "decision": "needs_human",
+                "value": "ambiguous",
+                "reasoning": "third"
+            }),
+        ])
+        .expect("all valid votes should parse");
+
+        assert_eq!(parsed.candidates.len(), 3);
+        assert_eq!(parsed.skipped_count, 0);
+        assert_eq!(
+            parsed
+                .candidates
+                .iter()
+                .map(|vote| vote.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["T1", "linear", "ambiguous"]
+        );
+    }
+
+    #[test]
+    fn direction_vote_parser_reports_the_number_of_skipped_values() {
+        let parsed = parse_direction_vote_values(&[
+            serde_json::json!({
+                "decision": "pick_task",
+                "value": "T1",
+                "reasoning": "valid"
+            }),
+            serde_json::json!({"decision": "pick_task", "value": 42}),
+        ])
+        .expect("one valid vote should produce a parsed result");
+
+        assert_eq!(parsed.skipped_count, 1);
     }
 
     #[test]
