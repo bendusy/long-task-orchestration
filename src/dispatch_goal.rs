@@ -137,6 +137,7 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
     if !options.goal.exists() {
         anyhow::bail!("goal file does not exist: {}", options.goal.display());
     }
+    validate_dispatch_cwd(options.cwd.as_deref())?;
     validate_dispatch_target(options.target.as_deref(), options.new_window)?;
 
     let mut ctx = util::load_run(repo, options.run_id.as_deref())?;
@@ -1294,6 +1295,21 @@ fn validate_dispatch_target(target: Option<&str>, new_window: bool) -> anyhow::R
     Ok(())
 }
 
+fn validate_dispatch_cwd(cwd: Option<&Path>) -> anyhow::Result<()> {
+    let Some(cwd) = cwd else {
+        return Ok(());
+    };
+    if cwd.is_dir() {
+        return Ok(());
+    }
+    let absolute = absolutize(cwd)?;
+    anyhow::bail!(
+        "dispatch --cwd directory does not exist or is not a directory: {} (absolute: {})",
+        cwd.display(),
+        absolute.display()
+    );
+}
+
 fn current_lto_bin() -> String {
     std::env::current_exe()
         .ok()
@@ -1642,6 +1658,37 @@ mod tests {
         assert!(validate_dispatch_target(None, true).is_ok());
         // Both together is the only error.
         assert!(validate_dispatch_target(Some("sess:1.0"), true).is_err());
+    }
+
+    #[test]
+    fn explicit_dispatch_cwd_missing_path_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing-cwd");
+        let err = validate_dispatch_cwd(Some(&missing)).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains(&missing.display().to_string()));
+        assert!(text.contains("directory does not exist"));
+        assert!(text.contains(&absolutize(&missing).unwrap().display().to_string()));
+    }
+
+    #[test]
+    fn explicit_dispatch_cwd_file_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("cwd-file");
+        fs::write(&file, "not a directory").unwrap();
+        let err = validate_dispatch_cwd(Some(&file)).unwrap_err();
+        assert!(err.to_string().contains(&file.display().to_string()));
+    }
+
+    #[test]
+    fn explicit_dispatch_cwd_directory_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(validate_dispatch_cwd(Some(tmp.path())).is_ok());
+    }
+
+    #[test]
+    fn omitted_dispatch_cwd_skips_validation() {
+        assert!(validate_dispatch_cwd(None).is_ok());
     }
 
     #[test]
