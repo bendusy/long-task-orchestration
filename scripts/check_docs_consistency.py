@@ -260,6 +260,43 @@ def rust_owned_commands(cli_rs: str) -> list[str]:
     return re.findall(r'"([^"]+)"', match.group("body"))
 
 
+LEGACY_TOP_LEVEL_ALIASES = {"task-add", "task-update", "phase"}
+
+
+def rust_commands_enum(cli_rs: str) -> list[str]:
+    """Parse every top-level Commands variant, including hidden variants.
+
+    The parser relies on rustfmt's four-space top-level enum layout. It handles
+    multiline ``#[command(...)]`` blocks and fails if any variant is missed.
+    Legacy aliases are checked explicitly rather than silently discarded.
+    """
+    match = re.search(
+        r"^pub enum Commands \{\n(?P<body>.*?)^\}",
+        cli_rs,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if not match:
+        raise ValueError("pub enum Commands block not found")
+    body = match.group("body")
+    variants = re.findall(r"^    ([A-Z][A-Za-z0-9_]*)\b", body, flags=re.MULTILINE)
+    entries = re.findall(
+        r"(?ms)^(?P<attrs>(?:    #\[command\(.*?\)\]\n)*)"
+        r"    (?P<variant>[A-Z][A-Za-z0-9_]*)\b",
+        body,
+    )
+    if not variants or [variant for _, variant in entries] != variants:
+        raise ValueError("Commands enum variant parsing was incomplete")
+    commands = []
+    for attrs, variant in entries:
+        explicit_name = re.search(r'name\s*=\s*"([^"]+)"', attrs)
+        commands.append(
+            explicit_name.group(1)
+            if explicit_name
+            else re.sub(r"(?<!^)([A-Z])", r"-\1", variant).lower()
+        )
+    return commands
+
+
 def commands_doc_rows(commands_md: str) -> list[str]:
     return re.findall(r"^\|\s*`([^` ]+)`", commands_md, flags=re.MULTILINE)
 
@@ -300,6 +337,12 @@ def main() -> int:
     version = read("VERSION").strip()
     cargo_version = cargo_package_version(read("Cargo.toml"))
     rust_commands = rust_owned_commands(cli_rs)
+    enum_parse_error: str | None = None
+    try:
+        enum_commands = rust_commands_enum(cli_rs)
+    except ValueError as exc:
+        enum_commands = []
+        enum_parse_error = str(exc)
     documented_commands = commands_doc_rows(commands_md)
     documented_count = commands_doc_count(commands_md)
     help_row_count = len(rust_commands) + 1  # clap adds the built-in `help` pseudo-command.
@@ -307,6 +350,20 @@ def main() -> int:
     check("references/open-source-delivery-requirements.md" in readme, "README links open-source delivery requirements", errors)
     check(cargo_version == version, f"Cargo.toml package version matches VERSION ({cargo_version!r} vs {version!r})", errors)
     check(bool(rust_commands), "src/cli.rs COMMANDS contract is parseable", errors)
+    check(enum_parse_error is None, f"src/cli.rs Commands enum is parseable: {enum_parse_error}", errors)
+    if enum_parse_error is None:
+        enum_set = set(enum_commands)
+        expected_enum_commands = set(rust_commands) | LEGACY_TOP_LEVEL_ALIASES
+        check(
+            len(enum_commands) == len(enum_set),
+            "src/cli.rs Commands enum has no duplicate command names",
+            errors,
+        )
+        check(
+            enum_set == expected_enum_commands,
+            "src/cli.rs Commands enum variants are all accounted for by COMMANDS or explicit legacy aliases",
+            errors,
+        )
     check(documented_count == help_row_count, f"COMMANDS.md command count matches Rust help rows ({documented_count!r} vs {help_row_count})", errors)
     check(sorted(documented_commands) == sorted(rust_commands), "COMMANDS.md table rows match Rust-owned commands", errors)
     check("clap built-in `help`" in commands_md, "COMMANDS.md explains the generated help pseudo-command", errors)

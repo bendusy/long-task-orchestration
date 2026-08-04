@@ -37,6 +37,8 @@ pub const COMMANDS: &[&str] = &[
     "release",
     "task",
     "run",
+    "parallel",
+    "pipeline",
     "collect-agent-run",
     "runs",
     "prune",
@@ -2673,14 +2675,14 @@ mod tests {
     #[test]
     fn clap_subcommand_count_matches_contract() {
         assert_command_count();
-        assert_eq!(COMMANDS.len(), 30);
+        assert_eq!(COMMANDS.len(), 32);
     }
 
     #[test]
     fn visible_commands_have_short_help() {
         for cmd in Args::command().get_subcommands() {
             let name = cmd.get_name();
-            if COMMANDS.contains(&name) {
+            if COMMANDS.contains(&name) && !cmd.is_hide_set() {
                 let about = cmd
                     .get_about()
                     .map(|text| text.to_string())

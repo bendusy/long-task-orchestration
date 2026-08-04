@@ -2,18 +2,25 @@
 
 Source of truth: `src/cli.rs` `COMMANDS` plus the clap argument definitions in `src/cli.rs`.
 
-Command count: 31.
+Command count: 33.
 
-This is the `lto-rs --help` top-level row count: 30 Rust-owned business
-commands plus clap built-in `help`. The table below lists only the
-Rust-owned business commands tracked by `src/cli.rs` `COMMANDS`.
+This is the documentation contract count: 32 Rust-owned business commands
+plus clap built-in `help`. The table below lists the Rust-owned business
+commands tracked by `src/cli.rs` `COMMANDS`; hidden rows are intentionally not
+visible in `lto-rs --help`.
 
-Compatibility note: `task-add`, `task-update`, `phase`, `parallel`, and
-`pipeline` remain runnable as hidden legacy top-level commands for one
-deprecation cycle. New scripts should use `task add`, `task update`,
-`task phase`, `run parallel`, and `run pipeline`. Their Rust ownership is
-tracked separately in `references/python-rust-ownership.json` because hidden
-aliases do not appear in the public help table below.
+`parallel` and `pipeline` are intentional hidden top-level commands: they
+remain directly runnable for internal callers, but do not appear in
+`lto --help`. New scripts should use the public `run parallel` and
+`run pipeline` forms. They are listed here so the docs gate covers the live
+command surface. `agent-turn-completed` is likewise hidden because it is an
+internal lifecycle signal, and remains documented below for the same reason.
+
+Compatibility note: `task-add`, `task-update`, and `phase` remain runnable as
+hidden legacy aliases for one deprecation cycle. New scripts should use
+`task add`, `task update`, and `task phase`. Their Rust ownership is tracked
+separately in `references/python-rust-ownership.json` because these aliases do
+not appear in the public help table below.
 
 | Command | Summary | Required | Optional |
 |---|---|---|---|
@@ -29,6 +36,8 @@ aliases do not appear in the public help table below.
 | `hook` | Run boundary gates. | `gate` | `--force`, `--reason` |
 | `self-test` | Assert the Rust CLI command contract. | None | None |
 | `run` | Run batch and staged job primitives. | Subcommand: `parallel` or `pipeline` | `run parallel --run-id --task-ids --phase --kind --command --timeout --concurrency --job-file`; `run pipeline --run-id --task-ids --phase --stages --kind --timeout --concurrency --continue-on-error --job-file` |
+| `parallel` | Run multiple task commands concurrently through the hidden legacy top-level entrypoint. It is intentionally omitted from `lto --help`; use `run parallel` for the public command. | None | `--run-id`, `--task-ids`, `--phase`, `--kind`, `--command`, `--timeout`, `--concurrency`, `--job-file` |
+| `pipeline` | Run staged task jobs through the hidden legacy top-level entrypoint. It is intentionally omitted from `lto --help`; use `run pipeline` for the public command. | None | `--run-id`, `--task-ids`, `--phase`, `--stages`, `--kind`, `--timeout`, `--concurrency`, `--continue-on-error`, `--job-file` |
 | `audit` | Prepare audit dispatch facts and auditor selection. | None | `--run-id`, `--auto-dispatch`, `--discover-risks`, `--allow-same-family`, `--prefer-runner` (repeatable; restricts/orders the cross-family auditor pool, e.g. keep slow `pi` off the closeout critical path) |
 | `next` | Print deterministic next-step facts and route suggestion. | None | `--run-id`, `--json` |
 | `autopilot` | Print supervised route facts and optionally auto-exec task commands through sandbox or tmux workers. | None | `--run-id`, `--supervised`, `--auto-exec`, `--autonomous`, `--timeout`, `--worker-runner`, `--target`, `--tmux-bin`, `--ready-timeout` |
