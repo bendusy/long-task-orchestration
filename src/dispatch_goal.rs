@@ -411,10 +411,13 @@ pub fn retain_latest_dispatch_window(repo: &Path, run_id: &str, reason: &str) {
         .rev()
         .find(|window| window.status == "active")
         .map(|window| window.window_id.clone());
-    if let Some(window_id) = window_id
-        && let Err(err) = retain_dispatch_window(&mut ctx, &window_id, reason)
-    {
-        eprintln!("warning: could not retain dispatch window {window_id}: {err}");
+    if let Some(window_id) = window_id {
+        match retain_dispatch_window(&mut ctx, &window_id, reason) {
+            Ok(()) => eprintln!("window {window_id} retained: {reason}"),
+            Err(err) => {
+                eprintln!("window {window_id} retained: {reason}; state update failed: {err}")
+            }
+        }
     }
 }
 

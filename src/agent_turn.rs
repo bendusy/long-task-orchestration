@@ -167,9 +167,82 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
             run_state.as_mut(),
         )
     {
-        eprintln!("window cleanup failed; window retained for troubleshooting: {err}");
+        let reason = err.to_string();
+        if let Some(window_id) = window_id.as_deref() {
+            let mut persisted_state = load_run_state(repo, &run_id);
+            let state_update = if persisted_state.is_some() {
+                retain_active_window_after_cleanup_error(
+                    repo,
+                    &run_id,
+                    &runner_name,
+                    window_id,
+                    &reason,
+                    persisted_state.as_mut(),
+                )
+            } else {
+                retain_active_window_after_cleanup_error(
+                    repo,
+                    &run_id,
+                    &runner_name,
+                    window_id,
+                    &reason,
+                    run_state.as_mut(),
+                )
+            };
+            if let Err(save_err) = state_update {
+                eprintln!("window {window_id} retained: {reason}; state update failed: {save_err}");
+            } else {
+                eprintln!("window {window_id} retained: {reason}");
+            }
+        } else {
+            eprintln!("window cleanup failed: {reason}");
+        }
     }
     Ok(())
+}
+
+fn retain_active_window_after_cleanup_error(
+    repo: &Path,
+    run_id: &str,
+    runner: &str,
+    window_id: &str,
+    reason: &str,
+    state: Option<&mut state::LtoState>,
+) -> anyhow::Result<()> {
+    let Some(state) = state else {
+        return Ok(());
+    };
+    let Some(index) = state.dispatch_windows.iter().rposition(|window| {
+        window.window_id == window_id && window.runner == runner && window.status == "active"
+    }) else {
+        return Ok(());
+    };
+    state.dispatch_windows[index].status = "retained".to_string();
+    state.dispatch_windows[index].finished_at = Some(crate::state::iso_now());
+    state.dispatch_windows[index].retention_reason = Some(reason.to_string());
+    save_run_state(repo, run_id, state)
+}
+
+fn window_record_status_message(state: &state::LtoState, window_id: &str, runner: &str) -> String {
+    let Some(window) = state
+        .dispatch_windows
+        .iter()
+        .rev()
+        .find(|window| window.window_id == window_id && window.runner == runner)
+    else {
+        return format!("window {window_id} retained: no dispatch record for runner {runner}");
+    };
+    let reason = window
+        .retention_reason
+        .as_deref()
+        .unwrap_or(match window.status.as_str() {
+            "cleaned" => "cleanup completed",
+            _ => "reason not recorded",
+        });
+    format!(
+        "window {window_id} already finalized: status={} reason={reason}",
+        window.status
+    )
 }
 
 fn finish_dispatch_window(
@@ -189,7 +262,7 @@ fn finish_dispatch_window(
     let Some(index) = state.dispatch_windows.iter().rposition(|window| {
         window.window_id == window_id && window.runner == runner && window.status == "active"
     }) else {
-        eprintln!("window {window_id} retained: no active dispatch record for runner {runner}");
+        eprintln!("{}", window_record_status_message(state, window_id, runner));
         return Ok(());
     };
 
@@ -207,7 +280,7 @@ fn finish_dispatch_window(
         state.dispatch_windows[index].finished_at = Some(crate::state::iso_now());
         state.dispatch_windows[index].retention_reason = Some(reason.clone());
         save_run_state(repo, run_id, state)?;
-        eprintln!("window {window_id} retained for troubleshooting: {reason}");
+        eprintln!("window {window_id} retained: {reason}");
         return Ok(());
     }
 
@@ -231,7 +304,7 @@ fn finish_dispatch_window(
         state.dispatch_windows[index].retention_reason =
             Some(format!("tmux cleanup scheduling failed: {stderr}"));
         save_run_state(repo, run_id, state)?;
-        anyhow::bail!("tmux cleanup scheduling for {window_id} failed: {stderr}");
+        anyhow::bail!("tmux cleanup scheduling failed: {stderr}");
     }
 
     state.dispatch_windows[index].status = "cleaned".to_string();
@@ -1027,6 +1100,91 @@ mod tests {
         assert_eq!(
             persisted.dispatch_windows[0].retention_reason.as_deref(),
             Some("runner completion rc=7")
+        );
+    }
+
+    #[test]
+    fn duplicate_self_report_distinguishes_finalized_window_without_rewriting_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (tmux_bin, _log) = fake_tmux(tmp.path());
+        state_with_window(tmp.path(), &tmux_bin, true);
+
+        let options = |rc| AgentTurnOptions {
+            run_id: Some("r1".to_string()),
+            runner: "codex".to_string(),
+            payload_file: None,
+            cwd: None,
+            session_id: None,
+            summary: None,
+            rc: Some(rc),
+            window_id: Some("@42".to_string()),
+            source: "goal-self-report".to_string(),
+            bell: false,
+            notify_cmd: None,
+        };
+        cmd_agent_turn_completed(tmp.path(), options(1)).unwrap();
+        let state_path = tmp.path().join(".lto").join("r1").join("state.json");
+        let before_duplicate = fs::read_to_string(&state_path).unwrap();
+        let persisted = load_run_state(tmp.path(), "r1").unwrap();
+        assert_eq!(
+            window_record_status_message(&persisted, "@42", "codex"),
+            "window @42 already finalized: status=retained reason=runner completion rc=1"
+        );
+
+        cmd_agent_turn_completed(tmp.path(), options(0)).unwrap();
+        assert_eq!(fs::read_to_string(state_path).unwrap(), before_duplicate);
+    }
+
+    #[test]
+    fn missing_window_record_keeps_no_dispatch_record_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = LtoState::default();
+        finish_dispatch_window(
+            tmp.path(),
+            "r1",
+            "codex",
+            Some("@42"),
+            Some(0),
+            Some(&mut state),
+        )
+        .unwrap();
+        assert_eq!(
+            window_record_status_message(&state, "@42", "codex"),
+            "window @42 retained: no dispatch record for runner codex"
+        );
+    }
+
+    #[test]
+    fn cleanup_error_retain_state_does_not_leave_active_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing_tmux = tmp.path().join("missing-tmux");
+        state_with_window(tmp.path(), &missing_tmux, true);
+
+        cmd_agent_turn_completed(
+            tmp.path(),
+            AgentTurnOptions {
+                run_id: Some("r1".to_string()),
+                runner: "codex".to_string(),
+                payload_file: None,
+                cwd: None,
+                session_id: None,
+                summary: None,
+                rc: Some(0),
+                window_id: Some("@42".to_string()),
+                source: "goal-self-report".to_string(),
+                bell: false,
+                notify_cmd: None,
+            },
+        )
+        .unwrap();
+
+        let persisted = load_run_state(tmp.path(), "r1").unwrap();
+        assert_eq!(persisted.dispatch_windows[0].status, "retained");
+        assert!(
+            persisted.dispatch_windows[0]
+                .retention_reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("schedule "))
         );
     }
 
