@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::merge_review::MergeReview;
 
-pub const KNOWN_RUNNERS: &[&str] = &["codex", "pi", "agy", "gemini", "claude", "tmux"];
+pub const KNOWN_RUNNERS: &[&str] = &["codex", "pi", "agy", "aix", "gemini", "claude", "tmux"];
 pub const CODEX_SANDBOXES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 
 #[derive(Debug, Error, PartialEq, Eq)]

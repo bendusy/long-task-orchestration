@@ -632,7 +632,7 @@ pub struct RunnerCommand {
     #[arg(
         long,
         default_value = "codex",
-        value_parser = ["codex", "pi", "agy", "gemini", "claude", "tmux"]
+        value_parser = ["codex", "pi", "agy", "aix", "gemini", "claude", "tmux"]
     )]
     runner: String,
     /// Explicitly allow a write-capable non-tmux runner. Prefer dispatch-goal
@@ -679,7 +679,7 @@ pub struct RunnerCommand {
 pub struct DispatchGoalCommand {
     #[arg(long)]
     run_id: Option<String>,
-    #[arg(long, value_parser = ["codex", "pi", "agy"])]
+    #[arg(long, value_parser = ["codex", "pi", "agy", "aix"])]
     runner: String,
     #[arg(long)]
     goal: PathBuf,

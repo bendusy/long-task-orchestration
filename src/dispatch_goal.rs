@@ -174,6 +174,16 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
             // process-exit wrappers as a secondary signal when the REPL actually exits.
             "codex" => install_codex_hook(repo).unwrap_or_else(degraded),
             "agy" => uninstall_agy_hook(repo).unwrap_or_else(degraded),
+            // aix inverts the usual arrangement: process-exit IS the primary
+            // signal (its rc is 0 only on StopReason::TaskDone) and there is no
+            // self-report at all, so saying otherwise here would mislead anyone
+            // debugging a missing completion.
+            "aix" => HookStatus {
+                status: "skipped".to_string(),
+                detail: "completion is process-exit (rc); aix has no self-report session"
+                    .to_string(),
+                script_path: None,
+            },
             _ => HookStatus {
                 status: "skipped".to_string(),
                 detail: "primary completion is goal-self-report; process-exit is a side-channel"
@@ -710,6 +720,61 @@ fn runner_plan(
                 launch_includes_prompt: false,
             }
         }
+        "aix" => {
+            // aix is NOT an interactive TUI like codex/pi/agy — it is a
+            // one-shot command that takes the task as argv and exits when the
+            // run reaches a terminal state. That difference drives every field
+            // below.
+            //
+            // The prompt goes INTO the launch line (launch_includes_prompt),
+            // so there is no "wait for an idle input box, then paste" step —
+            // aix starts working the moment the line is submitted. Quoting is
+            // safe here despite pi's lesson: pi lost quotes because its slash
+            // template re-split and re-joined $ARGUMENTS (an extra parse layer
+            // above the shell). aix does no template expansion at all, so the
+            // prompt survives one shell parse verbatim — verified 2026-08-04:
+            // the embedded `--repo '/tmp/x y'` reached argv with quotes intact.
+            //
+            // Completion is process-exit, not goal-self-report. aix has no
+            // session a model could call `lto agent-turn-completed` from, but
+            // its exit code IS trustworthy: rc=0 only when the run ends in
+            // StopReason::TaskDone (the model called the task_done tool).
+            // Anything else — self-report without task_done, max turns,
+            // provider failure — exits non-zero. That is exactly the signal
+            // process_exit_wrapper forwards.
+            GoalRunnerPlan {
+                launch: Some(process_exit_wrapper(
+                    &format!(
+                        "LTO_RUN_ID={} aix -k {} {}",
+                        shell_single_quote(run_id),
+                        shell_single_quote(&format!("lto:{run_id}")),
+                        shell_single_quote(&prompt),
+                    ),
+                    "aix",
+                    run_id,
+                )),
+                // No `/goal` prefix: aix has no goal-runtime (same call as
+                // pi/agy). goal_prompt already leaves it bare for non-codex.
+                prompt,
+                // Nothing to wait for: the launch line runs aix directly rather
+                // than dropping into a REPL, so there is no idle marker. An
+                // empty pattern list makes wait_for_dispatch_ready return as
+                // soon as the shell has taken the line.
+                ready_patterns: Vec::new(),
+                // aix prints a `── aix ──` banner then `任务：<task>` before the
+                // first model call, so the banner proves the process actually
+                // started (as opposed to the shell rejecting the line).
+                confirm_patterns: vec!["── aix ──".to_string()],
+                // No TUI input box to probe — probing would type a stray line
+                // into the shell after aix already owns the terminal.
+                needs_probe: false,
+                completion_event: Some("agent.dispatch.completed".to_string()),
+                completion_mode: "process-exit".to_string(),
+                // The task is already in the launch line; sending it again
+                // would leave a stray command in the shell after aix exits.
+                launch_includes_prompt: true,
+            }
+        }
         _ => unreachable!("runner validated"),
     }
 }
@@ -798,7 +863,15 @@ fn materialize_goal_with_completion_protocol(
 ) -> anyhow::Result<PathBuf> {
     let content = fs::read_to_string(goal_path)
         .with_context(|| format!("read goal file {}", goal_path.display()))?;
-    let needs_protocol = !content.contains("agent-turn-completed");
+    // aix reports completion by EXITING, not by running a command: its plan
+    // uses completion_mode "process-exit" and process_exit_wrapper forwards the
+    // real rc. Injecting the self-report protocol anyway makes the model run
+    // `agent-turn-completed` from inside the task, so one dispatch emits TWO
+    // agent.dispatch.completed events — and the self-reported one carries a
+    // bogus `window_id: "pending"` because no window existed when the prompt
+    // was built. Verified 2026-08-04 on a live dispatch before this guard.
+    let self_reports = runner != "aix";
+    let needs_protocol = self_reports && !content.contains("agent-turn-completed");
     let constraints = constraints.filter(|_| !content.contains(RUNNER_CONSTRAINTS_MARKER));
     if !needs_protocol && constraints.is_none() {
         return Ok(goal_path.to_path_buf());
@@ -838,10 +911,19 @@ fn goal_prompt(goal: &str, repo: &str, run_id: &str, runner: &str, window_id: &s
         "lto --repo {} agent-turn-completed --run-id {run_id} --runner {runner} --source goal-self-report --rc 0 --window-id {window_id} --bell",
         shell_single_quote(repo),
     );
-    let prompt = format!(
-        "Read the file {goal} and execute it. Follow only the instructions in that goal file. \
+    // aix signals completion through its exit code (see
+    // materialize_goal_with_completion_protocol for why a self-report would
+    // double-report), so it gets the bare task without the report command.
+    let prompt = if runner == "aix" {
+        format!(
+            "Read the file {goal} and execute it. Follow only the instructions in that goal file."
+        )
+    } else {
+        format!(
+            "Read the file {goal} and execute it. Follow only the instructions in that goal file. \
 全部完成判据满足后运行: {report} （若被阻塞改用 --rc 1）"
-    );
+        )
+    };
     // Per-runner goal invocation (2026-08-04 live-tested; details at each
     // runner_plan arm): codex `/goal` enters its goal-runtime and preserves the
     // objective text verbatim (single quotes included). pi and agy stay bare:
@@ -1195,8 +1277,8 @@ fn default_skip_prompts() -> Vec<SkipPrompt> {
 
 fn validate_runner(runner: &str) -> anyhow::Result<()> {
     match runner {
-        "codex" | "pi" | "agy" => Ok(()),
-        _ => anyhow::bail!("dispatch-goal runner must be one of codex, pi, agy"),
+        "codex" | "pi" | "agy" | "aix" => Ok(()),
+        _ => anyhow::bail!("dispatch-goal runner must be one of codex, pi, agy, aix"),
     }
 }
 
@@ -1639,6 +1721,33 @@ mod tests {
             Some("agent.dispatch.completed")
         );
         assert_eq!(pi_plan.completion_mode, "goal-self-report");
+
+        // aix is a one-shot command, not a TUI. Each assertion below guards a
+        // failure mode that would look like a working dispatch until the run
+        // silently produced nothing.
+        let aix_plan = runner_plan("aix", goal, Path::new("/repo"), "r1", "@4");
+        let aix_launch = aix_plan.launch.as_deref().unwrap();
+        // The task must ride in the launch line; if it were sent separately
+        // (like codex/pi) it would land in the shell AFTER aix already exited.
+        assert!(aix_plan.launch_includes_prompt);
+        assert!(aix_launch.contains("aix -k "));
+        assert!(aix_launch.contains("Read the file /tmp/goal.md"));
+        // Completion comes from the exit code, which aix only makes 0 when the
+        // model called task_done. No session exists for a self-report, so the
+        // prompt must NOT carry the report command — injecting it made one
+        // dispatch emit two agent.dispatch.completed events (live-verified
+        // 2026-08-04, the self-reported one had a bogus window_id "pending").
+        assert!(!aix_plan.prompt.contains("agent-turn-completed"));
+        assert!(!aix_plan.prompt.contains("goal-self-report"));
+        assert_eq!(aix_plan.completion_mode, "process-exit");
+        assert!(aix_launch.contains("aix-process-exit"));
+        // No REPL means nothing to wait for and nothing to probe; a probe
+        // would type a stray line into the shell aix is running in.
+        assert!(aix_plan.ready_patterns.is_empty());
+        assert!(!aix_plan.needs_probe);
+        // aix has no goal-runtime, so it stays bare like pi/agy.
+        assert!(!aix_plan.prompt.starts_with("/goal"));
+
         // agy must use the interactive entrypoint (`agy -i`), not `--print`
         // which only prints a plan without executing (bug #5/#6).
         assert!(
