@@ -24,7 +24,13 @@ if not isinstance(cwd, str) or not cwd:
 path = pathlib.Path(cwd).expanduser()
 if not path.is_absolute():
     path = pathlib.Path.cwd() / path
+# Stop before $HOME: a stray ~/.lto (created by an earlier misdetection) would
+# otherwise swallow every session started outside a project and send its events
+# to a run directory whose state.json lives in the real repo.
+home = pathlib.Path.home()
 for candidate in [path, *path.parents]:
+    if candidate == home or candidate == candidate.parent:
+        break
     if (candidate / ".lto").is_dir():
         print(candidate)
         break

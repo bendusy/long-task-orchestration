@@ -65,6 +65,11 @@ pub fn eval_run(
     options: EvalRunOptions<'_>,
 ) -> anyhow::Result<Value> {
     let repo = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    crate::state::validate_run_id(run_id)?;
+    let state_path = crate::state::state_path(&repo, run_id);
+    if !state_path.is_file() {
+        anyhow::bail!("no state.json for {run_id}: {}", state_path.display());
+    }
     let plugin_dir = plugin_dir.canonicalize()?;
     let validation = plugin::validate_plugin(&plugin_dir)?;
     if !validation.ok {
@@ -273,14 +278,14 @@ fn run_case(
     crate::event_emit::emit_runner_started_jobs(repo, run_id, None, None, "plugin.eval_run", &jobs);
     let results = match scheduler.submit_blocking(jobs.clone()) {
         Ok(results) => {
-            crate::event_emit::emit_runner_results(
+            crate::event_emit::emit_runner_results_checked(
                 repo,
                 run_id,
                 None,
                 None,
                 "plugin.eval_run",
                 &results,
-            );
+            )?;
             results
         }
         Err(err) => {
@@ -510,14 +515,14 @@ fn run_judge(
     let results = scheduler.submit_blocking(jobs.clone());
     let result = match results {
         Ok(mut results) => {
-            crate::event_emit::emit_runner_results(
+            crate::event_emit::emit_runner_results_checked(
                 repo,
                 run_id,
                 None,
                 None,
                 "plugin.eval_run.judge",
                 &results,
-            );
+            )?;
             results.pop()
         }
         Err(err) => {
@@ -1057,6 +1062,8 @@ mod tests {
     fn eval_run_pack_not_found() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
+        fs::create_dir_all(repo.join(".lto").join("r")).unwrap();
+        fs::write(repo.join(".lto").join("r").join("state.json"), "{}\n").unwrap();
         let plugin = mini_plugin(&repo, false);
         let report = eval_run(
             &repo,
@@ -1076,6 +1083,28 @@ mod tests {
                 .unwrap()
                 .contains("eval pack not found")
         );
+    }
+
+    #[test]
+    fn eval_run_rejects_missing_state_without_creating_plugin_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let plugin = mini_plugin(&repo, false);
+        let run_id = "missing-state";
+
+        let err = eval_run(
+            &repo,
+            run_id,
+            &plugin,
+            EvalRunOptions {
+                max_concurrency: 1,
+                ..EvalRunOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("no state.json for missing-state"));
+        assert!(!repo.join(".lto").join(run_id).join("plugin-eval").exists());
     }
 
     fn mini_plugin(repo: &Path, with_schema: bool) -> PathBuf {

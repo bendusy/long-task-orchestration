@@ -46,17 +46,6 @@ pub fn emit_contract_updated(
     Ok(())
 }
 
-pub fn emit_runner_results(
-    repo: &Path,
-    run_id: &str,
-    phase: Option<&str>,
-    task_id: Option<&str>,
-    context: &str,
-    results: &[AgentResult],
-) {
-    let _ = emit_runner_results_inner(repo, run_id, phase, task_id, context, results);
-}
-
 pub fn emit_runner_results_checked(
     repo: &Path,
     run_id: &str,
@@ -626,9 +615,16 @@ mod tests {
     use crate::agent_job::TaskSize;
     use std::collections::BTreeMap;
 
+    fn create_run(repo: &Path, run_id: &str) {
+        let state_path = crate::state::state_path(repo, run_id);
+        std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        std::fs::write(state_path, b"{}").unwrap();
+    }
+
     #[test]
     fn runner_result_event_omits_reply_text() {
         let tmp = tempfile::tempdir().unwrap();
+        create_run(tmp.path(), "r1");
         let result = AgentResult {
             job_id: "j1".to_string(),
             runner: "codex".to_string(),
@@ -646,14 +642,15 @@ mod tests {
             size: TaskSize::Small,
             merge_review: None,
         };
-        emit_runner_results(
+        emit_runner_results_checked(
             tmp.path(),
             "r1",
             Some("implementation"),
             None,
             "test",
             &[result],
-        );
+        )
+        .unwrap();
         let blob = std::fs::read_to_string(crate::events::events_path(tmp.path(), "r1")).unwrap();
         assert!(blob.contains("runner.finished"));
         assert!(!blob.contains("SECRET_REPLY_SHOULD_NOT_APPEAR"));
@@ -662,6 +659,7 @@ mod tests {
     #[test]
     fn audit_finding_event_keeps_only_confidence_level_presence_and_hashes() {
         let tmp = tempfile::tempdir().unwrap();
+        create_run(tmp.path(), "r1");
         emit_audit_findings(
             tmp.path(),
             "r1",
@@ -706,6 +704,7 @@ mod tests {
     #[test]
     fn audit_finding_event_normalizes_or_rejects_raw_confidence_literals() {
         let tmp = tempfile::tempdir().unwrap();
+        create_run(tmp.path(), "r1");
         emit_audit_findings(
             tmp.path(),
             "r1",
@@ -741,6 +740,7 @@ mod tests {
     #[test]
     fn contract_updated_event_contains_only_changed_fields_and_counts() {
         let tmp = tempfile::tempdir().unwrap();
+        create_run(tmp.path(), "r1");
         emit_contract_updated(
             tmp.path(),
             "r1",

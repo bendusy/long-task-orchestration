@@ -85,6 +85,10 @@ pub fn emit(repo: &Path, run_id: &str, record: EventRecord) -> anyhow::Result<Va
         anyhow::bail!("contains_raw_output events are forbidden; store output as artifact");
     }
 
+    let state_path = state::state_path(repo, run_id);
+    if !state_path.is_file() {
+        anyhow::bail!("no state.json for {run_id}: {}", state_path.display());
+    }
     let path = events_path(repo, run_id);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -652,10 +656,74 @@ mod tests {
 
     const LEGACY_AUDIT_EVENT: &str = "audit.converged"; // legacy test fixture
 
+    fn create_run(repo: &Path, run_id: &str) {
+        let state_path = state::state_path(repo, run_id);
+        fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        fs::write(state_path, b"{}").unwrap();
+    }
+
+    #[test]
+    fn emit_rejects_missing_state_without_creating_run_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "missing-state";
+        let err = emit(
+            tmp.path(),
+            run_id,
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("no state.json for missing-state"));
+        assert!(!tmp.path().join(".lto").join(run_id).exists());
+    }
+
+    #[test]
+    fn emit_writes_and_reads_event_for_existing_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_run(tmp.path(), "r1");
+
+        emit(
+            tmp.path(),
+            "r1",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                summary: "recorded".to_string(),
+                ..EventRecord::default()
+            },
+        )
+        .unwrap();
+
+        let events = read(tmp.path(), "r1").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["summary"], "recorded");
+    }
+
+    #[test]
+    fn safe_emit_returns_none_for_missing_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let emitted = safe_emit(
+            tmp.path(),
+            "missing-state",
+            EventRecord {
+                event_type: "artifact.registered".to_string(),
+                actor_kind: "lto".to_string(),
+                ..EventRecord::default()
+            },
+        );
+
+        assert!(emitted.is_none());
+    }
+
     #[test]
     fn writes_redacted_append_only_events_and_reads_unknown_types() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
+        create_run(repo, "r1");
         let event = emit(
             repo,
             "r1",
@@ -685,6 +753,7 @@ mod tests {
     #[test]
     fn accepts_current_audit_types_but_rejects_legacy_and_typos_on_write() {
         let tmp = tempfile::tempdir().unwrap();
+        create_run(tmp.path(), "r1");
         for event_type in ["audit.round.recorded", "audit.ledger.evaluated"] {
             emit(
                 tmp.path(),
@@ -735,6 +804,7 @@ mod tests {
     fn concurrent_appends_get_unique_event_ids() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().to_path_buf();
+        create_run(&repo, "r1");
         let handles = (0..32)
             .map(|idx| {
                 let repo = repo.clone();
@@ -771,6 +841,7 @@ mod tests {
         // (fail-closed), never return Ok(None) to take the best-effort path. The
         // lock-less path previously risked interleaved/corrupt JSONL lines.
         let tmp = tempfile::tempdir().unwrap();
+        create_run(tmp.path(), "r1");
         let path = events_path(tmp.path(), "r1");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         // Hold the lock by creating the lock file ourselves.
@@ -802,6 +873,7 @@ mod tests {
     #[test]
     fn stale_json_lock_with_dead_pid_is_recovered() {
         let tmp = tempfile::tempdir().unwrap();
+        create_run(tmp.path(), "r1");
         let path = events_path(tmp.path(), "r1");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let lock_path = path.parent().unwrap().join(".events.lock");
@@ -1143,6 +1215,7 @@ mod tests {
         // event must carry event_id N+1.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
+        create_run(repo, "r1");
         let ev_path = events_path(repo, "r1");
         let counter_path = events_counter_path(&ev_path);
 
@@ -1180,6 +1253,7 @@ mod tests {
         // HARD_STOP_AT must still fire when the counter reaches 50k.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
+        create_run(repo, "r1");
         let ev_path = events_path(repo, "r1");
         fs::create_dir_all(ev_path.parent().unwrap()).unwrap();
         // Seed the counter at HARD_STOP_AT.
@@ -1225,6 +1299,7 @@ mod tests {
         // back to counting events.jsonl lines and persist the counter.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
+        create_run(repo, "r1");
         let ev_path = events_path(repo, "r1");
         fs::create_dir_all(ev_path.parent().unwrap()).unwrap();
         fs::write(
@@ -1271,6 +1346,7 @@ mod tests {
         // unique, gap-free event_ids via the counter file (not full reads).
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().to_path_buf();
+        create_run(&repo, "r1");
         let handles = (0..64)
             .map(|idx| {
                 let repo = repo.clone();
@@ -1309,6 +1385,7 @@ mod tests {
         // via read() dedup.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
+        create_run(repo, "r1");
         let ev_path = events_path(repo, "r1");
         fs::create_dir_all(ev_path.parent().unwrap()).unwrap();
 
@@ -1392,6 +1469,7 @@ mod tests {
         // lock, even when no counter file exists yet.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
+        create_run(repo, "r1");
         let ev_path = events_path(repo, "r1");
         fs::create_dir_all(ev_path.parent().unwrap()).unwrap();
 
@@ -1426,6 +1504,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         let run_id = "r1";
+        create_run(repo, run_id);
 
         emit(
             repo,
@@ -1458,6 +1537,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         let run_id = "r1";
+        create_run(repo, run_id);
 
         emit(
             repo,
@@ -1502,6 +1582,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         let run_id = "r1";
+        create_run(repo, run_id);
 
         emit(
             repo,
@@ -1571,6 +1652,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().to_path_buf();
         let run_id = "r1";
+        create_run(&repo, run_id);
         // Seed the run dir so the endpoints file has a home.
         emit(
             &repo,

@@ -45,6 +45,17 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         anyhow::bail!("goal-self-report requires --run-id");
     }
     let Some(run_id) = route_run(repo, options.run_id.as_deref(), cwd.as_deref())? else {
+        // A self-report is a dispatched agent's only completion signal, so a
+        // miss must be loud: swallowing it leaves the run waiting forever for a
+        // report the agent believes it already filed. Hooks are best-effort
+        // side-channels and stay quiet.
+        if options.source == "goal-self-report" {
+            anyhow::bail!(
+                "goal-self-report found no run {} under {}",
+                options.run_id.as_deref().unwrap_or("<none>"),
+                repo.display()
+            );
+        }
         println!("agent.turn.completed ignored: no matching LTO run");
         return Ok(());
     };
@@ -450,7 +461,15 @@ fn route_run(
     cwd: Option<&Path>,
 ) -> anyhow::Result<Option<String>> {
     if let Some(run_id) = explicit {
-        return Ok(Some(state::validate_run_id(run_id)?.to_string()));
+        let run_id = state::validate_run_id(run_id)?;
+        // An explicit --run-id still has to name a run that exists under this
+        // repo. Without this check a caller pointed at the wrong repo root
+        // (e.g. a stop hook that walked up into $HOME/.lto) would create an
+        // orphan run directory whose events can never rejoin their state.
+        if !repo.join(".lto").join(run_id).join("state.json").exists() {
+            return Ok(None);
+        }
+        return Ok(Some(run_id.to_string()));
     }
     let Some(cwd) = cwd else {
         return Ok(None);
@@ -903,6 +922,59 @@ mod tests {
         .unwrap_err();
         assert!(
             err.to_string().contains("requires --run-id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn explicit_run_id_without_state_writes_no_orphan_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "20260804-012904-scope-codex-pi-goal-project-364a7329";
+        cmd_agent_turn_completed(
+            tmp.path(),
+            AgentTurnOptions {
+                run_id: Some(run_id.to_string()),
+                runner: "codex".to_string(),
+                payload_file: None,
+                cwd: None,
+                session_id: None,
+                summary: None,
+                rc: Some(0),
+                window_id: None,
+                source: "codex-stop-hook".to_string(),
+                bell: false,
+                notify_cmd: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            !tmp.path().join(".lto").join(run_id).exists(),
+            "a run id with no state.json must not create a run directory"
+        );
+    }
+
+    #[test]
+    fn goal_self_report_at_a_missing_run_fails_loudly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = cmd_agent_turn_completed(
+            tmp.path(),
+            AgentTurnOptions {
+                run_id: Some("20260804-012904-scope-codex-pi-goal-project-364a7329".to_string()),
+                runner: "codex".to_string(),
+                payload_file: None,
+                cwd: None,
+                session_id: None,
+                summary: None,
+                rc: Some(0),
+                window_id: None,
+                source: "goal-self-report".to_string(),
+                bell: false,
+                notify_cmd: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("found no run"),
             "unexpected error: {err}"
         );
     }

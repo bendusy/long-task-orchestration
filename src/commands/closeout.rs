@@ -711,8 +711,10 @@ mod tests {
             risk_points: json!([]),
             ..LtoState::default()
         };
+        let state_path = run_dir.join("state.json");
+        crate::state::save_state(&state_path, &state).unwrap();
         util::RunContext {
-            state_path: run_dir.join("state.json"),
+            state_path,
             run_id,
             run_dir,
             state,

@@ -522,6 +522,9 @@ mod tests {
     }
 
     fn emit_audit_result(repo: &Path, run_id: &str, runner: &str, status: &str, context: &str) {
+        let state_path = crate::state::state_path(repo, run_id);
+        fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        fs::write(state_path, b"{}").unwrap();
         crate::events::emit(
             repo,
             run_id,

@@ -1456,14 +1456,14 @@ pub fn cmd_runner(repo: &Path, options: RunnerOptions) -> anyhow::Result<()> {
         if let Some(ctx) = &mut run_ctx {
             emit_and_record_runner_results(repo, ctx, None, "runner.prompt", &results)?;
         } else {
-            crate::event_emit::emit_runner_results(
+            crate::event_emit::emit_runner_results_checked(
                 repo,
                 &run_id,
                 None,
                 None,
                 "runner.prompt",
                 &results,
-            );
+            )?;
             let _ = crate::telemetry::save(repo, &run_id);
         }
         println!("{}", serde_json::to_string_pretty(&results)?);
@@ -2169,7 +2169,9 @@ fn run_job_file(
         if let Ok(mut ctx) = util::load_run(repo, Some(&run_id)) {
             emit_and_record_runner_results(repo, &mut ctx, None, context, &results)?;
         } else {
-            crate::event_emit::emit_runner_results(repo, &run_id, None, None, context, &results);
+            crate::event_emit::emit_runner_results_checked(
+                repo, &run_id, None, None, context, &results,
+            )?;
             let _ = crate::telemetry::save(repo, &run_id);
         }
     }
