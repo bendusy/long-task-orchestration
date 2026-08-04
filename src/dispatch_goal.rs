@@ -602,6 +602,13 @@ fn runner_plan(
                 shell_single_quote(run_id),
                 shell_single_quote("mcp_servers={}")
             )),
+            // Prompt carries a `/goal` prefix (applied in goal_prompt): it
+            // engages codex's built-in goal-runtime (thread_goals + continuation
+            // in ~/.codex/goals_1.sqlite), which pulls the thread back to the
+            // objective until it is marked complete. A bare text prompt is a
+            // single turn with no such pull. Verified 2026-08-04: tmux
+            // load-buffer/paste-buffer + Enter triggers the command
+            // ("Goal active Objective: …", status bar "Pursuing goal").
             prompt,
             // Idle TUI after optional update prompt is dismissed (2026-07-15 probe).
             ready_patterns: vec![
@@ -609,8 +616,12 @@ fn runner_plan(
                 "model:".to_string(),
                 "codex>".to_string(),
             ],
-            // Text-mode prompt (not /goal): confirm on the agent starting work.
-            confirm_patterns: vec!["Working".to_string(), "Read the file".to_string()],
+            // "Goal active" echoes once goal-runtime accepts the objective.
+            confirm_patterns: vec![
+                "Goal active".to_string(),
+                "Working".to_string(),
+                "Read the file".to_string(),
+            ],
             needs_probe: true,
             completion_event: Some("agent.dispatch.completed".to_string()),
             completion_mode: "goal-self-report".to_string(),
@@ -628,6 +639,13 @@ fn runner_plan(
             );
             GoalRunnerPlan {
                 launch: Some(launch),
+                // Deliberately NO `/goal` prefix for pi (goal_prompt leaves it
+                // bare). pi has no goal runtime, and its prompt-template
+                // expansion re-joins $ARGUMENTS after shell-like splitting,
+                // which STRIPS single quotes (verified 2026-08-04:
+                // "--repo '/tmp/x y'" came back as "--repo /tmp/x y") — that
+                // would corrupt the quoted self-report command in the prompt.
+                // A template-free plain prompt keeps the text verbatim.
                 prompt,
                 // Idle status line is model-agnostic: "0.0%/… (auto)" + "(model) …" (2026-07-15:
                 // default model is grok, not deepseek — hardcoding model names flaked).
@@ -669,6 +687,14 @@ fn runner_plan(
                     "agy",
                     run_id,
                 )),
+                // Deliberately NO `/goal` prefix for agy (goal_prompt leaves it
+                // bare). A custom command exists (~/.gemini/commands/goal.toml),
+                // but agy's TUI paste-expansion and — critically — its
+                // unknown-command failure mode are UNVERIFIED (2026-08-04:
+                // personal quota exhausted mid-test). If agy rejects an unknown
+                // /name instead of submitting it verbatim, the dispatch prompt
+                // would be silently lost. Re-test both before adding agy to the
+                // `/goal` arm in goal_prompt.
                 prompt,
                 // Readiness must key on a marker that appears ONLY once agy's TUI
                 // input box is live — NOT "agy", which the launch command echoes
@@ -816,6 +842,16 @@ fn goal_prompt(goal: &str, repo: &str, run_id: &str, runner: &str, window_id: &s
         "Read the file {goal} and execute it. Follow only the instructions in that goal file. \
 全部完成判据满足后运行: {report} （若被阻塞改用 --rc 1）"
     );
+    // Per-runner goal invocation (2026-08-04 live-tested; details at each
+    // runner_plan arm): codex `/goal` enters its goal-runtime and preserves the
+    // objective text verbatim (single quotes included). pi and agy stay bare:
+    // pi's template expansion STRIPS quotes from $ARGUMENTS (corrupting the
+    // self-report `--repo '<path>'`), and agy's unknown-command failure mode is
+    // unverified.
+    let prompt = match runner {
+        "codex" => format!("/goal {prompt}"),
+        _ => prompt,
+    };
     debug_assert!(
         prompt.chars().count() <= GOAL_PROMPT_MAX_CHARS,
         "goal_prompt must stay ≤{GOAL_PROMPT_MAX_CHARS} chars, got {}",
@@ -1530,8 +1566,8 @@ mod tests {
     fn runner_plan_uses_required_entrypoints() {
         let goal = Path::new("/tmp/goal.md");
         let codex = runner_plan("codex", goal, Path::new("/repo"), "r1", "@9");
-        // codex no longer uses /goal skill; same text-mode prompt as pi/agy.
-        assert!(codex.prompt.starts_with("Read the file /tmp/goal.md"));
+        // codex `/goal` enters its built-in goal-runtime (2026-08-04 live test).
+        assert!(codex.prompt.starts_with("/goal Read the file /tmp/goal.md"));
         assert!(codex.prompt.contains("goal-self-report"));
         assert!(codex.prompt.contains("--run-id r1"));
         assert!(codex.prompt.contains("--runner codex"));
@@ -1583,7 +1619,10 @@ mod tests {
                 .contains("--print")
         );
         let pi_plan = runner_plan("pi", goal, Path::new("/repo"), "r1", "@2");
+        // pi stays bare-text: its template expansion strips single quotes from
+        // $ARGUMENTS, which would corrupt the quoted self-report command.
         assert!(pi_plan.prompt.starts_with("Read the file "));
+        assert!(!pi_plan.prompt.starts_with("/goal"));
         assert!(pi_plan.prompt.contains("goal-self-report"));
         assert!(pi_plan.prompt.contains("--window-id @2"));
         assert!(pi_plan.prompt.chars().count() <= GOAL_PROMPT_MAX_CHARS);
@@ -1661,6 +1700,9 @@ mod tests {
         // The real prompt still exists (sent later), and it's the short self-report prompt.
         assert!(agy.prompt.contains("Read the file"));
         assert!(agy.prompt.contains("--window-id @4"));
+        // agy stays bare-text until its unknown-command failure mode is
+        // verified — a rejected /name would silently lose the prompt.
+        assert!(!agy.prompt.starts_with("/goal"));
     }
 
     #[test]
