@@ -83,7 +83,21 @@ pub fn cmd_agent_turn_completed(repo: &Path, options: AgentTurnOptions) -> anyho
         None
     };
     let process_exit = options.source.ends_with("-process-exit");
-    let dispatch_completed = goal_completion_proof.is_some() || process_exit;
+    // A dispatch completion releases `lto dispatch-and-wait`, so it may only
+    // land on a run the caller named. The codex Stop hook is installed globally
+    // in ~/.codex, so a codex the host started by hand -- with no LTO_RUN_ID --
+    // fires it too; without this guard route_run would pick an open run by cwd
+    // and hand it a completion it never dispatched. Downgrade to a turn event:
+    // the observation is still true, only the completion claim is not.
+    let routed_by_cwd = options.run_id.is_none();
+    let dispatch_completed = (goal_completion_proof.is_some() || process_exit) && !routed_by_cwd;
+    if routed_by_cwd && (goal_completion_proof.is_some() || process_exit) {
+        eprintln!(
+            "warning: {} carried a completion signal without --run-id; recording it as a turn on \
+run {run_id} instead of a dispatch completion. Set LTO_RUN_ID so the hook can name its run.",
+            options.source
+        );
+    }
     let event_type = if dispatch_completed {
         "agent.dispatch.completed"
     } else if options.source.ends_with("-session-end-hook") {
@@ -727,6 +741,54 @@ mod tests {
             !notified.exists(),
             "per-turn Stop events must not notify as done"
         );
+    }
+
+    #[test]
+    fn a_cwd_routed_completion_signal_does_not_release_a_waiting_dispatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let run_id = "r-waiting";
+        let run_dir = repo.join(".lto").join(run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(repo.join(".lto").join("current"), format!("{run_id}\n")).unwrap();
+        let state = LtoState {
+            run_id: run_id.to_string(),
+            current_phase: "implementation".to_string(),
+            workspace: WorkspaceSnapshot {
+                repo_root: repo.display().to_string(),
+                ..WorkspaceSnapshot::default()
+            },
+            ..LtoState::default()
+        };
+        state::save_state(run_dir.join("state.json"), &state).unwrap();
+
+        // A hand-started codex: its globally installed Stop hook fires with no
+        // LTO_RUN_ID, so the run is a cwd guess rather than a named target.
+        cmd_agent_turn_completed(
+            repo,
+            AgentTurnOptions {
+                run_id: None,
+                runner: "codex".to_string(),
+                payload_file: None,
+                cwd: Some(repo.to_path_buf()),
+                session_id: None,
+                summary: Some("unrelated work".to_string()),
+                rc: Some(0),
+                window_id: None,
+                source: "codex-process-exit".to_string(),
+                bell: false,
+                notify_cmd: None,
+            },
+        )
+        .unwrap();
+
+        let events = events::read(repo, run_id).unwrap();
+        assert_eq!(
+            events[0]["type"], "agent.turn.completed",
+            "a cwd-routed completion must not claim the dispatch finished -- \
+             `lto dispatch-and-wait` waits on agent.dispatch.completed"
+        );
+        assert_eq!(events[0]["fields"]["completion_scope"], "turn");
     }
 
     #[test]
