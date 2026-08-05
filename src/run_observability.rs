@@ -259,6 +259,29 @@ mod tests {
     }
 
     #[test]
+    fn one_matching_instrument_verifies_the_whole_contract() {
+        // Documents current behaviour, which is weaker than the name suggests:
+        // assess looks only at the newest evidence entry, so a contract of eight
+        // instruments reports ObservableVerified once any single one of them has
+        // run. autonomous_gate.rs:51 gates autonomous mode on this status.
+        // Whether that is the intended contract is open -- see
+        // references/specs/2026-08-05-replan-triggers.md.
+        let state = state_with(
+            &[
+                "baseline::cargo test --locked autonomous_gate",
+                "phase1::cargo test --locked run_observability",
+                "full-rust::cargo test --locked --all-targets",
+            ],
+            json!([{"command": "cargo test --locked autonomous_gate", "rc": 0, "instrument_ref": "baseline"}]),
+        );
+        assert_eq!(
+            assess(&state).status,
+            ObservabilityStatus::ObservableVerified,
+            "one instrument out of three currently verifies the contract"
+        );
+    }
+
+    #[test]
     fn normalized_legacy_command_is_a_read_compatibility_fallback() {
         let state = state_with(
             &["cargo test --locked"],
