@@ -199,7 +199,14 @@ pub fn run_in_ephemeral_worktree(
 fn sandboxed_env(wt_dir: &Path) -> BTreeMap<String, String> {
     let fake_home = wt_dir.join(".sandbox_home");
     let _ = fs::create_dir_all(&fake_home);
-    let mut env = std::env::vars().collect::<BTreeMap<_, _>>();
+    // Security boundary: only these host variables cross into the sandbox.
+    // Any new variable must be added explicitly; never restore inherited env.
+    let mut env = BTreeMap::new();
+    for key in ["PATH", "LANG", "LC_ALL", "TERM", "TZ", "USER", "SHELL"] {
+        if let Ok(value) = std::env::var(key) {
+            env.insert(key.to_string(), value);
+        }
+    }
     env.insert("HOME".to_string(), fake_home.display().to_string());
     env.insert("GIT_TERMINAL_PROMPT".to_string(), "0".to_string());
     env.insert("GIT_ASKPASS".to_string(), "true".to_string());
@@ -208,16 +215,6 @@ fn sandboxed_env(wt_dir: &Path) -> BTreeMap<String, String> {
         fake_home.join("gitconfig-none").display().to_string(),
     );
     env.insert("GIT_CONFIG_SYSTEM".to_string(), "/dev/null".to_string());
-    for key in [
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-        "GIT_TOKEN",
-        "AWS_SECRET_ACCESS_KEY",
-        "SSH_AUTH_SOCK",
-        "GIT_SSH_COMMAND",
-    ] {
-        env.remove(key);
-    }
     env
 }
 
@@ -234,6 +231,47 @@ mod tests {
         process::git(tmp.path(), ["add", "."]).unwrap();
         process::git(tmp.path(), ["commit", "-q", "-m", "init"]).unwrap();
         tmp
+    }
+
+    #[test]
+    fn sandboxed_env_contains_only_allowlisted_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = sandboxed_env(tmp.path());
+        let allowed = [
+            "PATH",
+            "LANG",
+            "LC_ALL",
+            "TERM",
+            "TZ",
+            "USER",
+            "SHELL",
+            "HOME",
+            "GIT_TERMINAL_PROMPT",
+            "GIT_ASKPASS",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        ];
+        assert!(env.keys().all(|key| allowed.contains(&key.as_str())));
+        // Guard the assertion itself: an empty map would satisfy `all` above,
+        // so pin the entries sandboxed_env must always set.
+        assert_eq!(
+            env.get("GIT_CONFIG_SYSTEM").map(String::as_str),
+            Some("/dev/null")
+        );
+        assert_eq!(
+            env.get("GIT_TERMINAL_PROMPT").map(String::as_str),
+            Some("0")
+        );
+        assert!(env.contains_key("HOME"));
+        // Host secrets must never cross the boundary, whatever their name.
+        for leaked in [
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+        ] {
+            assert!(!env.contains_key(leaked), "{leaked} leaked into sandbox");
+        }
     }
 
     #[test]
