@@ -982,7 +982,14 @@ fn write_dispatch_record(
             "detail": hook_status.detail,
             "script_path": hook_status.script_path.as_ref().map(|path| path.display().to_string()),
         },
-        "capture_excerpt": outcome.capture.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"),
+        // A tmux capture carries whatever the runner printed -- tokens it echoed,
+        // absolute paths in a backtrace. tmux_runner redacts the same capture on
+        // its way into the live log; this record has to do the same. The
+        // _excerpt suffix only protects values routed through redact_value, and
+        // to_string_pretty below does not go through it.
+        "capture_excerpt": crate::redact::redact_secrets_and_paths(
+            &outcome.capture.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"),
+        ),
     });
     fs::write(&path, serde_json::to_string_pretty(&record)? + "\n")?;
     Ok(path)
@@ -1097,7 +1104,10 @@ fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookS
     let hooks_dir = codex_home.join("hooks");
     fs::create_dir_all(&hooks_dir)?;
     let script_path = hooks_dir.join("lto-codex-stop-notify.sh");
-    fs::write(&script_path, CODEX_STOP_HOOK)?;
+    // Same reason as hooks.json below: a torn write leaves a truncated script
+    // in the user's ~/.codex, and a stop hook that fails silently means an
+    // agent finishes and never tells lto about it.
+    state::atomic_write(&script_path, CODEX_STOP_HOOK.as_bytes())?;
     set_executable(&script_path)?;
 
     let hooks_path = codex_home.join("hooks.json");
@@ -1711,6 +1721,20 @@ mod tests {
     #[test]
     fn omitted_dispatch_cwd_skips_validation() {
         assert!(validate_dispatch_cwd(None).is_ok());
+    }
+
+    #[test]
+    fn dispatch_record_capture_excerpt_is_redacted() {
+        // The excerpt in a dispatch record is raw tmux output. Its key ends in
+        // _excerpt, which redact_value would catch, but the record is built with
+        // to_string_pretty and never passes through it -- so the redaction has
+        // to happen at the call site.
+        let capture = "codex> exporting ANTHROPIC_API_KEY=sk-ant-abcdefghijkl\nat /Users/someone/private/x.rs";
+        let excerpt = crate::redact::redact_secrets_and_paths(capture);
+        assert!(!excerpt.contains("sk-ant-abcdefghijkl"));
+        assert!(!excerpt.contains("/Users/someone/private"));
+        assert!(excerpt.contains("[REDACTED_SECRET]"));
+        assert!(excerpt.contains("[REDACTED_PATH]"));
     }
 
     #[test]
