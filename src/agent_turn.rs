@@ -579,6 +579,21 @@ fn route_run(
         return Ok(Some(current));
     }
     matches.sort_by(|a, b| a.1.cmp(&b.1));
+    // Falling through to "newest wins" means `.lto/current` was absent, empty,
+    // or pointed at a run that is closed or outside this cwd. With several open
+    // runs the pick is a guess, so say which one it landed on -- a silent guess
+    // files the turn against the wrong run with nothing in the log to show it.
+    if matches.len() > 1 {
+        let chosen = matches
+            .last()
+            .map(|(run_id, _)| run_id.as_str())
+            .unwrap_or("");
+        eprintln!(
+            "warning: {} open runs match this cwd and .lto/current did not resolve; \
+routing to the most recent ({chosen}). Pass --run-id to choose explicitly.",
+            matches.len()
+        );
+    }
     Ok(matches.pop().map(|(run_id, _)| run_id))
 }
 
@@ -712,6 +727,51 @@ mod tests {
             !notified.exists(),
             "per-turn Stop events must not notify as done"
         );
+    }
+
+    #[test]
+    fn stale_current_pointer_falls_back_to_the_newest_open_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        // Three open runs share this cwd. `.lto/current` names a closed one, so
+        // route_run cannot use the pointer and must fall through to newest-wins.
+        for (run_id, started_at, phase) in [
+            ("r-old", "2026-01-01T00:00:00Z", "implementation"),
+            ("r-new", "2026-03-01T00:00:00Z", "implementation"),
+            ("r-mid", "2026-02-01T00:00:00Z", "implementation"),
+            ("r-done", "2026-04-01T00:00:00Z", "closed"),
+        ] {
+            let run_dir = repo.join(".lto").join(run_id);
+            fs::create_dir_all(&run_dir).unwrap();
+            let state = LtoState {
+                run_id: run_id.to_string(),
+                current_phase: phase.to_string(),
+                started_at: started_at.to_string(),
+                workspace: WorkspaceSnapshot {
+                    repo_root: repo.display().to_string(),
+                    ..WorkspaceSnapshot::default()
+                },
+                ..LtoState::default()
+            };
+            state::save_state(run_dir.join("state.json"), &state).unwrap();
+        }
+        fs::write(repo.join(".lto").join("current"), "r-done\n").unwrap();
+
+        let routed = route_run(repo, None, Some(repo)).unwrap();
+        // r-done is closed so it is filtered out despite being newest overall,
+        // and despite being what `.lto/current` points at.
+        assert_eq!(routed.as_deref(), Some("r-new"));
+
+        // An explicit --run-id still wins over the ambiguity entirely.
+        assert_eq!(
+            route_run(repo, Some("r-old"), Some(repo))
+                .unwrap()
+                .as_deref(),
+            Some("r-old")
+        );
+        // And an explicit id for a run that does not exist here resolves to
+        // nothing rather than silently falling back to the cwd guess.
+        assert_eq!(route_run(repo, Some("r-absent"), Some(repo)).unwrap(), None);
     }
 
     #[test]

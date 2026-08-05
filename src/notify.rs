@@ -122,15 +122,23 @@ fn with_endpoints_locked(
         .truncate(false)
         .open(&lock_path)?;
     lock.lock_exclusive()?;
-    let result = (|| {
-        let mut endpoints = read_endpoints(&path);
-        if edit(&mut endpoints) {
-            write_endpoints_atomic(&path, &endpoints)?;
-        }
-        Ok(())
-    })();
-    let _ = FileExt::unlock(&lock);
-    result
+    // Unlock via Drop, not a trailing call: `edit` is caller-supplied and a
+    // panic inside it would skip a manual unlock and strand the lock file for
+    // the rest of the process.
+    let _guard = FlockGuard(&lock);
+    let mut endpoints = read_endpoints(&path);
+    if edit(&mut endpoints) {
+        write_endpoints_atomic(&path, &endpoints)?;
+    }
+    Ok(())
+}
+
+struct FlockGuard<'a>(&'a std::fs::File);
+
+impl Drop for FlockGuard<'_> {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(self.0);
+    }
 }
 
 impl Drop for NotifyServer {

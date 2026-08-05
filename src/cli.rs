@@ -1913,7 +1913,7 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
         )?;
     }
 
-    let targets = high_risk_tasks(&state);
+    let targets = auditable_tasks(&state);
     let brief_path = audit_dir.join(format!("audit-brief-{}.md", timestamp_slug()));
     fs::write(
         &brief_path,
@@ -2414,7 +2414,9 @@ fn effective_audit_host(state: &LtoState) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn high_risk_tasks(state: &LtoState) -> Vec<Value> {
+/// Tasks eligible for an audit brief: everything the run still owns.
+/// Only `skipped` tasks drop out -- this is not a risk filter.
+fn auditable_tasks(state: &LtoState) -> Vec<Value> {
     state
         .tasks
         .as_array()
