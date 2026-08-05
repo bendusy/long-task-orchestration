@@ -174,6 +174,23 @@ C2/C3/C4 维持原判（收益存疑 / 暂不做 / 不做），本轮不再展�
 
 ---
 
+## 6.1 设计评审（host 自答，2026-08-05）
+
+派出的设计评审子代理两次催办均未交出内容，以下由 host 自行核实作答。
+
+**定位是否越界**：C1' 不越界。它改的是既有 `assess` 的判定范围，不新增判断、不生成 task、不做路由。LTO 仍只报告状态，由 host 决定怎么办——`ObservableVerified` → `SignalDeclared` 的效果是把自主模式降级为 supervised，即**交还控制权给 host**，方向与原则 1 一致而非相悖。
+
+**优先级**：C1' 值得做，C2/C3/C4 维持不做。理由是 C1' 有实证测试支撑、改动局限在一个函数、且它影响的是**自主模式放行**这个安全相关判定；其余三项都还停留在「文章说该有」而非「本仓测出缺」。
+
+**落点选择**：改 `assess` 本身，不在 autopilot 里加检查。原因是 `assess` 已是「契约验收状态」的单一判定点（被 `autonomous_gate.rs:51` 唯一消费），在别处另加一套检查会制造第二个真相源。这也是 C1 前两版方案失败的教训——往调用方加逻辑，而非修正判定本身。
+
+**有没有 LTO 特有的第五类触发场景**：核实了三个候选，均已有处理，不构成新工作：
+- budget 耗尽 → `ops.rs:1563` 直接 BLOCKED 并 `NEEDS_CONFIRM`
+- runner 家族全不健康 → `audit_dispatch` fail-closed（`audit_dispatch.rs:415` 有测试覆盖）
+- 证据链断裂/反弹 → `LedgerVerdict`(`ledger.rs:20`) 含 `Rebound`/`NoObservations` 态，经 `collect_ledger_check`(`ops.rs:876`) 接进 `check`
+
+**术语卫生**：第 5 节的划界（不把 `lane`/`frontier`/`successor` 搬进代码）够用，但本文正文仍大量使用这些外部词。**这是有意的**——本文是外部主张的入库记录，保留原始措辞才能追溯来源；一旦某条被 promote 进代码，就必须换成本仓术语（instrument / task / evidence / decision scope）。读者以第 2 节的对照表为准，那里每个外部概念都已映射到本仓的 file:line。
+
 ## 7. 本文的方法论副产品
 
 写这份 spec 的过程本身推翻了它自己的两版方案：
