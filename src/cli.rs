@@ -1917,7 +1917,7 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
     let brief_path = audit_dir.join(format!("audit-brief-{}.md", timestamp_slug()));
     fs::write(
         &brief_path,
-        crate::redact::redact_text(&build_audit_brief(&state, &host, &targets)),
+        crate::redact::redact_secrets_and_paths(&build_audit_brief(&state, &host, &targets)),
     )?;
     register_run_artifact(
         repo,
@@ -1983,7 +1983,10 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
     let mut counts = SeverityCounts::default();
     for result in &results {
         let reply_path = replies_dir.join(format!("reply-{}.md", result.runner));
-        fs::write(&reply_path, crate::redact::redact_text(&result.reply_text))?;
+        fs::write(
+            &reply_path,
+            crate::redact::redact_secrets_and_paths(&result.reply_text),
+        )?;
         register_run_artifact(
             repo,
             &run_id,
@@ -2074,7 +2077,7 @@ fn dispatch_risk_discovery(
     let brief_path = audit_dir.join(format!("risk-brief-{}.md", timestamp_slug()));
     fs::write(
         &brief_path,
-        crate::redact::redact_text(&build_risk_brief(state, host)),
+        crate::redact::redact_secrets_and_paths(&build_risk_brief(state, host)),
     )?;
     register_run_artifact(
         repo,
@@ -2736,11 +2739,25 @@ mod tests {
 
     #[test]
     fn audit_artifact_text_redacts_secrets_and_private_paths() {
-        let text = crate::redact::redact_text("reply sk-ant-abcdefghijkl /Users/xxx/private");
+        let text =
+            crate::redact::redact_secrets_and_paths("reply sk-ant-abcdefghijkl /Users/xxx/private");
         assert!(text.contains("[REDACTED_SECRET]"));
         assert!(text.contains("[REDACTED_PATH]"));
         assert!(!text.contains("sk-ant-abcdefghijkl"));
         assert!(!text.contains("/Users/xxx/private"));
+    }
+
+    #[test]
+    fn audit_artifacts_keep_full_reply_text_not_a_summary() {
+        // redact_text collapses whitespace and truncates at 240 chars, which is
+        // right for event summaries and wrong for audit artifacts: an auditor's
+        // findings list got cut off mid-sentence. Audit writes must preserve the
+        // reply verbatim apart from secrets.
+        let long_reply = format!("finding one\n\n{}\n\nfinding last", "detail ".repeat(120));
+        let written = crate::redact::redact_secrets_and_paths(&long_reply);
+        assert!(written.len() > 240, "audit artifact must not be truncated");
+        assert!(written.contains("finding last"), "tail must survive");
+        assert!(written.contains('\n'), "newlines must survive");
     }
 
     #[test]
