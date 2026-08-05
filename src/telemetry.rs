@@ -39,13 +39,22 @@ pub fn build(repo: &Path, run_id: &str) -> anyhow::Result<Value> {
 }
 
 pub fn save(repo: &Path, run_id: &str) -> anyhow::Result<PathBuf> {
-    let value = build(repo, run_id)?;
-    let path = telemetry_path(repo, run_id);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let result = (|| {
+        let value = build(repo, run_id)?;
+        let path = telemetry_path(repo, run_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        state::atomic_write(
+            &path,
+            (serde_json::to_string_pretty(&value)? + "\n").as_bytes(),
+        )?;
+        Ok(path)
+    })();
+    if let Err(err) = &result {
+        eprintln!("telemetry save failed (ignored): {err}");
     }
-    fs::write(&path, serde_json::to_string_pretty(&value)? + "\n")?;
-    Ok(path)
+    result
 }
 
 pub fn telemetry_path(repo: &Path, run_id: &str) -> PathBuf {

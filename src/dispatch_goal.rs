@@ -1,7 +1,7 @@
 use crate::commands::util;
 use crate::events::{self, EventRecord};
 use crate::process::shell_single_quote;
-use crate::state::DispatchWindowState;
+use crate::state::{self, DispatchWindowState};
 use crate::tmux_runner::{self, SkipPrompt, TmuxDispatchSafety, TmuxMode, TmuxRunnerConfig};
 use anyhow::{Context, anyhow};
 use serde_json::{Value, json};
@@ -1046,7 +1046,10 @@ fn uninstall_agy_hook_at(gemini_home: &Path) -> anyhow::Result<HookStatus> {
     }
     if removed > 0 {
         backup_hooks(&settings_path)?;
-        fs::write(&settings_path, serde_json::to_string_pretty(&value)? + "\n")?;
+        state::atomic_write(
+            &settings_path,
+            (serde_json::to_string_pretty(&value)? + "\n").as_bytes(),
+        )?;
     }
     if script_existed {
         let _ = fs::remove_file(&script_path);
@@ -1115,7 +1118,10 @@ fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookS
         }
         backup_hooks(&hooks_path)?;
         *existing = codex_stop_hook_entry(&command, &lto_bin);
-        fs::write(&hooks_path, serde_json::to_string_pretty(&value)? + "\n")?;
+        state::atomic_write(
+            &hooks_path,
+            (serde_json::to_string_pretty(&value)? + "\n").as_bytes(),
+        )?;
         return Ok(HookStatus {
             status: "updated".to_string(),
             detail: hooks_path.display().to_string(),
@@ -1124,7 +1130,10 @@ fn install_codex_hook_at(repo: &Path, codex_home: &Path) -> anyhow::Result<HookS
     }
     backup_hooks(&hooks_path)?;
     stop_hooks_mut(&mut value)?.push(codex_stop_hook_entry(&command, &lto_bin));
-    fs::write(&hooks_path, serde_json::to_string_pretty(&value)? + "\n")?;
+    state::atomic_write(
+        &hooks_path,
+        (serde_json::to_string_pretty(&value)? + "\n").as_bytes(),
+    )?;
     Ok(HookStatus {
         status: "installed".to_string(),
         detail: hooks_path.display().to_string(),
@@ -1191,7 +1200,10 @@ fn uninstall_codex_hook(repo: &Path) -> anyhow::Result<HookStatus> {
         before.saturating_sub(hooks.len())
     };
     backup_hooks(&hooks_path)?;
-    fs::write(&hooks_path, serde_json::to_string_pretty(&value)? + "\n")?;
+    state::atomic_write(
+        &hooks_path,
+        (serde_json::to_string_pretty(&value)? + "\n").as_bytes(),
+    )?;
     let _ = fs::remove_file(&script_path);
     Ok(HookStatus {
         status: "uninstalled".to_string(),

@@ -443,7 +443,9 @@ pub fn save_state(path: impl AsRef<Path>, state: &LtoState) -> anyhow::Result<()
     atomic_write(path, contents.as_bytes())
 }
 
-fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+/// Atomically write bytes through a same-directory tempfile, fsync, and persist.
+/// This prevents truncation when state or user configuration writes are interrupted.
+pub fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("path has no parent: {}", path.display()))?;

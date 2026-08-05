@@ -63,6 +63,16 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
     let previous_phase = ctx.state.current_phase.clone();
     if previous_phase != "closed" {
         util::append_phase_transition(&mut ctx.state, &previous_phase, "closed", &git.head);
+    } else {
+        ctx.state.current_phase = "closed".to_string();
+    }
+    ctx.state.workspace.head = git.head.clone();
+    ctx.state.workspace.branch = git.branch.clone();
+    ctx.state.workspace.dirty_fingerprint = if git.dirty { "dirty" } else { "clean" }.to_string();
+    ctx.state.blocked_by = json!(options.blocked_by);
+    ctx.state.next_action = json!(options.next_action);
+    util::save_run(&mut ctx)?;
+    if previous_phase != "closed" {
         crate::events::safe_emit(
             repo,
             &ctx.run_id,
@@ -75,15 +85,7 @@ pub fn cmd_closeout(repo: &Path, options: CloseoutOptions) -> anyhow::Result<()>
                 ..crate::events::EventRecord::default()
             },
         );
-    } else {
-        ctx.state.current_phase = "closed".to_string();
     }
-    ctx.state.workspace.head = git.head.clone();
-    ctx.state.workspace.branch = git.branch.clone();
-    ctx.state.workspace.dirty_fingerprint = if git.dirty { "dirty" } else { "clean" }.to_string();
-    ctx.state.blocked_by = json!(options.blocked_by);
-    ctx.state.next_action = json!(options.next_action);
-    util::save_run(&mut ctx)?;
     crate::events::safe_emit(
         repo,
         &ctx.run_id,
