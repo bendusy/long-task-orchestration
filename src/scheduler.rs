@@ -119,8 +119,24 @@ impl WorktreeCleanupGuard {
     }
 }
 
+impl WorktreeCleanupGuard {
+    /// Prune on the blocking pool and disarm, so the synchronous git in Drop
+    /// never runs on an async worker. Call this before returning early from
+    /// run_once; Drop stays as the last-resort net for paths that miss it.
+    async fn prune_now(mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let repo = self.repo.clone();
+        let _ = tokio::task::spawn_blocking(move || worktree::prune_worktree(&repo, &handle)).await;
+    }
+}
+
 impl Drop for WorktreeCleanupGuard {
     fn drop(&mut self) {
+        // Last resort: synchronous, because Drop cannot await. Early returns in
+        // run_once call prune_now() instead so this does not fire on an async
+        // worker; if one is ever missed, cleaning late beats leaking the tree.
         if let Some(handle) = self.handle.take() {
             let _ = worktree::prune_worktree(&self.repo, &handle);
         }
@@ -428,14 +444,19 @@ impl Scheduler {
         };
         let command_dir = write_worktree
             .as_ref()
-            .map(|guard| guard.handle().path.as_path())
-            .unwrap_or(self.repo.as_path());
+            .map(|guard| guard.handle().path.clone())
+            .unwrap_or_else(|| self.repo.clone());
         let reply_path = attempt_dir.path().join("reply.txt");
         let timeout_arg = job.budget.timeout_sec.to_string();
 
+        // These returns happen after the guard exists, so prune explicitly on
+        // the blocking pool rather than letting Drop run git on this worker.
         if let Some(parent) = live_log_path.parent()
             && let Err(err) = fs::create_dir_all(parent).await
         {
+            if let Some(guard) = write_worktree {
+                guard.prune_now().await;
+            }
             return failure_result(job, attempt, None, format!("live log dir: {err}"));
         }
         let log = match OpenOptions::new()
@@ -445,7 +466,12 @@ impl Scheduler {
             .await
         {
             Ok(file) => Arc::new(Mutex::new(file)),
-            Err(err) => return failure_result(job, attempt, None, format!("live log: {err}")),
+            Err(err) => {
+                if let Some(guard) = write_worktree {
+                    guard.prune_now().await;
+                }
+                return failure_result(job, attempt, None, format!("live log: {err}"));
+            }
         };
 
         let mut command = Command::new(&runner);
@@ -463,7 +489,12 @@ impl Scheduler {
 
         let mut child = match command.spawn() {
             Ok(child) => child,
-            Err(err) => return failure_result(job, attempt, None, format!("spawn: {err}")),
+            Err(err) => {
+                if let Some(guard) = write_worktree {
+                    guard.prune_now().await;
+                }
+                return failure_result(job, attempt, None, format!("spawn: {err}"));
+            }
         };
         let child_id = child.id();
         let last_output_at = Arc::new(AtomicU64::new(now_millis()));

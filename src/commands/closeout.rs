@@ -734,6 +734,31 @@ mod tests {
     }
 
     #[test]
+    fn failed_save_leaves_no_phase_changed_event() {
+        // state.json is the source of truth and events.jsonl is its projection,
+        // and nothing replays events back onto state. So a failed save must not
+        // leave a phase.changed behind claiming a close that never persisted.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(tmp.path());
+
+        // Make the save fail: atomic_write cannot persist onto a directory.
+        fs::remove_file(&ctx.state_path).unwrap();
+        fs::create_dir(&ctx.state_path).unwrap();
+
+        let saved = util::save_run(&mut ctx);
+        assert!(saved.is_err(), "save onto a directory must fail");
+
+        // cmd_closeout runs save_run with `?` before emitting, so a failure here
+        // returns early. Nothing should have written the event.
+        let events_path = ctx.run_dir.join("events.jsonl");
+        let events = fs::read_to_string(&events_path).unwrap_or_default();
+        assert!(
+            !events.contains("phase.changed"),
+            "phase.changed must not outlive a failed save, got: {events}"
+        );
+    }
+
+    #[test]
     fn enforce_gates_rejects_unconverged_ledger() {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = ctx(tmp.path());

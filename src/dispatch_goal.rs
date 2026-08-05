@@ -938,12 +938,19 @@ fn goal_prompt(goal: &str, repo: &str, run_id: &str, runner: &str, window_id: &s
         "codex" => format!("/goal {prompt}"),
         _ => prompt,
     };
+    // The cap is a convention -- long constraints belong in the goal file, not
+    // the paste line -- so warn but never cut. The self-report command sits at
+    // the end of the prompt, and truncating it leaves an agent that finishes
+    // its work and cannot say so: the dispatch waits out its timeout and the
+    // window leaks. An over-long prompt is the lesser failure.
     if prompt.chars().count() > GOAL_PROMPT_MAX_CHARS {
-        eprintln!("goal_prompt exceeds {GOAL_PROMPT_MAX_CHARS} chars; truncating to the hard cap");
-        prompt.chars().take(GOAL_PROMPT_MAX_CHARS).collect()
-    } else {
-        prompt
+        eprintln!(
+            "warning: goal prompt is {} chars, over the {GOAL_PROMPT_MAX_CHARS}-char convention; \
+sending it whole to keep the self-report command intact. Shorten the repo or goal path to get back under.",
+            prompt.chars().count()
+        );
     }
+    prompt
 }
 
 fn write_dispatch_record(
@@ -1704,6 +1711,39 @@ mod tests {
     #[test]
     fn omitted_dispatch_cwd_skips_validation() {
         assert!(validate_dispatch_cwd(None).is_ok());
+    }
+
+    #[test]
+    fn long_paths_keep_the_self_report_command_whole() {
+        // The self-report command is the tail of the prompt, so a length cap
+        // enforced by truncation would cut exactly the part that lets an agent
+        // report completion. Deep repo and goal paths must not lose it.
+        let deep_repo = format!("/Users/someone/{}/repo", "nested-directory/".repeat(20));
+        let deep_goal = format!("{deep_repo}/{}/goal.md", "phase/".repeat(20));
+        let plan = runner_plan(
+            "codex",
+            Path::new(&deep_goal),
+            Path::new(&deep_repo),
+            "run-with-a-long-identifier",
+            "@4649",
+        );
+        assert!(
+            plan.prompt.chars().count() > GOAL_PROMPT_MAX_CHARS,
+            "fixture must exceed the cap or it proves nothing"
+        );
+        for fragment in [
+            "goal-self-report",
+            "--run-id run-with-a-long-identifier",
+            "--runner codex",
+            "--window-id @4649",
+            "--rc 0",
+            "--bell",
+        ] {
+            assert!(
+                plan.prompt.contains(fragment),
+                "{fragment} missing from an over-cap prompt"
+            );
+        }
     }
 
     #[test]

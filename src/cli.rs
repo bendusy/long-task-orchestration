@@ -2149,7 +2149,10 @@ fn dispatch_risk_discovery(
         );
     }
     let reply_path = audit_dir.join(format!("risk-reply-{}-{}.md", discoverer, timestamp_slug()));
-    fs::write(&reply_path, &result.reply_text)?;
+    fs::write(
+        &reply_path,
+        crate::redact::redact_secrets_and_paths(&result.reply_text),
+    )?;
     register_run_artifact(
         repo,
         run_id,
