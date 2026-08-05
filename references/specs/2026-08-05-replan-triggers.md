@@ -39,9 +39,19 @@
 | 触发 3 前沿耗尽但目标未达 | `run_observability::assess` 已把 instrument 与 evidence 关联成三态，并接入自主闸门；closeout 另有重跑 | `run_observability.rs:90`、`autonomous_gate.rs:51`、`ops.rs:1611`、`closeout.rs:289` | **机制已有**，但 `assess` 只看最新一条证据，多 instrument 契约可被单条放行（已写测试实证），见 C1' |
 | 触发 4 权限边界变化 | delivery contract 可持久化 targets/constraints/instruments/forced_entropy | `state.rs:41-54` | **部分覆盖**：契约可改，但改后不会让已有 task 重新过授权 |
 | 约束 证据先于 replan | 原则 5「sensors are fallible」+ 原则 3「negative feedback first」已内化 | `CLAUDE.md` | **已覆盖**，无需新增 |
-| 约束 replan 不越权 | 原则 1「host remains controller-in-chief」；`autonomous_gate` | `ops.rs:3599` | **已覆盖** |
+| 约束 replan 不越权 | 原则 1「host remains controller-in-chief」；decision scope + freshness：`DecisionRecord` 带 `scope{phase,paths}` 与 `anchor{head,phase,recorded_at}`，`resume` 每次算 freshness report | `state.rs:56-79`、`commands/decision.rs:147`、`commands/resume.rs:84` | **已覆盖**（对接点是 decision scope，**不是** `autonomous_gate`——见下方勘误） |
 | 约束 replan_noop 不算进展 | `has_progressed` 比对 task digest，agent 光说不做时 digest 不变 | `ops.rs:3457` | **已覆盖**，机制不同但效果等价 |
 | 约束 不周期性打断 | autopilot 本就是 host 调用一次跑一轮，无后台定时器 | — | **已覆盖**（LTO 无 daemon，原则「不加 global daemon」） |
+
+### 2.0 勘误：`autonomous_gate` 不是「replan 不越权」的对接点（2026-08-05 异构评审指出）
+
+本文初版把「replan 不越权」记为由 `autonomous_gate` 覆盖。**这是错的**。
+
+`GateReport::passes()`(`autonomous_gate.rs:49-53`) 只有两个成员：`operational_reliability`（历史 agent-run 跑量与失败率统计）与 `current_run_observability`。它**不检查任何单个 task 的 blocked 状态或待决定事项**，是「够不够格开启自主模式」的启动门禁，与「replan 时不能绕过某个未决决定」是不同语义。
+
+真正的对接点是 decision scope 机制：`DecisionRecord`(`state.rs:56`) 带 `scope{phase, paths}` 限定作用域、`anchor{head, phase, recorded_at}` 记录锚点，`commands/decision.rs:147` 的 `freshness_report_at` 判定决定是否仍新鲜，`commands/resume.rs:84` 每次 resume 都会算一次。
+
+**影响**：不改变候选工作排序（C3 仍判暂不做），但若将来做触发 4（契约变更使 task 重新过授权），对接点是 decision scope 与 task `blockers`，不是 `autonomous_gate`。
 
 ### 2.1 触发 3 的缺口确切位置
 
@@ -82,7 +92,13 @@
 
 - **前置问题已答（2026-08-05）**：证据机制**已经存在且比预想完善**。`run_observability.rs:90` 的 `assess(state)` 通过 `instrument_ref`（或归一化命令 fallback）把 instrument 与 task evidence 关联，返回三态 `Missing` / `SignalDeclared` / `ObservableVerified`；`autonomous_gate.rs:51` 用它作为放行自主模式的前置条件之一；`ops.rs:1611` 据此把 autopilot 降级为 supervised。
 
-  **所以 C1 的原始描述（「autopilot 无活可干时不检查契约」）不准确**——契约验收状态一直在被检查，且已接进闸门。
+  **所以 C1 的原始描述（「autopilot 无活可干时不检查契约」）不准确**——契约验收状态在被检查，且已接进闸门。
+
+  但**触发时机很窄**（2026-08-05 异构评审核实）：`assess` 只在 `options.autonomous` 为真时跑（`ops.rs:1569`），且在 task 执行**之前**（开局判定「够不够格继续自主」）。普通 `autopilot` 不走这条路径。
+
+  而 `auto_exec_tasks`(`ops.rs:2904-3066`) 无论执行了几个 task，结束时都直接打印 `DONE` 并返回 `Ok(())`（`:3055-3066`），`executed=0` 也一样——不查契约、不调 `assess`、不碰 closeout 逻辑。`update_autopilot_digest` 只写回 progress digest。
+
+  **所以缺口的准确表述是**：验收机制存在，但只在两个入口触发——人主动 `closeout`（重跑全部 instruments）与 `autopilot --autonomous` 开局（判最新一条证据）。「这一轮跑完，目标达成了吗」这个时机没有任何检查。这正是来源主张的「todo 全关 ≠ goal 完成」，缺口成立，只是原因不是「没有机制」而是「机制没挂在这条路径上」。
 
 ### C1'（取代 C1）. `assess` 只看最新一条证据，多 instrument 契约会被单条放行
 
