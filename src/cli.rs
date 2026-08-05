@@ -1915,7 +1915,10 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
 
     let targets = high_risk_tasks(&state);
     let brief_path = audit_dir.join(format!("audit-brief-{}.md", timestamp_slug()));
-    fs::write(&brief_path, build_audit_brief(&state, &host, &targets))?;
+    fs::write(
+        &brief_path,
+        crate::redact::redact_text(&build_audit_brief(&state, &host, &targets)),
+    )?;
     register_run_artifact(
         repo,
         &run_id,
@@ -1980,7 +1983,7 @@ fn cmd_audit(repo: &Path, options: AuditOptions) -> anyhow::Result<()> {
     let mut counts = SeverityCounts::default();
     for result in &results {
         let reply_path = replies_dir.join(format!("reply-{}.md", result.runner));
-        fs::write(&reply_path, &result.reply_text)?;
+        fs::write(&reply_path, crate::redact::redact_text(&result.reply_text))?;
         register_run_artifact(
             repo,
             &run_id,
@@ -2069,7 +2072,10 @@ fn dispatch_risk_discovery(
         Some(&discoverer),
     );
     let brief_path = audit_dir.join(format!("risk-brief-{}.md", timestamp_slug()));
-    fs::write(&brief_path, build_risk_brief(state, host))?;
+    fs::write(
+        &brief_path,
+        crate::redact::redact_text(&build_risk_brief(state, host)),
+    )?;
     register_run_artifact(
         repo,
         run_id,
@@ -2573,7 +2579,10 @@ fn start_run(repo: &Path, options: StartRunOptions) -> anyhow::Result<PathBuf> {
     util::sync_run_state_md(&run_state_path, &state)?;
 
     fs::create_dir_all(repo.join(".lto"))?;
-    fs::write(repo.join(".lto").join("current"), format!("{run_id}\n"))?;
+    state::atomic_write(
+        &repo.join(".lto").join("current"),
+        format!("{run_id}\n").as_bytes(),
+    )?;
     crate::events::safe_emit(
         repo,
         &run_id,
@@ -2723,6 +2732,15 @@ mod tests {
         assert_eq!(counts.high, 0);
         assert_eq!(counts.critical, 0);
         assert_eq!(counts.minor, 0);
+    }
+
+    #[test]
+    fn audit_artifact_text_redacts_secrets_and_private_paths() {
+        let text = crate::redact::redact_text("reply sk-ant-abcdefghijkl /Users/xxx/private");
+        assert!(text.contains("[REDACTED_SECRET]"));
+        assert!(text.contains("[REDACTED_PATH]"));
+        assert!(!text.contains("sk-ant-abcdefghijkl"));
+        assert!(!text.contains("/Users/xxx/private"));
     }
 
     #[test]
