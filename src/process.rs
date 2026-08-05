@@ -110,3 +110,49 @@ fn display_args(args: &[OsString]) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn shell_single_quote_round_trips_shell_values() {
+        for input in ["it's", "`cmd`", "$(rm -rf /)", "line one\nline two"] {
+            let quoted = shell_single_quote(input);
+            let output = Command::new("sh")
+                .args(["-c", &format!("echo {quoted}")])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let rendered = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(rendered.strip_suffix('\n').unwrap(), input);
+        }
+    }
+
+    #[test]
+    fn shell_single_quote_is_single_quoted() {
+        let quoted = shell_single_quote("value");
+        assert_eq!(quoted, "'value'");
+    }
+
+    #[test]
+    fn ensure_git_repo_accepts_initialized_repo() {
+        let repo = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        ensure_git_repo(repo.path()).unwrap();
+    }
+
+    #[test]
+    fn ensure_git_repo_rejects_non_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            ensure_git_repo(dir.path()),
+            Err(GitCommandError::NotGitRepo(_))
+        ));
+    }
+}

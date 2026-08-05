@@ -938,12 +938,12 @@ fn goal_prompt(goal: &str, repo: &str, run_id: &str, runner: &str, window_id: &s
         "codex" => format!("/goal {prompt}"),
         _ => prompt,
     };
-    debug_assert!(
-        prompt.chars().count() <= GOAL_PROMPT_MAX_CHARS,
-        "goal_prompt must stay ≤{GOAL_PROMPT_MAX_CHARS} chars, got {}",
-        prompt.chars().count()
-    );
-    prompt
+    if prompt.chars().count() > GOAL_PROMPT_MAX_CHARS {
+        eprintln!("goal_prompt exceeds {GOAL_PROMPT_MAX_CHARS} chars; truncating to the hard cap");
+        prompt.chars().take(GOAL_PROMPT_MAX_CHARS).collect()
+    } else {
+        prompt
+    }
 }
 
 fn write_dispatch_record(

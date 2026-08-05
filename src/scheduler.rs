@@ -397,14 +397,29 @@ impl Scheduler {
         }
 
         let write_worktree = if job_needs_worktree(job) {
-            match worktree::add_persistent_worktree(&self.repo, run_id, &job.job_id) {
-                Ok(handle) => Some(WorktreeCleanupGuard::new(&self.repo, handle)),
-                Err(err) => {
+            let repo = self.repo.clone();
+            let run_id = run_id.to_string();
+            let task_id = job.job_id.clone();
+            match tokio::task::spawn_blocking(move || {
+                worktree::add_persistent_worktree(&repo, &run_id, &task_id)
+            })
+            .await
+            {
+                Ok(Ok(handle)) => Some(WorktreeCleanupGuard::new(&self.repo, handle)),
+                Ok(Err(err)) => {
                     return failure_result(
                         job,
                         attempt,
                         None,
                         format!("persistent worktree: {err}"),
+                    );
+                }
+                Err(err) => {
+                    return failure_result(
+                        job,
+                        attempt,
+                        None,
+                        format!("persistent worktree task: {err}"),
                     );
                 }
             }
@@ -530,33 +545,50 @@ impl Scheduler {
         }
         result.permissions = permission_snapshot(&job.permission_policy);
         if let Some(guard) = write_worktree {
-            result = self.finalize_write_task(job, result, guard.disarm());
+            result = self.finalize_write_task(job, result, guard.disarm()).await;
         }
         result
     }
 
-    fn finalize_write_task(
+    async fn finalize_write_task(
         &self,
         job: &AgentJob,
         mut result: AgentResult,
         mut handle: WorktreeHandle,
     ) -> AgentResult {
         if result.status != JobStatus::Ok {
-            let _ = worktree::prune_worktree(&self.repo, &handle);
+            let repo = self.repo.clone();
+            let _ =
+                tokio::task::spawn_blocking(move || worktree::prune_worktree(&repo, &handle)).await;
             return result;
         }
 
-        let diff = match merge_review::emit_diff(&handle, job.test_cmd.as_deref()) {
+        let diff_handle = handle.clone();
+        let test_cmd = job.test_cmd.clone();
+        let diff_result = tokio::task::spawn_blocking(move || {
+            merge_review::emit_diff(&diff_handle, test_cmd.as_deref())
+        })
+        .await;
+        let diff_result = match diff_result {
+            Ok(result) => result,
+            Err(err) => Err(anyhow::anyhow!("emit diff task: {err}")),
+        };
+        let diff = match diff_result {
             Ok(diff) => diff,
             Err(err) => {
-                let _ = worktree::prune_worktree(&self.repo, &handle);
+                let repo = self.repo.clone();
+                let _ =
+                    tokio::task::spawn_blocking(move || worktree::prune_worktree(&repo, &handle))
+                        .await;
                 result.status = JobStatus::Failed;
                 result.error = format!("emit diff: {err}");
                 return result;
             }
         };
         if diff.diff.trim().is_empty() {
-            let _ = worktree::prune_worktree(&self.repo, &handle);
+            let repo = self.repo.clone();
+            let _ =
+                tokio::task::spawn_blocking(move || worktree::prune_worktree(&repo, &handle)).await;
             result.status = JobStatus::Failed;
             result.error = "write task produced no worktree changes".to_string();
             return result;
