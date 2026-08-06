@@ -159,6 +159,12 @@ const QUOTA_EXHAUSTED_MARKERS: &[&str] = &[
     "insufficient quota",
     "exceeded your current quota",
     "quota exceeded",
+    // agy 1.1.10, verified 2026-08-06 against a genuinely depleted free tier:
+    //   "Error: Individual quota reached. Please upgrade your subscription to
+    //    increase your limits. Resets in 88h12m23s."
+    // None of the OpenAI-flavoured markers above match it.
+    "quota reached",
+    "upgrade your subscription",
     "out of credits",
     "credits_depleted",
     "credit balance",
@@ -1667,6 +1673,43 @@ print(json.dumps(data))
             "error should name the runner: {}",
             got.error
         );
+    }
+
+    /// Verbatim stderr from agy 1.1.10 on a depleted free tier (2026-08-06).
+    /// This is the case the whole feature exists for — keep the literal text.
+    #[test]
+    fn classify_exit_recognises_the_real_agy_quota_message() {
+        let got = classify_exit(
+            "agy",
+            1,
+            "",
+            "Error: Individual quota reached. Please upgrade your subscription \
+             to increase your limits. Resets in 88h12m23s.",
+        );
+        assert_eq!(got.status, JobStatus::QuotaExhausted);
+        assert!(got.error.contains("agy"));
+    }
+
+    /// Other real agy 1.1.10 failures (2026-08-06) that must stay `Failed` —
+    /// they are not quota problems and widening the markers must not catch them.
+    #[test]
+    fn classify_exit_leaves_other_real_agy_failures_as_plain_failures() {
+        let empty_prompt = classify_exit(
+            "agy",
+            1,
+            "",
+            r#"Error: Error: empty prompt. Usage: agy --print "your prompt here""#,
+        );
+        assert_eq!(empty_prompt.status, JobStatus::Failed);
+
+        let no_tty = classify_exit(
+            "agy",
+            1,
+            "",
+            "CLI error: bubbletea: error opening TTY: bubbletea: could not open TTY: \
+             open /dev/tty: device not configured",
+        );
+        assert_eq!(no_tty.status, JobStatus::Failed);
     }
 
     #[test]

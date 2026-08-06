@@ -22,11 +22,22 @@ done
 
 PROMPT_FILE="$(mktemp)"
 REPLY_FILE="$(mktemp)"
-trap 'rm -f "$PROMPT_FILE" "$REPLY_FILE"' EXIT
+ERR_FILE="$(mktemp)"
+trap 'rm -f "$PROMPT_FILE" "$REPLY_FILE" "$ERR_FILE"' EXIT
 printf 'Only answer the result of this expression: 1+1=\n' > "$PROMPT_FILE"
+
+# Quota exhaustion reads as a generic ERROR(rc=N) unless we look at the text.
+# Verified against agy 1.1.10 on a depleted free tier (2026-08-06):
+#   "Error: Individual quota reached. Please upgrade your subscription ..."
+# Keep in sync with QUOTA_EXHAUSTED_MARKERS in src/scheduler.rs.
+QUOTA_RE='insufficient_quota|insufficient quota|exceeded your current quota|quota exceeded|quota reached|upgrade your subscription|out of credits|credits_depleted|credit balance'
 
 verdict() {
   local rc="$1" bytes="$2"
+  if [[ "$rc" -ne 0 ]] && grep -Eiq "$QUOTA_RE" "$ERR_FILE" "$REPLY_FILE" 2>/dev/null; then
+    echo QUOTA
+    return
+  fi
   if [[ "$rc" -eq 0 && "$bytes" -gt 0 ]]; then
     echo OK
   elif [[ "$rc" -eq 0 && "$bytes" -eq 0 ]]; then
@@ -40,6 +51,10 @@ verdict() {
 
 results=()
 for agent in "${AGENTS[@]}"; do
+  # Reset both probe files up front: verdict() greps them, and a leftover
+  # quota message from the previous agent would misclassify this one.
+  : > "$REPLY_FILE"
+  : > "$ERR_FILE"
   if [[ "$agent" == "tmux" ]]; then
     start=$SECONDS
     if command -v tmux >/dev/null 2>&1 && tmux -V >/dev/null 2>&1; then
@@ -58,10 +73,9 @@ for agent in "${AGENTS[@]}"; do
     results+=("$agent|-|-|0|MISSING")
     continue
   fi
-  : > "$REPLY_FILE"
   start=$SECONDS
   set +e
-  bash "$runner" "$PROMPT_FILE" "$REPLY_FILE" "$PROBE_TIMEOUT" >/dev/null 2>&1
+  bash "$runner" "$PROMPT_FILE" "$REPLY_FILE" "$PROBE_TIMEOUT" >/dev/null 2>"$ERR_FILE"
   rc=$?
   set -e 2>/dev/null || true
   elapsed=$((SECONDS - start))
