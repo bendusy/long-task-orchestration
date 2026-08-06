@@ -499,7 +499,7 @@ fn record_agent_dispatch_completed(
             slot.rate_limited_runs.insert(run_id.to_string());
             slot.failed_runs.insert(run_id.to_string());
         }
-        "failed" => {
+        "failed" | "quota_exhausted" => {
             slot.failed_runs.insert(run_id.to_string());
         }
         _ => {}

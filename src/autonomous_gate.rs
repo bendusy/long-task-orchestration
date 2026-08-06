@@ -140,11 +140,17 @@ pub fn assess_recent_reliability(
 }
 
 fn is_completed_outcome(status: &str) -> bool {
-    matches!(status, "ok" | "failed" | "timeout" | "rate_limited")
+    matches!(
+        status,
+        "ok" | "failed" | "timeout" | "rate_limited" | "quota_exhausted"
+    )
 }
 
 fn is_failure(status: &str) -> bool {
-    matches!(status, "failed" | "timeout" | "rate_limited")
+    matches!(
+        status,
+        "failed" | "timeout" | "rate_limited" | "quota_exhausted"
+    )
 }
 
 #[cfg(test)]

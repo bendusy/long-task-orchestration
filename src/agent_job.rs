@@ -97,26 +97,31 @@ pub enum JobStatus {
     Failed,
     Timeout,
     RateLimited,
+    /// Provider quota/credits exhausted. Terminal: waiting never recovers it,
+    /// unlike `RateLimited`.
+    QuotaExhausted,
     Skipped,
 }
 
-pub const JOB_STATUS_VALUES: [&str; 7] = [
+pub const JOB_STATUS_VALUES: [&str; 8] = [
     "pending",
     "running",
     "ok",
     "failed",
     "timeout",
     "rate_limited",
+    "quota_exhausted",
     "skipped",
 ];
 
-pub const JOB_STATUS_INPUT_VALUES: [&str; 8] = [
+pub const JOB_STATUS_INPUT_VALUES: [&str; 9] = [
     "pending",
     "running",
     "ok",
     "failed",
     "timeout",
     "rate_limited",
+    "quota_exhausted",
     "skipped",
     "returned",
 ];
@@ -130,6 +135,7 @@ impl JobStatus {
             Self::Failed => "failed",
             Self::Timeout => "timeout",
             Self::RateLimited => "rate_limited",
+            Self::QuotaExhausted => "quota_exhausted",
             Self::Skipped => "skipped",
         }
     }
@@ -356,6 +362,8 @@ fn default_backoff() -> f64 {
     5.0
 }
 
+/// `QuotaExhausted` is deliberately absent: retrying a depleted quota never
+/// succeeds, it only burns the retry budget. Do not "complete" this list.
 fn default_retry_on() -> Vec<JobStatus> {
     vec![JobStatus::RateLimited, JobStatus::Timeout]
 }

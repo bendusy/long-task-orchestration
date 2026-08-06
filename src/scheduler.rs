@@ -151,6 +151,24 @@ const RATE_LIMIT_MARKERS: &[&str] = &[
     "rate limited",
 ];
 
+/// Quota/credit exhaustion. Checked *before* `RATE_LIMIT_MARKERS` because some
+/// providers return 429 when the quota is gone, and waiting out that 429 never
+/// recovers.
+const QUOTA_EXHAUSTED_MARKERS: &[&str] = &[
+    "insufficient_quota",
+    "insufficient quota",
+    "exceeded your current quota",
+    "quota exceeded",
+    "out of credits",
+    "credits_depleted",
+    "credit balance",
+    // Deliberately not the bare word "billing": misclassifying a retryable
+    // failure as terminal costs more than missing one, and stderr mentions
+    // billing docs/URLs often enough to matter.
+    "billing hard limit",
+    "check your plan and billing",
+];
+
 impl Scheduler {
     pub fn new(repo: impl Into<PathBuf>, runners_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -813,7 +831,12 @@ pub fn validate_batch(jobs: &[AgentJob], config: &SchedulerConfig) -> Result<(),
     Ok(())
 }
 
-pub fn classify_exit(exit_code: i32, reply_text: &str, stderr: &str) -> ClassifiedExit {
+pub fn classify_exit(
+    runner: &str,
+    exit_code: i32,
+    reply_text: &str,
+    stderr: &str,
+) -> ClassifiedExit {
     if exit_code == 0 {
         if reply_text.is_empty() {
             return ClassifiedExit {
@@ -826,6 +849,18 @@ pub fn classify_exit(exit_code: i32, reply_text: &str, stderr: &str) -> Classifi
             exit_code,
             status: JobStatus::Ok,
             error: String::new(),
+        };
+    }
+
+    // Before the rate-limit check: a 429 that carries a quota marker is terminal,
+    // not something a retry can outwait.
+    if contains_quota_exhausted_marker(stderr) || contains_quota_exhausted_marker(reply_text) {
+        return ClassifiedExit {
+            exit_code,
+            status: JobStatus::QuotaExhausted,
+            error: format!(
+                "{runner} quota/credits exhausted (exit={exit_code}); retrying will not help — switch runner or top up the account"
+            ),
         };
     }
 
@@ -868,6 +903,12 @@ fn contains_rate_limit_marker(text: &str) -> bool {
         .any(|marker| contains_ascii_case_insensitive(text, marker))
 }
 
+fn contains_quota_exhausted_marker(text: &str) -> bool {
+    QUOTA_EXHAUSTED_MARKERS
+        .iter()
+        .any(|marker| contains_ascii_case_insensitive(text, marker))
+}
+
 fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
     let haystack = haystack.as_bytes();
     let needle = needle.as_bytes();
@@ -886,7 +927,7 @@ pub fn result_from_attempt(
     attempts: u32,
 ) -> AgentResult {
     let reply_text = reply_text.into();
-    let classified = classify_exit(exit_code, &reply_text, stderr);
+    let classified = classify_exit(&job.runner, exit_code, &reply_text, stderr);
     AgentResult {
         job_id: job.job_id.clone(),
         runner: job.runner.clone(),
@@ -1611,17 +1652,76 @@ print(json.dumps(data))
 
     #[test]
     fn classify_exit_keeps_429_in_successful_reply_as_content() {
-        let got = classify_exit(0, "API docs mention 429 backoff", "");
+        let got = classify_exit("codex", 0, "API docs mention 429 backoff", "");
         assert_eq!(got.status, JobStatus::Ok);
-        let got = classify_exit(1, "", "ERROR: 429 Too Many Requests");
+        let got = classify_exit("codex", 1, "", "ERROR: 429 Too Many Requests");
         assert_eq!(got.status, JobStatus::RateLimited);
     }
 
     #[test]
+    fn classify_exit_flags_quota_exhaustion_and_names_the_runner() {
+        let got = classify_exit("agy", 1, "", "Error: insufficient_quota for this key");
+        assert_eq!(got.status, JobStatus::QuotaExhausted);
+        assert!(
+            got.error.contains("agy"),
+            "error should name the runner: {}",
+            got.error
+        );
+    }
+
+    #[test]
+    fn classify_exit_keeps_plain_rate_limit_out_of_quota_bucket() {
+        let got = classify_exit("codex", 1, "", "HTTP 429: too many requests, retry later");
+        assert_eq!(got.status, JobStatus::RateLimited);
+    }
+
+    #[test]
+    fn classify_exit_prefers_quota_over_rate_limit_when_both_present() {
+        let got = classify_exit(
+            "agy",
+            1,
+            "",
+            "HTTP 429 too many requests: insufficient_quota, exceeded your current quota",
+        );
+        assert_eq!(got.status, JobStatus::QuotaExhausted);
+    }
+
+    #[test]
+    fn classify_exit_leaves_unrelated_failures_alone() {
+        let got = classify_exit("codex", 2, "", "runner missing");
+        assert_eq!(got.status, JobStatus::Failed);
+        let got = classify_exit("codex", 0, "done", "");
+        assert_eq!(got.status, JobStatus::Ok);
+    }
+
+    #[test]
+    fn classify_exit_does_not_treat_a_bare_billing_mention_as_quota_loss() {
+        let got = classify_exit(
+            "codex",
+            1,
+            "",
+            "connection reset; see https://example.com/docs/billing for details",
+        );
+        assert_eq!(got.status, JobStatus::Failed);
+    }
+
+    #[test]
+    fn quota_exhausted_is_not_retried_by_default() {
+        assert!(!default_retry_policy_statuses().contains(&JobStatus::QuotaExhausted));
+    }
+
+    fn default_retry_policy_statuses() -> Vec<JobStatus> {
+        crate::agent_job::RetryPolicy::default().retry_on
+    }
+
+    #[test]
     fn classify_exit_separates_empty_reply_timeout_and_generic_failure() {
-        assert_eq!(classify_exit(0, "", "").status, JobStatus::Failed);
-        assert_eq!(classify_exit(124, "", "").status, JobStatus::Timeout);
-        let got = classify_exit(2, "", "runner missing");
+        assert_eq!(classify_exit("codex", 0, "", "").status, JobStatus::Failed);
+        assert_eq!(
+            classify_exit("codex", 124, "", "").status,
+            JobStatus::Timeout
+        );
+        let got = classify_exit("codex", 2, "", "runner missing");
         assert_eq!(got.status, JobStatus::Failed);
         assert!(got.error.contains("runner missing"));
     }

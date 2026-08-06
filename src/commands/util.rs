@@ -342,6 +342,7 @@ pub fn status_str(result: &AgentResult) -> &'static str {
         JobStatus::Failed => "failed",
         JobStatus::Timeout => "timeout",
         JobStatus::RateLimited => "rate_limited",
+        JobStatus::QuotaExhausted => "quota_exhausted",
         JobStatus::Skipped => "skipped",
     }
 }
@@ -354,6 +355,7 @@ pub fn parse_status(value: &str) -> anyhow::Result<JobStatus> {
         "failed" => Ok(JobStatus::Failed),
         "timeout" => Ok(JobStatus::Timeout),
         "rate_limited" => Ok(JobStatus::RateLimited),
+        "quota_exhausted" => Ok(JobStatus::QuotaExhausted),
         "skipped" => Ok(JobStatus::Skipped),
         other => anyhow::bail!(
             "invalid job status: {other:?}; expected one of: {}",
