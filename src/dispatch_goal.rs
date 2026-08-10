@@ -10,16 +10,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum DispatchBackend {
+    #[default]
     Tmux,
     Herdr,
-}
-
-impl Default for DispatchBackend {
-    fn default() -> Self {
-        Self::Tmux
-    }
 }
 
 impl std::fmt::Display for DispatchBackend {
