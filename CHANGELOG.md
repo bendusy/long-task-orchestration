@@ -2,6 +2,8 @@
 
 ## v0.12.0 — 状态写不进去的时候，它会告诉你（2026-08-05）
 
+- **新增 opt-in Herdr dispatch backend**：`dispatch-goal` / `dispatch-and-wait` 默认仍走 tmux；显式 `--backend herdr` 时创建 Herdr tab、用原子 `agent prompt` 提交 prompt，并以 LTO 自有 `blocked_patterns` 与 `goal-self-report` 保持安全边界。Herdr server 未运行会 fail-closed，并提示启动 Herdr 或改用默认 tmux backend。
+
 这版起因于一次翻车：`~/.lto/` 下积了 11 个只有一条事件的 run 目录，全是真实项目（yihub 重写、am-graybox、aix-harness-tdd 等），而它们的 `state.json` 好端端躺在各自的仓库里。事件和状态被写进了两个互不相认的地方，历史 run 全部作废，一条也没法拿来做基线。
 
 追下去发现是同一个根：`validate_run_id` 只检查 id 的字符格式，从不看磁盘；而写事件前会无条件 `create_dir_all`。任何拿到一个 run-id 字符串的代码路径，都能凭空造出一个 run。顺着这条线又挖出四处同型问题——都是「写入端不校验、失败了不吭声」。

@@ -13,6 +13,7 @@ pub mod dispatch_goal;
 pub mod effect;
 pub mod event_emit;
 pub mod events;
+pub mod herdr_runner;
 pub mod ledger;
 pub mod llm_judge;
 pub mod merge_review;

@@ -271,9 +271,6 @@ fn finish_dispatch_window(
     let (Some(window_id), Some(state)) = (window_id, state) else {
         return Ok(());
     };
-    if !is_window_id(window_id) {
-        anyhow::bail!("invalid tmux window id {window_id:?}");
-    }
     let Some(index) = state.dispatch_windows.iter().rposition(|window| {
         window.window_id == window_id && window.runner == runner && window.status == "active"
     }) else {
@@ -285,9 +282,8 @@ fn finish_dispatch_window(
         .backend
         .parse::<DispatchBackend>()
         .map_err(|err| anyhow::anyhow!("invalid dispatch backend: {err}"))?;
-    match backend {
-        DispatchBackend::Tmux => {}
-        DispatchBackend::Herdr => anyhow::bail!("herdr backend not yet implemented"),
+    if backend == DispatchBackend::Tmux && !is_window_id(window_id) {
+        anyhow::bail!("invalid tmux window id {window_id:?}");
     }
 
     let cleanup_on_success = state.dispatch_windows[index].cleanup_on_success;
@@ -308,27 +304,40 @@ fn finish_dispatch_window(
         return Ok(());
     }
 
-    let tmux_bin = state.dispatch_windows[index].tmux_bin.clone();
-    let cleanup_command = format!(
-        "sleep 0.5; {} kill-window -t {}",
-        shell_single_quote(&tmux_bin),
-        shell_single_quote(window_id)
-    );
-    let output = std::process::Command::new(&tmux_bin)
-        .args(["run-shell", "-b", &cleanup_command])
-        .output()
-        .with_context(|| format!("schedule {tmux_bin} kill-window -t {window_id}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        state.dispatch_windows[index].status = "retained".to_string();
-        state.dispatch_windows[index].finished_at = Some(crate::state::iso_now());
-        state.dispatch_windows[index].retention_reason =
-            Some(format!("tmux cleanup scheduling failed: {stderr}"));
-        save_run_state(repo, run_id, state)?;
-        anyhow::bail!("tmux cleanup scheduling failed: {stderr}");
+    match backend {
+        DispatchBackend::Tmux => {
+            let tmux_bin = state.dispatch_windows[index].tmux_bin.clone();
+            let cleanup_command = format!(
+                "sleep 0.5; {} kill-window -t {}",
+                shell_single_quote(&tmux_bin),
+                shell_single_quote(window_id)
+            );
+            let output = std::process::Command::new(&tmux_bin)
+                .args(["run-shell", "-b", &cleanup_command])
+                .output()
+                .with_context(|| format!("schedule {tmux_bin} kill-window -t {window_id}"))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                state.dispatch_windows[index].status = "retained".to_string();
+                state.dispatch_windows[index].finished_at = Some(crate::state::iso_now());
+                state.dispatch_windows[index].retention_reason =
+                    Some(format!("tmux cleanup scheduling failed: {stderr}"));
+                save_run_state(repo, run_id, state)?;
+                anyhow::bail!("tmux cleanup scheduling failed: {stderr}");
+            }
+        }
+        DispatchBackend::Herdr => {
+            match crate::herdr_runner::close_dispatch_target(&state.dispatch_windows[index].target)?
+            {
+                crate::herdr_runner::CloseOutcome::Closed => {}
+                crate::herdr_runner::CloseOutcome::Missing => {
+                    eprintln!("warning: herdr pane {} already absent", window_id);
+                }
+            }
+        }
     }
 
     state.dispatch_windows[index].status = "cleaned".to_string();
@@ -343,7 +352,7 @@ fn finish_dispatch_window(
             actor_kind: "lto".to_string(),
             actor_id: Some(runner.to_string()),
             summary: format!("cleaned dispatch window {window_id}"),
-            fields: json!({"runner": runner, "window_id": window_id, "scheduled": true}),
+            fields: json!({"runner": runner, "window_id": window_id, "scheduled": backend == DispatchBackend::Tmux}),
             ..EventRecord::default()
         },
     );

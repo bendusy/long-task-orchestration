@@ -1,5 +1,6 @@
 use crate::commands::util;
 use crate::events::{self, EventRecord};
+use crate::herdr_runner;
 use crate::process::shell_single_quote;
 use crate::state::{self, DispatchWindowState};
 use crate::tmux_runner::{self, SkipPrompt, TmuxDispatchSafety, TmuxMode, TmuxRunnerConfig};
@@ -8,8 +9,6 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-const HERDR_NOT_IMPLEMENTED: &str = "herdr backend not yet implemented";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum DispatchBackend {
@@ -48,7 +47,7 @@ impl DispatchBackend {
     async fn prepare_dispatch_target(self, config: &TmuxRunnerConfig) -> anyhow::Result<String> {
         match self {
             Self::Tmux => Ok(tmux_runner::prepare_dispatch_target(config).await?),
-            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+            Self::Herdr => Ok(herdr_runner::prepare_dispatch_target(config).await?),
         }
     }
 
@@ -59,7 +58,7 @@ impl DispatchBackend {
     ) -> anyhow::Result<()> {
         match self {
             Self::Tmux => Ok(tmux_runner::wait_for_dispatch_ready(config, target).await?),
-            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+            Self::Herdr => Ok(herdr_runner::wait_for_dispatch_ready(config, target).await?),
         }
     }
 
@@ -71,7 +70,7 @@ impl DispatchBackend {
     ) -> anyhow::Result<()> {
         match self {
             Self::Tmux => Ok(tmux_runner::send_dispatch_text(config, target, text).await?),
-            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+            Self::Herdr => Ok(herdr_runner::send_dispatch_text(config, target, text).await?),
         }
     }
 
@@ -83,7 +82,7 @@ impl DispatchBackend {
     ) -> anyhow::Result<String> {
         match self {
             Self::Tmux => Ok(tmux_runner::confirm_tui_input(config, target, probe).await?),
-            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+            Self::Herdr => Ok(herdr_runner::confirm_tui_input(config, target, probe).await?),
         }
     }
 
@@ -97,7 +96,9 @@ impl DispatchBackend {
             Self::Tmux => {
                 Ok(tmux_runner::wait_for_capture_patterns(config, target, patterns).await?)
             }
-            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+            Self::Herdr => {
+                Ok(herdr_runner::wait_for_capture_patterns(config, target, patterns).await?)
+            }
         }
     }
 }
@@ -395,6 +396,9 @@ fn dispatch_window_id(
     options: &DispatchGoalOptions,
     target: &str,
 ) -> Option<String> {
+    if options.backend == DispatchBackend::Herdr {
+        return Some(target.to_string());
+    }
     if options.target.is_none() {
         return tmux_runner::window_id_from_target(target);
     }
@@ -589,6 +593,7 @@ fn run_dispatch(
         ),
         poll_interval: Duration::from_millis(500),
         capture_lines: 80,
+        working_dir: Some(cwd.to_path_buf()),
         tmux_bin: options
             .tmux_bin
             .clone()
@@ -675,6 +680,17 @@ fn run_dispatch(
             .backend
             .wait_for_capture_patterns(&config, &target, &plan.confirm_patterns)
             .await?;
+        if options.backend == DispatchBackend::Herdr {
+            herdr_runner::report_metadata(
+                &target,
+                &run_id,
+                goal_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("goal"),
+            )
+            .await;
+        }
         Ok::<_, anyhow::Error>(GoalDispatchOutcome {
             target,
             window_id,

@@ -68,6 +68,7 @@ pub struct TmuxRunnerConfig {
     pub ready_timeout: Duration,
     pub poll_interval: Duration,
     pub capture_lines: usize,
+    pub working_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -168,6 +169,7 @@ impl TmuxRunnerConfig {
             capture_lines: meta_u64(meta, &["tmux_capture_lines", "capture_lines"])
                 .and_then(|value| usize::try_from(value).ok())
                 .unwrap_or(DEFAULT_CAPTURE_LINES),
+            working_dir: None,
         })
     }
 }
@@ -355,11 +357,7 @@ pub async fn wait_for_capture_patterns(
     let deadline = Instant::now() + config.ready_timeout;
     loop {
         let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
-        if patterns.is_empty()
-            || patterns
-                .iter()
-                .any(|pattern| contains_case_insensitive(&capture, pattern))
-        {
+        if patterns.is_empty() || first_matching_pattern(&capture, patterns).is_some() {
             return Ok(capture);
         }
         if Instant::now() >= deadline {
@@ -637,11 +635,8 @@ async fn wait_until_ready(config: &TmuxRunnerConfig, target: &str) -> Result<(),
     let mut skipped = BTreeSet::new();
     loop {
         let capture = capture_pane(&config.tmux_bin, target, config.capture_lines).await?;
-        if let Some(pattern) = config
-            .dispatch_safety
-            .blocked_patterns
-            .iter()
-            .find(|pattern| contains_case_insensitive(&capture, pattern))
+        if let Some(pattern) =
+            first_matching_pattern(&capture, &config.dispatch_safety.blocked_patterns)
         {
             let hint = config
                 .dispatch_safety
@@ -656,11 +651,7 @@ async fn wait_until_ready(config: &TmuxRunnerConfig, target: &str) -> Result<(),
             sleep(config.poll_interval).await;
             continue;
         }
-        if config
-            .ready_patterns
-            .iter()
-            .any(|pattern| contains_case_insensitive(&capture, pattern))
-        {
+        if first_matching_pattern(&capture, &config.ready_patterns).is_some() {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -1269,7 +1260,17 @@ fn now_millis() -> u128 {
         .unwrap_or_default()
 }
 
-fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+pub(crate) fn first_matching_pattern<'a>(
+    haystack: &str,
+    patterns: &'a [String],
+) -> Option<&'a str> {
+    patterns
+        .iter()
+        .find(|pattern| contains_case_insensitive(haystack, pattern))
+        .map(String::as_str)
+}
+
+pub(crate) fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     let haystack = haystack.as_bytes();
     let needle = needle.as_bytes();
     !needle.is_empty()
@@ -1279,7 +1280,7 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
             .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
-fn one_line_tail(text: &str, limit: usize) -> String {
+pub(crate) fn one_line_tail(text: &str, limit: usize) -> String {
     let text = text.replace(['\n', '\r'], " ");
     let mut tail = text.chars().rev().take(limit).collect::<Vec<_>>();
     tail.reverse();
@@ -1524,6 +1525,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
         dispatch(&config, "echo ok", Duration::from_secs(1), None)
             .await
@@ -1592,6 +1594,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
         let summary = dispatch(&config, "echo ok", LOAD_TOLERANT_COMPLETION_TIMEOUT, None)
             .await
@@ -1632,6 +1635,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
         let summary = dispatch(
             &config,
@@ -1674,6 +1678,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
 
         let err = dispatch(
@@ -1708,6 +1713,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(30),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
 
         let err = dispatch(&config, "finish this", Duration::from_secs(30), None)
@@ -1766,6 +1772,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
         let payload = "x".repeat(5000);
         dispatch(&config, &payload, Duration::from_secs(1), None)
@@ -1808,6 +1815,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(1),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
         let err = dispatch(&config, "echo ok", Duration::from_secs(1), None)
             .await
@@ -1842,6 +1850,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
         dispatch(&config, "echo ok", Duration::from_secs(1), None)
             .await
@@ -1894,6 +1903,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(15),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
         let summary = dispatch(&config, "echo ok", Duration::from_secs(1), None)
             .await
@@ -1945,6 +1955,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(60),
             poll_interval: Duration::from_secs(30),
             capture_lines: 20,
+            working_dir: None,
         };
 
         let err = wait_until_ready(&config, "@42.0").await.unwrap_err();
@@ -1985,6 +1996,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(1),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
 
         let err = prepare_dispatch_target(&config).await.unwrap_err();
@@ -2014,6 +2026,7 @@ sys.exit(0)
             ready_timeout: Duration::from_secs(1),
             poll_interval: Duration::from_millis(1),
             capture_lines: 20,
+            working_dir: None,
         };
         let anchor = TmuxAnchor {
             session: "sess".to_string(),

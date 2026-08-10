@@ -90,6 +90,8 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 
 **Ⅵ 学习与维护**——每个决定**当时就记**：人工裁决用 `lto decision record` 落锚点（记下当时 HEAD+phase，漂移时 resume/check 列出待 `reaffirm`，不自动失效不做 TTL）；ADR 文档层另有 `scripts/write_decision.py`（写 ADR + 登记 artifact），两层并存不合并；装 am 时 `memory publish` 走 am 原生 CLI（唯一 sink），没装 am 本地 `.lto/` 就是全部记忆。`lto prune` 手动清理 closed+超期 run 大件（默认 dry-run，`--yes` 才删，active run 永不动）。历史 telemetry 只作 advisory，不自动路由。
 
+显式 `--backend herdr` 时，LTO 先探测 `herdr status`；server 未运行即 fail-closed，并提示启动 Herdr 或改用默认 tmux backend。Herdr 的 `agent wait`/`agent prompt` idle、done 只作启动就绪与传输状态，C5 `goal-self-report` 才是唯一主完成信号；blocked 仍由 LTO 自己对 `herdr pane read` 套 `blocked_patterns` 判定。
+
 ## ④ AUTHORITY & SOURCE · 权威层级
 
 | 要核对什么 | 权威顺序 |
