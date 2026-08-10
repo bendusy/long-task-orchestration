@@ -60,11 +60,13 @@ async fn ensure_server() -> anyhow::Result<()> {
     Err(anyhow!("herdr server is not running; {SERVER_HINT}"))
 }
 
-fn pane_read_args(config: &TmuxRunnerConfig, target: &str) -> Vec<String> {
+fn pane_read_args(config: &TmuxRunnerConfig, target: &str, source: &str) -> Vec<String> {
     vec![
         "pane".to_string(),
         "read".to_string(),
         target.to_string(),
+        "--source".to_string(),
+        source.to_string(),
         "--lines".to_string(),
         config.capture_lines.to_string(),
         "--format".to_string(),
@@ -73,7 +75,11 @@ fn pane_read_args(config: &TmuxRunnerConfig, target: &str) -> Vec<String> {
 }
 
 async fn read_pane(config: &TmuxRunnerConfig, target: &str) -> anyhow::Result<String> {
-    output(&pane_read_args(config, target)).await
+    output(&pane_read_args(config, target, "recent")).await
+}
+
+async fn read_visible_pane(config: &TmuxRunnerConfig, target: &str) -> anyhow::Result<String> {
+    output(&pane_read_args(config, target, "visible")).await
 }
 
 async fn agent_present(target: &str) -> anyhow::Result<bool> {
@@ -116,11 +122,31 @@ pub async fn prepare_dispatch_target(config: &TmuxRunnerConfig) -> anyhow::Resul
     ];
     let text = output(&args).await?;
     let value: Value = serde_json::from_str(&text).context("parse herdr tab create response")?;
-    value
+    let target = value
         .pointer("/result/root_pane/pane_id")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| anyhow!("herdr tab create response has no root pane id"))
+        .ok_or_else(|| anyhow!("herdr tab create response has no root pane id"))?;
+    wait_for_shell_ready(config, &target).await?;
+    Ok(target)
+}
+
+async fn wait_for_shell_ready(config: &TmuxRunnerConfig, target: &str) -> anyhow::Result<()> {
+    let deadline = Instant::now() + config.ready_timeout;
+    loop {
+        let capture = read_visible_pane(config, target).await?;
+        if !capture.trim().is_empty() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "herdr pane {target} shell did not become ready within {}s; last capture: {}",
+                config.ready_timeout.as_secs(),
+                one_line_tail(&capture, 500)
+            ));
+        }
+        sleep(config.poll_interval).await;
+    }
 }
 
 pub async fn wait_for_dispatch_ready(
@@ -199,20 +225,13 @@ pub async fn send_dispatch_text(
         output(&args).await?;
         return Ok(());
     }
-    let send_args = vec![
+    let args = vec![
         "pane".to_string(),
-        "send-text".to_string(),
+        "run".to_string(),
         target.to_string(),
         text.to_string(),
     ];
-    output(&send_args).await?;
-    let key_args = vec![
-        "pane".to_string(),
-        "send-keys".to_string(),
-        target.to_string(),
-        "enter".to_string(),
-    ];
-    output(&key_args).await.map(|_| ())
+    output(&args).await.map(|_| ())
 }
 
 fn is_shell_command(text: &str) -> bool {

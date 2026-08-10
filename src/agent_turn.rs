@@ -330,11 +330,19 @@ fn finish_dispatch_window(
             }
         }
         DispatchBackend::Herdr => {
-            match crate::herdr_runner::close_dispatch_target(&state.dispatch_windows[index].target)?
+            match crate::herdr_runner::close_dispatch_target(&state.dispatch_windows[index].target)
             {
-                crate::herdr_runner::CloseOutcome::Closed => {}
-                crate::herdr_runner::CloseOutcome::Missing => {
+                Ok(crate::herdr_runner::CloseOutcome::Closed) => {}
+                Ok(crate::herdr_runner::CloseOutcome::Missing) => {
                     eprintln!("warning: herdr pane {} already absent", window_id);
+                }
+                Err(err) => {
+                    let reason = format!("herdr cleanup failed: {err}");
+                    state.dispatch_windows[index].status = "retained".to_string();
+                    state.dispatch_windows[index].finished_at = Some(crate::state::iso_now());
+                    state.dispatch_windows[index].retention_reason = Some(reason.clone());
+                    save_run_state(repo, run_id, state)?;
+                    anyhow::bail!(reason);
                 }
             }
         }

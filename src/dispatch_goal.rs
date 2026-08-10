@@ -246,7 +246,7 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
         &options.runner,
         constraints.as_deref(),
     )?;
-    let cwd = options.cwd.clone().unwrap_or_else(|| repo.to_path_buf());
+    let cwd = absolutize(options.cwd.as_deref().unwrap_or(repo))?;
     let degraded = |err: anyhow::Error| HookStatus {
         status: "degraded".to_string(),
         detail: err.to_string(),
@@ -696,9 +696,6 @@ fn run_dispatch(
         })
     });
     result.map_err(|err| {
-        if options.backend == DispatchBackend::Herdr {
-            return err;
-        }
         if let Some(window_id) = created_window_id.as_deref() {
             let reason = format!("dispatch failed: {err}");
             if let Err(save_err) = retain_dispatch_window(ctx, window_id, &reason) {
@@ -706,7 +703,11 @@ fn run_dispatch(
             }
             eprintln!("dispatch failed; window {window_id} retained for troubleshooting");
         }
-        anyhow!("dispatch-goal tmux failure in {}: {err}", repo.display())
+        anyhow!(
+            "dispatch-goal {} failure in {}: {err}",
+            options.backend,
+            repo.display()
+        )
     })
 }
 
