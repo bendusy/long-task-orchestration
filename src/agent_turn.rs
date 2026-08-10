@@ -1,3 +1,4 @@
+use crate::dispatch_goal::DispatchBackend;
 use crate::events::{self, EventRecord};
 use crate::process::shell_single_quote;
 use crate::state;
@@ -279,6 +280,15 @@ fn finish_dispatch_window(
         eprintln!("{}", window_record_status_message(state, window_id, runner));
         return Ok(());
     };
+
+    let backend = state.dispatch_windows[index]
+        .backend
+        .parse::<DispatchBackend>()
+        .map_err(|err| anyhow::anyhow!("invalid dispatch backend: {err}"))?;
+    match backend {
+        DispatchBackend::Tmux => {}
+        DispatchBackend::Herdr => anyhow::bail!("herdr backend not yet implemented"),
+    }
 
     let cleanup_on_success = state.dispatch_windows[index].cleanup_on_success;
     if rc != Some(0) || !cleanup_on_success {
@@ -657,6 +667,7 @@ mod tests {
                 window_id: "@42".to_string(),
                 target: "@42.0".to_string(),
                 runner: "codex".to_string(),
+                backend: "tmux".to_string(),
                 tmux_bin: tmux_bin.display().to_string(),
                 cleanup_on_success,
                 status: "active".to_string(),
@@ -1390,6 +1401,7 @@ mod tests {
                 window_id: window_id.clone(),
                 target,
                 runner: "codex".to_string(),
+                backend: "tmux".to_string(),
                 tmux_bin: wrapper.display().to_string(),
                 cleanup_on_success: true,
                 status: "active".to_string(),

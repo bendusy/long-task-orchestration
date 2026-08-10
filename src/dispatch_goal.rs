@@ -9,6 +9,99 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+const HERDR_NOT_IMPLEMENTED: &str = "herdr backend not yet implemented";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DispatchBackend {
+    Tmux,
+    Herdr,
+}
+
+impl Default for DispatchBackend {
+    fn default() -> Self {
+        Self::Tmux
+    }
+}
+
+impl std::fmt::Display for DispatchBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Tmux => "tmux",
+            Self::Herdr => "herdr",
+        })
+    }
+}
+
+impl std::str::FromStr for DispatchBackend {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "tmux" => Ok(Self::Tmux),
+            "herdr" => Ok(Self::Herdr),
+            other => Err(format!("unknown dispatch backend: {other}")),
+        }
+    }
+}
+
+impl DispatchBackend {
+    async fn prepare_dispatch_target(self, config: &TmuxRunnerConfig) -> anyhow::Result<String> {
+        match self {
+            Self::Tmux => Ok(tmux_runner::prepare_dispatch_target(config).await?),
+            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+        }
+    }
+
+    async fn wait_for_dispatch_ready(
+        self,
+        config: &TmuxRunnerConfig,
+        target: &str,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Tmux => Ok(tmux_runner::wait_for_dispatch_ready(config, target).await?),
+            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+        }
+    }
+
+    async fn send_dispatch_text(
+        self,
+        config: &TmuxRunnerConfig,
+        target: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Tmux => Ok(tmux_runner::send_dispatch_text(config, target, text).await?),
+            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+        }
+    }
+
+    async fn confirm_tui_input(
+        self,
+        config: &TmuxRunnerConfig,
+        target: &str,
+        probe: &str,
+    ) -> anyhow::Result<String> {
+        match self {
+            Self::Tmux => Ok(tmux_runner::confirm_tui_input(config, target, probe).await?),
+            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+        }
+    }
+
+    async fn wait_for_capture_patterns(
+        self,
+        config: &TmuxRunnerConfig,
+        target: &str,
+        patterns: &[String],
+    ) -> anyhow::Result<String> {
+        match self {
+            Self::Tmux => {
+                Ok(tmux_runner::wait_for_capture_patterns(config, target, patterns).await?)
+            }
+            Self::Herdr => anyhow::bail!(HERDR_NOT_IMPLEMENTED),
+        }
+    }
+}
+
 const LTO_HOOK_MARKER: &str = "long-task-orchestration";
 const DEFAULT_COMPLETION_WAIT_SEC: u64 = 600;
 const DEFAULT_DISPATCH_READY_TIMEOUT_SEC: u64 = 60;
@@ -19,6 +112,7 @@ const GOAL_PROMPT_MAX_CHARS: usize = 500;
 #[derive(Debug, Clone)]
 pub struct DispatchGoalOptions {
     pub run_id: Option<String>,
+    pub backend: DispatchBackend,
     pub runner: String,
     pub goal: PathBuf,
     pub target: Option<String>,
@@ -77,6 +171,7 @@ pub fn cmd_dispatch_and_wait(
         repo,
         DispatchGoalOptions {
             run_id: Some(run_id.clone()),
+            backend: options.backend,
             ..options
         },
     )?;
@@ -273,6 +368,7 @@ fn persist_dispatch_window(
     }) {
         window.target = target.to_string();
         window.tmux_bin = config.tmux_bin.clone();
+        window.backend = options.backend.to_string();
         window.cleanup_on_success = !options.keep_window;
         window.status = "active".to_string();
         window.finished_at = None;
@@ -284,6 +380,7 @@ fn persist_dispatch_window(
         target: target.to_string(),
         runner: options.runner.clone(),
         tmux_bin: config.tmux_bin.clone(),
+        backend: options.backend.to_string(),
         cleanup_on_success: !options.keep_window,
         status: "active".to_string(),
         created_at: crate::state::iso_now(),
@@ -502,7 +599,7 @@ fn run_dispatch(
         .build()?;
     let mut created_window_id = None;
     let result = runtime.block_on(async {
-        let target = tmux_runner::prepare_dispatch_target(&config).await?;
+        let target = options.backend.prepare_dispatch_target(&config).await?;
         let window_id = dispatch_window_id(ctx, options, &target);
         if let Some(window_id) = window_id.as_deref() {
             persist_dispatch_window(ctx, options, &config, &target, window_id).map_err(|err| {
@@ -511,12 +608,14 @@ fn run_dispatch(
                 ))
             })?;
             created_window_id = Some(window_id.to_string());
-            tmux_runner::send_dispatch_text(
-                &config,
-                &target,
-                &format!("export LTO_WINDOW_ID={}", shell_single_quote(window_id)),
-            )
-            .await?;
+            options
+                .backend
+                .send_dispatch_text(
+                    &config,
+                    &target,
+                    &format!("export LTO_WINDOW_ID={}", shell_single_quote(window_id)),
+                )
+                .await?;
         }
         // Inline the real window_id into the self-report command (preference ②).
         plan.prompt = goal_prompt(
@@ -526,24 +625,34 @@ fn run_dispatch(
             &options.runner,
             window_id.as_deref().unwrap_or("unknown"),
         );
-        tmux_runner::send_dispatch_text(
-            &config,
-            &target,
-            &format!(
-                "export LTO_REPO={}",
-                shell_single_quote(&repo_path.display().to_string())
-            ),
-        )
-        .await?;
-        tmux_runner::send_dispatch_text(
-            &config,
-            &target,
-            &format!("cd {}", shell_single_quote(&cwd.display().to_string())),
-        )
-        .await?;
+        options
+            .backend
+            .send_dispatch_text(
+                &config,
+                &target,
+                &format!(
+                    "export LTO_REPO={}",
+                    shell_single_quote(&repo_path.display().to_string())
+                ),
+            )
+            .await?;
+        options
+            .backend
+            .send_dispatch_text(
+                &config,
+                &target,
+                &format!("cd {}", shell_single_quote(&cwd.display().to_string())),
+            )
+            .await?;
         if let Some(launch) = &plan.launch {
-            tmux_runner::send_dispatch_text(&config, &target, launch).await?;
-            tmux_runner::wait_for_dispatch_ready(&config, &target).await?;
+            options
+                .backend
+                .send_dispatch_text(&config, &target, launch)
+                .await?;
+            options
+                .backend
+                .wait_for_dispatch_ready(&config, &target)
+                .await?;
         }
         // When the launch line already carries the prompt (agy -i '<prompt>'),
         // the prompt is submitted at startup — do NOT probe or re-send it, or
@@ -552,14 +661,21 @@ fn run_dispatch(
         if !plan.launch_includes_prompt {
             if plan.needs_probe {
                 let probe = format!("LTO_PROBE_{}", now_millis());
-                let _ = tmux_runner::confirm_tui_input(&config, &target, &probe).await?;
+                let _ = options
+                    .backend
+                    .confirm_tui_input(&config, &target, &probe)
+                    .await?;
             }
-            tmux_runner::send_dispatch_text(&config, &target, &plan.prompt).await?;
-        }
-        let capture =
-            tmux_runner::wait_for_capture_patterns(&config, &target, &plan.confirm_patterns)
+            options
+                .backend
+                .send_dispatch_text(&config, &target, &plan.prompt)
                 .await?;
-        Ok::<_, tmux_runner::TmuxRunnerError>(GoalDispatchOutcome {
+        }
+        let capture = options
+            .backend
+            .wait_for_capture_patterns(&config, &target, &plan.confirm_patterns)
+            .await?;
+        Ok::<_, anyhow::Error>(GoalDispatchOutcome {
             target,
             window_id,
             capture,
@@ -569,6 +685,9 @@ fn run_dispatch(
         })
     });
     result.map_err(|err| {
+        if options.backend == DispatchBackend::Herdr {
+            return err;
+        }
         if let Some(window_id) = created_window_id.as_deref() {
             let reason = format!("dispatch failed: {err}");
             if let Err(save_err) = retain_dispatch_window(ctx, window_id, &reason) {
@@ -1382,6 +1501,7 @@ mod tests {
     fn test_options(goal: &Path) -> DispatchGoalOptions {
         DispatchGoalOptions {
             run_id: Some("r1".to_string()),
+            backend: DispatchBackend::Tmux,
             runner: "codex".to_string(),
             goal: goal.to_path_buf(),
             target: None,
@@ -1439,6 +1559,7 @@ mod tests {
                     window_id: "@9".to_string(),
                     target: "@9.0".to_string(),
                     runner: "codex".to_string(),
+                    backend: "tmux".to_string(),
                     tmux_bin: "tmux".to_string(),
                     cleanup_on_success: true,
                     status: "active".to_string(),

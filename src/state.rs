@@ -418,6 +418,8 @@ pub struct DispatchWindowState {
     pub window_id: String,
     pub target: String,
     pub runner: String,
+    #[serde(default = "default_dispatch_backend")]
+    pub backend: String,
     pub tmux_bin: String,
     pub cleanup_on_success: bool,
     pub status: String,
@@ -426,6 +428,10 @@ pub struct DispatchWindowState {
     pub finished_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention_reason: Option<String>,
+}
+
+fn default_dispatch_backend() -> String {
+    "tmux".to_string()
 }
 
 pub fn iso_now() -> String {
@@ -703,6 +709,34 @@ mod tests {
             1,
             "temporary file should be removed after persist"
         );
+    }
+
+    #[test]
+    fn old_dispatch_window_state_without_backend_defaults_to_tmux() {
+        let mut raw = serde_json::to_value(LtoState {
+            run_id: "r1".into(),
+            dispatch_windows: vec![DispatchWindowState {
+                window_id: "@1".into(),
+                target: "@1.0".into(),
+                runner: "codex".into(),
+                backend: "tmux".into(),
+                tmux_bin: "tmux".into(),
+                cleanup_on_success: true,
+                status: "active".into(),
+                created_at: iso_now(),
+                finished_at: None,
+                retention_reason: None,
+            }],
+            ..LtoState::default()
+        })
+        .unwrap();
+        raw["dispatch_windows"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("backend");
+
+        let parsed: LtoState = serde_json::from_value(raw).unwrap();
+        assert_eq!(parsed.dispatch_windows[0].backend, "tmux");
     }
 
     #[test]

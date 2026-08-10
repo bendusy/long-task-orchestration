@@ -943,6 +943,7 @@ mod tests {
             window_id: window_id.into(),
             target: format!("{window_id}.1"),
             runner: "codex".into(),
+            backend: "tmux".into(),
             tmux_bin: "tmux".into(),
             cleanup_on_success: true,
             status: status.into(),

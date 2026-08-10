@@ -681,6 +681,8 @@ pub struct RunnerCommand {
 pub struct DispatchGoalCommand {
     #[arg(long)]
     run_id: Option<String>,
+    #[arg(long, value_enum, default_value_t = crate::dispatch_goal::DispatchBackend::Tmux)]
+    backend: crate::dispatch_goal::DispatchBackend,
     #[arg(long, value_parser = ["codex", "pi", "agy", "aix"])]
     runner: String,
     #[arg(long)]
@@ -1469,6 +1471,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 &args.repo,
                 crate::dispatch_goal::DispatchGoalOptions {
                     run_id: cmd.run_id,
+                    backend: cmd.backend,
                     runner: cmd.runner,
                     goal: cmd.goal,
                     target: cmd.target,
@@ -1492,6 +1495,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                 &args.repo,
                 crate::dispatch_goal::DispatchGoalOptions {
                     run_id: d.run_id,
+                    backend: d.backend,
                     runner: d.runner,
                     goal: d.goal,
                     target: d.target,
