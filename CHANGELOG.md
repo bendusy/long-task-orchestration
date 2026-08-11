@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.13.1 — 后台 pane 的「done」也是就绪（2026-08-11）
+
+- **修复 `--backend herdr` 复用已有 pane（`--target`）时就绪等待永不返回**：herdr 对未被 focus 的后台 pane 完成态标 `done` 而非 `idle`，`agent wait --until idle` 单值等待因此超时。首轮冒烟用全新 tab，codex 初次起动恰好判 idle，绕过了这个分支；host 在 herdr 内实测复用 pane 场景时暴露。现改为等 `idle`/`done`/`blocked` 三态，`blocked` 返回后仍由既有 `blocked_patterns` 检查拒绝，安全边界不变。真机验证：`--target` 重派全周期通过（`agent prompt` 提交、`goal-self-report` 完成事件、finish 关 pane、state 记 `cleaned`）。
+
 ## v0.13.0 — 派工窗口不再只有 tmux 一种（2026-08-10）
 
 - **新增 opt-in Herdr dispatch backend**：`dispatch-goal` / `dispatch-and-wait` 默认仍走 tmux；显式 `--backend herdr` 时创建 Herdr tab、用原子 `agent prompt` 提交 prompt，并以 LTO 自有 `blocked_patterns` 与 `goal-self-report` 保持安全边界。Herdr server 未运行会 fail-closed，并提示启动 Herdr 或改用默认 tmux backend。Herdr 的 idle/done/`prompt --wait` 一律不当任务完成语义——终端复用器观察的是屏幕，不是任务语义；C5 `goal-self-report` 仍是唯一主完成信号。
