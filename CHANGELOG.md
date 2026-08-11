@@ -1,6 +1,9 @@
 # Changelog
 
-## v0.13.1 — 后台 pane 的「done」也是就绪（2026-08-11）
+## v0.13.2 — 派工 pane 回到你所在的 space（2026-08-11）
+
+- **修复 herdr 派工 pane 落到别的 workspace**：`tab create` 此前不传 `--workspace`，herdr 自行选择落点，pane 可能开在用户看不到的 space（实测两次分别落 w8、w7）。现从 `HERDR_WORKSPACE_ID` 读 host 所在 workspace 传入，派工 pane 始终依附 host 的 space——对齐 tmux backend「派出窗口依附主 session」的约束。host 不在 herdr 内时该变量不存在，行为不变。
+- **修复 dispatch 确认在 runner 起步慢时误报失败**：确认步骤原来只认屏幕 pattern（`Goal active`/`Working` 等），codex 首步跑得久时这些字样在被读到前就滚出 TUI，60s 必超时——而 goal 实际已提交、runner 已在执行（实测两次「失败」的派工都自报了 rc=0）。herdr 的 `agent prompt` 是原子提交，`agent_status=working` 本身就证明 goal 已被接受；确认现在接受 working 状态，屏幕 pattern 保留为快路径，blocked 检查顺序不变。
 
 - **修复 `--backend herdr` 复用已有 pane（`--target`）时就绪等待永不返回**：herdr 对未被 focus 的后台 pane 完成态标 `done` 而非 `idle`，`agent wait --until idle` 单值等待因此超时。首轮冒烟用全新 tab，codex 初次起动恰好判 idle，绕过了这个分支；host 在 herdr 内实测复用 pane 场景时暴露。现改为等 `idle`/`done`/`blocked` 三态，`blocked` 返回后仍由既有 `blocked_patterns` 检查拒绝，安全边界不变。真机验证：`--target` 重派全周期通过（`agent prompt` 提交、`goal-self-report` 完成事件、finish 关 pane、state 记 `cleaned`）。
 

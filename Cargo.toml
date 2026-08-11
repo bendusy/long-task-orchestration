@@ -1,6 +1,6 @@
 [package]
 name = "lto-rs"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2024"
 license = "MIT"
 description = "Rust v2 core for Long Task Orchestration"
