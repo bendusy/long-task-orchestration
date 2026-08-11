@@ -1,8 +1,12 @@
 # Changelog
 
-## v0.12.0 — 状态写不进去的时候，它会告诉你（2026-08-05）
+## v0.13.0 — 派工窗口不再只有 tmux 一种（2026-08-10）
 
-- **新增 opt-in Herdr dispatch backend**：`dispatch-goal` / `dispatch-and-wait` 默认仍走 tmux；显式 `--backend herdr` 时创建 Herdr tab、用原子 `agent prompt` 提交 prompt，并以 LTO 自有 `blocked_patterns` 与 `goal-self-report` 保持安全边界。Herdr server 未运行会 fail-closed，并提示启动 Herdr 或改用默认 tmux backend。
+- **新增 opt-in Herdr dispatch backend**：`dispatch-goal` / `dispatch-and-wait` 默认仍走 tmux；显式 `--backend herdr` 时创建 Herdr tab、用原子 `agent prompt` 提交 prompt，并以 LTO 自有 `blocked_patterns` 与 `goal-self-report` 保持安全边界。Herdr server 未运行会 fail-closed，并提示启动 Herdr 或改用默认 tmux backend。Herdr 的 idle/done/`prompt --wait` 一律不当任务完成语义——终端复用器观察的是屏幕，不是任务语义；C5 `goal-self-report` 仍是唯一主完成信号。
+- **真机冒烟后的三处硬化**：① 建 tab 后轮询 `pane read` 直到 shell 真就绪（后台 pane 的 PTY 渲染有数秒延迟，就绪前发的 export/cd 会整行丢失）；② shell 行改走 `pane run`（`pane send-text` + `send-keys enter` 即使提示符可见也不可靠，实测丢行——codex 因此落在 $HOME 弹 trust prompt）；③ herdr 派工失败与 finish 关 pane 失败对齐 tmux 的 retention 语义：标 `retained` + reason 存 state，pane 留给人查看，不静默丢弃。
+- 全周期真机验证（herdr 0.8.0）：codex 落在 repo 无 trust prompt、goal 经 `agent prompt` 原子提交、`goal-self-report` 完成事件到达、finish 自动关 pane、state 记 `cleaned`；blocked_patterns 在真机两次拦住 trust prompt（herdr 自判 idle 的场景被 LTO 自有检测兜住）。
+
+## v0.12.0 — 状态写不进去的时候，它会告诉你（2026-08-05）
 
 这版起因于一次翻车：`~/.lto/` 下积了 11 个只有一条事件的 run 目录，全是真实项目（yihub 重写、am-graybox、aix-harness-tdd 等），而它们的 `state.json` 好端端躺在各自的仓库里。事件和状态被写进了两个互不相认的地方，历史 run 全部作废，一条也没法拿来做基线。
 
