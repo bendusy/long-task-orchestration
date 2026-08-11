@@ -111,7 +111,7 @@ pub async fn prepare_dispatch_target(config: &TmuxRunnerConfig) -> anyhow::Resul
         .as_deref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| ".".to_string());
-    let args = vec![
+    let mut args = vec![
         "tab".to_string(),
         "create".to_string(),
         "--cwd".to_string(),
@@ -120,6 +120,14 @@ pub async fn prepare_dispatch_target(config: &TmuxRunnerConfig) -> anyhow::Resul
         config.window_name.clone(),
         "--no-focus".to_string(),
     ];
+    // Keep dispatch tabs in the host's own workspace; without --workspace,
+    // herdr picks one on its own and the pane can land in another space.
+    if let Ok(workspace) = std::env::var("HERDR_WORKSPACE_ID")
+        && !workspace.is_empty()
+    {
+        args.push("--workspace".to_string());
+        args.push(workspace);
+    }
     let text = output(&args).await?;
     let value: Value = serde_json::from_str(&text).context("parse herdr tab create response")?;
     let target = value
@@ -256,6 +264,20 @@ pub async fn confirm_tui_input(
     read_pane(config, target).await
 }
 
+async fn agent_status(target: &str) -> anyhow::Result<Option<String>> {
+    let args = vec!["agent".to_string(), "get".to_string(), target.to_string()];
+    let result = run(&args).await?;
+    if !result.status.success() {
+        return Ok(None);
+    }
+    let value: Value =
+        serde_json::from_slice(&result.stdout).context("parse herdr agent get response")?;
+    Ok(value
+        .pointer("/result/agent/agent_status")
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
 pub async fn wait_for_capture_patterns(
     config: &TmuxRunnerConfig,
     target: &str,
@@ -266,6 +288,12 @@ pub async fn wait_for_capture_patterns(
         let capture = read_pane(config, target).await?;
         reject_blocked(config, target, &capture)?;
         if patterns.is_empty() || first_matching_pattern(&capture, patterns).is_some() {
+            return Ok(capture);
+        }
+        // agent prompt submits atomically, so "working" already proves the
+        // runner accepted the goal — confirm patterns can scroll off the TUI
+        // before we ever read them when the runner takes long on its first step.
+        if agent_status(target).await? == Some("working".to_string()) {
             return Ok(capture);
         }
         if Instant::now() >= deadline {
