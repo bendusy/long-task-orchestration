@@ -157,12 +157,19 @@ pub async fn wait_for_dispatch_ready(
         return wait_for_stable_capture(config, target).await;
     }
     let deadline = Instant::now() + config.ready_timeout;
+    // herdr marks unfocused background panes "done" instead of "idle", so a
+    // reused --target pane never matches --until idle alone; blocked returns
+    // fast and is rejected below by reject_blocked.
     let args = vec![
         "agent".to_string(),
         "wait".to_string(),
         target.to_string(),
         "--until".to_string(),
         "idle".to_string(),
+        "--until".to_string(),
+        "done".to_string(),
+        "--until".to_string(),
+        "blocked".to_string(),
         "--timeout".to_string(),
         config
             .ready_timeout
