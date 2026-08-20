@@ -39,6 +39,30 @@ impl std::str::FromStr for DispatchBackend {
 }
 
 impl DispatchBackend {
+    /// Default backend when `--backend` is not passed: pick the multiplexer
+    /// actually managing the host agent, so dispatched windows land where the
+    /// user can see them. An explicit inner tmux ($TMUX) wins over an outer
+    /// herdr, because the host's own pane lives in that tmux.
+    pub fn detect_default() -> Self {
+        Self::detect_from(
+            std::env::var_os("TMUX").is_some(),
+            std::env::var_os("HERDR_ENV").is_some()
+                || std::env::var_os("HERDR_SOCKET_PATH").is_some(),
+        )
+    }
+
+    fn detect_from(inside_tmux: bool, inside_herdr: bool) -> Self {
+        if inside_tmux {
+            Self::Tmux
+        } else if inside_herdr {
+            Self::Herdr
+        } else {
+            Self::Tmux
+        }
+    }
+}
+
+impl DispatchBackend {
     async fn prepare_dispatch_target(self, config: &TmuxRunnerConfig) -> anyhow::Result<String> {
         match self {
             Self::Tmux => Ok(tmux_runner::prepare_dispatch_target(config).await?),
@@ -1509,6 +1533,26 @@ fn now_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_detection_prefers_inner_tmux_then_herdr() {
+        assert_eq!(
+            DispatchBackend::detect_from(true, false),
+            DispatchBackend::Tmux
+        );
+        assert_eq!(
+            DispatchBackend::detect_from(true, true),
+            DispatchBackend::Tmux
+        );
+        assert_eq!(
+            DispatchBackend::detect_from(false, true),
+            DispatchBackend::Herdr
+        );
+        assert_eq!(
+            DispatchBackend::detect_from(false, false),
+            DispatchBackend::Tmux
+        );
+    }
 
     fn test_options(goal: &Path) -> DispatchGoalOptions {
         DispatchGoalOptions {

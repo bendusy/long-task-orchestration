@@ -681,7 +681,10 @@ pub struct RunnerCommand {
 pub struct DispatchGoalCommand {
     #[arg(long)]
     run_id: Option<String>,
-    #[arg(long, value_enum, default_value_t = crate::dispatch_goal::DispatchBackend::Tmux)]
+    /// Dispatch backend. Default auto-detects the multiplexer managing the
+    /// host agent: tmux if $TMUX is set, herdr if $HERDR_ENV/$HERDR_SOCKET_PATH
+    /// is set, tmux otherwise.
+    #[arg(long, value_enum, default_value_t = crate::dispatch_goal::DispatchBackend::detect_default())]
     backend: crate::dispatch_goal::DispatchBackend,
     #[arg(long, value_parser = ["codex", "pi", "agy", "aix"])]
     runner: String,
