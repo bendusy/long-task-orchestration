@@ -1013,6 +1013,22 @@ impl RepoFixture {
             .args(args)
             .env_remove("LTO_HOST_RUNTIME")
             .env("C2_HEALTHCHECK_ROOT", &self.root);
+        // The suite may run inside a multiplexer, whose markers `lto start`
+        // now reads as the host runtime. Clearing them keeps these cases
+        // testing the unknown-host path rather than the developer's terminal.
+        for marker in [
+            "TMUX",
+            "ORCA_TERMINAL_HANDLE",
+            "ORCA_WORKSPACE_ID",
+            "ORCA_WORKTREE_ID",
+            "ORCA_TAB_ID",
+            "HERDR_ENV",
+            "HERDR_SOCKET_PATH",
+            "PASEO_TERMINAL_ID",
+            "PASEO_AGENT_ID",
+        ] {
+            command.env_remove(marker);
+        }
         command
     }
 

@@ -226,13 +226,31 @@ fn merge_agent_runs(current: &Value, next: &mut Value) {
             let mut merged = current.clone();
             for (task_key, mut next_entries) in next_runs.clone() {
                 if let Some(current_entries) = merged.get(&task_key) {
-                    merge_json_array_by_key(current_entries, &mut next_entries, json_value_key);
+                    merge_json_array_by_key(current_entries, &mut next_entries, agent_run_key);
                 }
                 merged.insert(task_key, next_entries);
             }
             *next = Value::Object(merged);
         }
-        _ => merge_json_array_by_key(current, next, json_value_key),
+        _ => merge_json_array_by_key(current, next, agent_run_key),
+    }
+}
+
+/// Identity of one recorded attempt. Keying on the whole serialized value
+/// makes the merge dedupe on bytes, so a single result that gets written, read
+/// back and written again lands twice whenever its JSON differs at all — and
+/// an `AgentResult` carries `elapsed_sec` and other run-time measurements that
+/// need not round-trip identically. `job_id` plus the attempt number names the
+/// attempt itself, which is what the merge is trying to keep unique.
+fn agent_run_key(value: &Value) -> String {
+    match (
+        value.get("job_id").and_then(Value::as_str),
+        value.get("attempts"),
+    ) {
+        (Some(job_id), Some(attempts)) => format!("{job_id}#{attempts}"),
+        // Older runs predate these fields; fall back rather than collapsing
+        // every legacy entry onto one key.
+        _ => json_value_key(value),
     }
 }
 
@@ -937,6 +955,52 @@ mod tests {
     use serde_json::json;
     use std::process::Command;
     use std::sync::{Arc, Barrier};
+
+    /// The autopilot path saves the run, reads it back and saves again, so one
+    /// worker result passes through the merge twice. Keying the merge on the
+    /// serialized value made that a duplicate whenever the round trip changed
+    /// a byte of `elapsed_sec`, and callers counting attempts then saw two.
+    #[test]
+    fn agent_runs_merge_dedupes_one_attempt_across_a_round_trip() {
+        let recorded = json!({
+            "T1": [{
+                "job_id": "autopilot-T1",
+                "attempts": 1,
+                "runner": "tmux",
+                "cost": {"elapsed_sec": 1.25}
+            }]
+        });
+        // Same attempt, re-serialized with a measurement that did not survive
+        // the round trip unchanged.
+        let mut reloaded = json!({
+            "T1": [{
+                "job_id": "autopilot-T1",
+                "attempts": 1,
+                "runner": "tmux",
+                "cost": {"elapsed_sec": 1.2500000000000002}
+            }]
+        });
+        merge_agent_runs(&recorded, &mut reloaded);
+        assert_eq!(reloaded["T1"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn agent_runs_merge_keeps_distinct_attempts_of_one_job() {
+        let recorded = json!({"T1": [{"job_id": "j", "attempts": 1}]});
+        let mut next = json!({"T1": [{"job_id": "j", "attempts": 2}]});
+        merge_agent_runs(&recorded, &mut next);
+        assert_eq!(next["T1"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn agent_runs_merge_falls_back_for_entries_without_job_id() {
+        // Runs written before these fields existed must not all collapse onto
+        // one key.
+        let recorded = json!({"T1": [{"runner": "tmux", "note": "a"}]});
+        let mut next = json!({"T1": [{"runner": "tmux", "note": "b"}]});
+        merge_agent_runs(&recorded, &mut next);
+        assert_eq!(next["T1"].as_array().unwrap().len(), 2);
+    }
 
     fn dispatch_window(window_id: &str, status: &str) -> DispatchWindowState {
         DispatchWindowState {
