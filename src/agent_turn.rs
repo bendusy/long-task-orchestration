@@ -330,21 +330,22 @@ fn finish_dispatch_window(
             }
         }
         DispatchBackend::Herdr => {
-            match crate::herdr_runner::close_dispatch_target(&state.dispatch_windows[index].target)
-            {
-                Ok(crate::herdr_runner::CloseOutcome::Closed) => {}
-                Ok(crate::herdr_runner::CloseOutcome::Missing) => {
-                    eprintln!("warning: herdr pane {} already absent", window_id);
-                }
-                Err(err) => {
-                    let reason = format!("herdr cleanup failed: {err}");
-                    state.dispatch_windows[index].status = "retained".to_string();
-                    state.dispatch_windows[index].finished_at = Some(crate::state::iso_now());
-                    state.dispatch_windows[index].retention_reason = Some(reason.clone());
-                    save_run_state(repo, run_id, state)?;
-                    anyhow::bail!(reason);
-                }
-            }
+            let target = state.dispatch_windows[index].target.clone();
+            let closed = crate::herdr_runner::close_dispatch_target(&target)
+                .map(|outcome| outcome == crate::herdr_runner::CloseOutcome::Closed);
+            record_gui_cleanup(repo, run_id, state, index, backend, closed)?;
+        }
+        DispatchBackend::Orca => {
+            let target = state.dispatch_windows[index].target.clone();
+            let closed = crate::orca_runner::close_dispatch_target(&target)
+                .map(|outcome| outcome == crate::orca_runner::CloseOutcome::Closed);
+            record_gui_cleanup(repo, run_id, state, index, backend, closed)?;
+        }
+        DispatchBackend::Paseo => {
+            let target = state.dispatch_windows[index].target.clone();
+            let closed = crate::paseo_runner::close_dispatch_target(&target)
+                .map(|outcome| outcome == crate::paseo_runner::CloseOutcome::Closed);
+            record_gui_cleanup(repo, run_id, state, index, backend, closed)?;
         }
     }
 
@@ -372,6 +373,35 @@ fn save_run_state(repo: &Path, run_id: &str, state: &state::LtoState) -> anyhow:
     let state_path = repo.join(".lto").join(run_id).join("state.json");
     let mut next = state.clone();
     crate::commands::util::save_state_preserving_c2(&state_path, run_id, &mut next)
+}
+
+/// Shared cleanup bookkeeping for the GUI multiplexer backends (herdr, orca,
+/// paseo): they all close by opaque handle and fail the same way, so a close
+/// error retains the window with a reason instead of losing the record.
+fn record_gui_cleanup(
+    repo: &Path,
+    run_id: &str,
+    state: &mut state::LtoState,
+    index: usize,
+    backend: DispatchBackend,
+    closed: anyhow::Result<bool>,
+) -> anyhow::Result<()> {
+    match closed {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            let target = &state.dispatch_windows[index].target;
+            eprintln!("warning: {backend} {target} already absent");
+            Ok(())
+        }
+        Err(err) => {
+            let reason = format!("{backend} cleanup failed: {err}");
+            state.dispatch_windows[index].status = "retained".to_string();
+            state.dispatch_windows[index].finished_at = Some(crate::state::iso_now());
+            state.dispatch_windows[index].retention_reason = Some(reason.clone());
+            save_run_state(repo, run_id, state)?;
+            anyhow::bail!(reason);
+        }
+    }
 }
 
 fn is_window_id(value: &str) -> bool {

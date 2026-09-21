@@ -1,6 +1,8 @@
 use crate::commands::util;
 use crate::events::{self, EventRecord};
 use crate::herdr_runner;
+use crate::orca_runner;
+use crate::paseo_runner;
 use crate::process::shell_single_quote;
 use crate::state::{self, DispatchWindowState};
 use crate::tmux_runner::{self, SkipPrompt, TmuxDispatchSafety, TmuxMode, TmuxRunnerConfig};
@@ -15,6 +17,8 @@ pub enum DispatchBackend {
     #[default]
     Tmux,
     Herdr,
+    Orca,
+    Paseo,
 }
 
 impl std::fmt::Display for DispatchBackend {
@@ -22,6 +26,8 @@ impl std::fmt::Display for DispatchBackend {
         f.write_str(match self {
             Self::Tmux => "tmux",
             Self::Herdr => "herdr",
+            Self::Orca => "orca",
+            Self::Paseo => "paseo",
         })
     }
 }
@@ -33,6 +39,8 @@ impl std::str::FromStr for DispatchBackend {
         match value {
             "tmux" => Ok(Self::Tmux),
             "herdr" => Ok(Self::Herdr),
+            "orca" => Ok(Self::Orca),
+            "paseo" => Ok(Self::Paseo),
             other => Err(format!("unknown dispatch backend: {other}")),
         }
     }
@@ -41,25 +49,45 @@ impl std::str::FromStr for DispatchBackend {
 impl DispatchBackend {
     /// Default backend when `--backend` is not passed: pick the multiplexer
     /// actually managing the host agent, so dispatched windows land where the
-    /// user can see them. An explicit inner tmux ($TMUX) wins over an outer
-    /// herdr, because the host's own pane lives in that tmux.
+    /// user can see them. An explicit inner tmux ($TMUX) wins over any outer
+    /// GUI multiplexer, because the host's own pane lives in that tmux.
+    ///
+    /// Paseo injects no marker of its own into terminals it spawns, so it is
+    /// only ever reached through an explicit `--backend paseo`; the env probe
+    /// below is forward-looking and simply stays false today.
     pub fn detect_default() -> Self {
-        Self::detect_from(
-            std::env::var_os("TMUX").is_some(),
-            std::env::var_os("HERDR_ENV").is_some()
-                || std::env::var_os("HERDR_SOCKET_PATH").is_some(),
-        )
+        // One probe feeds both this choice and the run's recorded host, so the
+        // backend a dispatch picks always matches what `lto start` wrote down.
+        let env = crate::host_env::HostEnv::detect();
+        Self::detect_from(DetectEnv {
+            tmux: env.runtime.as_deref() == Some("tmux"),
+            orca: env.runtime.as_deref() == Some("orca"),
+            herdr: env.runtime.as_deref() == Some("herdr"),
+            paseo: env.runtime.as_deref() == Some("paseo"),
+        })
     }
 
-    fn detect_from(inside_tmux: bool, inside_herdr: bool) -> Self {
-        if inside_tmux {
+    fn detect_from(env: DetectEnv) -> Self {
+        if env.tmux {
             Self::Tmux
-        } else if inside_herdr {
+        } else if env.orca {
+            Self::Orca
+        } else if env.herdr {
             Self::Herdr
+        } else if env.paseo {
+            Self::Paseo
         } else {
             Self::Tmux
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DetectEnv {
+    tmux: bool,
+    orca: bool,
+    herdr: bool,
+    paseo: bool,
 }
 
 impl DispatchBackend {
@@ -67,6 +95,8 @@ impl DispatchBackend {
         match self {
             Self::Tmux => Ok(tmux_runner::prepare_dispatch_target(config).await?),
             Self::Herdr => Ok(herdr_runner::prepare_dispatch_target(config).await?),
+            Self::Orca => Ok(orca_runner::prepare_dispatch_target(config).await?),
+            Self::Paseo => Ok(paseo_runner::prepare_dispatch_target(config).await?),
         }
     }
 
@@ -78,6 +108,8 @@ impl DispatchBackend {
         match self {
             Self::Tmux => Ok(tmux_runner::wait_for_dispatch_ready(config, target).await?),
             Self::Herdr => Ok(herdr_runner::wait_for_dispatch_ready(config, target).await?),
+            Self::Orca => Ok(orca_runner::wait_for_dispatch_ready(config, target).await?),
+            Self::Paseo => Ok(paseo_runner::wait_for_dispatch_ready(config, target).await?),
         }
     }
 
@@ -90,6 +122,8 @@ impl DispatchBackend {
         match self {
             Self::Tmux => Ok(tmux_runner::send_dispatch_text(config, target, text).await?),
             Self::Herdr => Ok(herdr_runner::send_dispatch_text(config, target, text).await?),
+            Self::Orca => Ok(orca_runner::send_dispatch_text(config, target, text).await?),
+            Self::Paseo => Ok(paseo_runner::send_dispatch_text(config, target, text).await?),
         }
     }
 
@@ -102,6 +136,8 @@ impl DispatchBackend {
         match self {
             Self::Tmux => Ok(tmux_runner::confirm_tui_input(config, target, probe).await?),
             Self::Herdr => Ok(herdr_runner::confirm_tui_input(config, target, probe).await?),
+            Self::Orca => Ok(orca_runner::confirm_tui_input(config, target, probe).await?),
+            Self::Paseo => Ok(paseo_runner::confirm_tui_input(config, target, probe).await?),
         }
     }
 
@@ -117,6 +153,12 @@ impl DispatchBackend {
             }
             Self::Herdr => {
                 Ok(herdr_runner::wait_for_capture_patterns(config, target, patterns).await?)
+            }
+            Self::Orca => {
+                Ok(orca_runner::wait_for_capture_patterns(config, target, patterns).await?)
+            }
+            Self::Paseo => {
+                Ok(paseo_runner::wait_for_capture_patterns(config, target, patterns).await?)
             }
         }
     }
@@ -139,6 +181,11 @@ pub struct DispatchGoalOptions {
     pub new_window: bool,
     pub window_name: Option<String>,
     pub keep_window: bool,
+    /// Opt in to closing an LTO-created window on success. Dispatched output
+    /// lives only in the terminal scrollback until something collects it, so
+    /// the default retains the window and `--keep-window` is now a no-op kept
+    /// for backwards compatibility.
+    pub close_window: bool,
     pub cwd: Option<PathBuf>,
     pub tmux_session: Option<String>,
     pub tmux_bin: Option<String>,
@@ -333,7 +380,7 @@ pub fn cmd_dispatch_goal(repo: &Path, options: DispatchGoalOptions) -> anyhow::R
                 "goal": goal_path.display().to_string(),
                 "target": outcome.target,
                 "window_id": outcome.window_id,
-                "cleanup_on_success": !options.keep_window,
+                "cleanup_on_success": options.close_window,
                 "completion_event": outcome.completion_event,
                 "completion_mode": outcome.completion_mode,
                 "turns_jsonl": false,
@@ -389,7 +436,7 @@ fn persist_dispatch_window(
         window.target = target.to_string();
         window.tmux_bin = config.tmux_bin.clone();
         window.backend = options.backend.to_string();
-        window.cleanup_on_success = !options.keep_window;
+        window.cleanup_on_success = options.close_window;
         window.status = "active".to_string();
         window.finished_at = None;
         window.retention_reason = None;
@@ -401,7 +448,7 @@ fn persist_dispatch_window(
         runner: options.runner.clone(),
         tmux_bin: config.tmux_bin.clone(),
         backend: options.backend.to_string(),
-        cleanup_on_success: !options.keep_window,
+        cleanup_on_success: options.close_window,
         status: "active".to_string(),
         created_at: crate::state::iso_now(),
         finished_at: None,
@@ -415,7 +462,9 @@ fn dispatch_window_id(
     options: &DispatchGoalOptions,
     target: &str,
 ) -> Option<String> {
-    if options.backend == DispatchBackend::Herdr {
+    // Only tmux has a window id distinct from the dispatch target; every GUI
+    // multiplexer addresses its pane by the same opaque handle.
+    if options.backend != DispatchBackend::Tmux {
         return Some(target.to_string());
     }
     if options.target.is_none() {
@@ -699,6 +748,8 @@ fn run_dispatch(
             .backend
             .wait_for_capture_patterns(&config, &target, &plan.confirm_patterns)
             .await?;
+        // Only herdr exposes a pane metadata channel; orca and paseo have no
+        // equivalent, so the run id stays in .lto state for them.
         if options.backend == DispatchBackend::Herdr {
             herdr_runner::report_metadata(
                 &target,
@@ -1126,7 +1177,7 @@ fn write_dispatch_record(
         "cwd": cwd.display().to_string(),
         "target": outcome.target,
         "window_id": outcome.window_id,
-        "cleanup_on_success": !options.keep_window,
+        "cleanup_on_success": options.close_window,
         "repo": outcome.repo,
         "dispatched_at": crate::state::iso_now(),
         "completion_event": outcome.completion_event,
@@ -1535,23 +1586,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_detection_prefers_inner_tmux_then_herdr() {
+    fn backend_detection_prefers_inner_tmux_over_gui_multiplexers() {
+        let all = DetectEnv {
+            tmux: true,
+            orca: true,
+            herdr: true,
+            paseo: true,
+        };
+        assert_eq!(DispatchBackend::detect_from(all), DispatchBackend::Tmux);
         assert_eq!(
-            DispatchBackend::detect_from(true, false),
+            DispatchBackend::detect_from(DetectEnv {
+                tmux: true,
+                ..DetectEnv::default()
+            }),
             DispatchBackend::Tmux
         );
+    }
+
+    #[test]
+    fn backend_detection_ranks_orca_then_herdr_then_paseo() {
         assert_eq!(
-            DispatchBackend::detect_from(true, true),
-            DispatchBackend::Tmux
+            DispatchBackend::detect_from(DetectEnv {
+                orca: true,
+                herdr: true,
+                paseo: true,
+                ..DetectEnv::default()
+            }),
+            DispatchBackend::Orca
         );
         assert_eq!(
-            DispatchBackend::detect_from(false, true),
+            DispatchBackend::detect_from(DetectEnv {
+                herdr: true,
+                paseo: true,
+                ..DetectEnv::default()
+            }),
             DispatchBackend::Herdr
         );
         assert_eq!(
-            DispatchBackend::detect_from(false, false),
+            DispatchBackend::detect_from(DetectEnv {
+                paseo: true,
+                ..DetectEnv::default()
+            }),
+            DispatchBackend::Paseo
+        );
+    }
+
+    #[test]
+    fn backend_detection_falls_back_to_tmux_when_nothing_is_marked() {
+        assert_eq!(
+            DispatchBackend::detect_from(DetectEnv::default()),
             DispatchBackend::Tmux
         );
+    }
+
+    #[test]
+    fn backend_names_round_trip_through_state() {
+        for backend in [
+            DispatchBackend::Tmux,
+            DispatchBackend::Herdr,
+            DispatchBackend::Orca,
+            DispatchBackend::Paseo,
+        ] {
+            let rendered = backend.to_string();
+            assert_eq!(rendered.parse::<DispatchBackend>().unwrap(), backend);
+        }
     }
 
     fn test_options(goal: &Path) -> DispatchGoalOptions {
@@ -1564,6 +1662,7 @@ mod tests {
             new_window: false,
             window_name: None,
             keep_window: false,
+            close_window: false,
             cwd: None,
             tmux_session: None,
             tmux_bin: None,

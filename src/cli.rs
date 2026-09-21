@@ -682,8 +682,10 @@ pub struct DispatchGoalCommand {
     #[arg(long)]
     run_id: Option<String>,
     /// Dispatch backend. Default auto-detects the multiplexer managing the
-    /// host agent: tmux if $TMUX is set, herdr if $HERDR_ENV/$HERDR_SOCKET_PATH
-    /// is set, tmux otherwise.
+    /// host agent: tmux if $TMUX is set, then orca if
+    /// $ORCA_TERMINAL_HANDLE/$ORCA_WORKSPACE_ID is set, then herdr if
+    /// $HERDR_ENV/$HERDR_SOCKET_PATH is set, tmux otherwise. Paseo marks no
+    /// environment of its own, so it needs an explicit --backend paseo.
     #[arg(long, value_enum, default_value_t = crate::dispatch_goal::DispatchBackend::detect_default())]
     backend: crate::dispatch_goal::DispatchBackend,
     #[arg(long, value_parser = ["codex", "pi", "agy", "aix"])]
@@ -696,9 +698,16 @@ pub struct DispatchGoalCommand {
     new_window: bool,
     #[arg(long = "window-name")]
     window_name: Option<String>,
-    /// Preserve an LTO-created window after successful completion.
+    /// Preserve an LTO-created window after successful completion (default).
+    /// Kept for backwards compatibility; windows are now retained unless
+    /// --close-window is passed.
     #[arg(long = "keep-window")]
     keep_window: bool,
+    /// Close an LTO-created window after successful completion. Dispatched
+    /// output lives only in the terminal scrollback until it is collected, so
+    /// closing on success discards it; opt in explicitly.
+    #[arg(long = "close-window")]
+    close_window: bool,
     #[arg(long)]
     cwd: Option<PathBuf>,
     #[arg(long = "tmux-session")]
@@ -1287,9 +1296,14 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
             let goal = goal.unwrap_or_default();
             let why = why.unwrap_or_default();
             let done_when = done_when.unwrap_or_default();
+            // `--host` stays authoritative, but falling straight back to
+            // "unknown" discarded a host the environment already names: an
+            // Orca/tmux/herdr pane exports its own id, and the readiness check
+            // below then warned about a value LTO could have read itself.
             let host = host
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
+                .or_else(|| crate::host_env::HostEnv::detect().runtime)
                 .unwrap_or_else(|| "unknown".to_string());
             let delivery_contract =
                 DeliveryContract::new(target, constraint, instrument, entropy_check);
@@ -1481,6 +1495,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     new_window: cmd.new_window,
                     window_name: cmd.window_name,
                     keep_window: cmd.keep_window,
+                    close_window: cmd.close_window,
                     cwd: cmd.cwd,
                     tmux_session: cmd.tmux_session,
                     tmux_bin: cmd.tmux_bin,
@@ -1505,6 +1520,7 @@ pub fn run_args(args: Args) -> anyhow::Result<()> {
                     new_window: d.new_window,
                     window_name: d.window_name,
                     keep_window: d.keep_window,
+                    close_window: d.close_window,
                     cwd: d.cwd,
                     tmux_session: d.tmux_session,
                     tmux_bin: d.tmux_bin,
@@ -2561,6 +2577,10 @@ fn start_run(repo: &Path, options: StartRunOptions) -> anyhow::Result<PathBuf> {
 
     fs::create_dir_all(&run_dir)?;
     let git = util::git_status(repo);
+    // Record which multiplexer owns this pane. Dispatched windows are addressed
+    // by ids belonging to that runtime, so a run that does not know its own
+    // host cannot say, later, where its windows went.
+    let host_env = crate::host_env::HostEnv::detect();
     let mut state = LtoState {
         run_id: run_id.clone(),
         goal: goal.clone(),
@@ -2572,7 +2592,7 @@ fn start_run(repo: &Path, options: StartRunOptions) -> anyhow::Result<PathBuf> {
             branch: git.branch,
             head: git.head,
             dirty_fingerprint: if git.dirty { "dirty" } else { "clean" }.to_string(),
-            ..WorkspaceSnapshot::default()
+            extra: host_env.to_extra(),
         },
         original_user_request: goal,
         artifacts: json!({"manifest": format!(".lto/{run_id}/artifacts.json")}),
@@ -3096,6 +3116,9 @@ mod tests {
         }
     }
 
+    /// With no `--host` and no multiplexer marker in the environment there is
+    /// nothing to read, so the run still records "unknown". The probe only
+    /// fills a gap; it never overrides an explicit `--host`.
     #[test]
     fn start_defaults_missing_host_to_unknown_for_an_empty_contract() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3117,7 +3140,13 @@ mod tests {
         run_args(args).unwrap();
 
         let state = state::load_state(repo.join(".lto/unknown-host/state.json")).unwrap();
-        assert_eq!(state.host_runtime, "unknown");
+        // The test process inherits the developer's shell, which may itself sit
+        // in a multiplexer; assert on what the probe saw rather than on the
+        // machine that happens to run the suite.
+        match crate::host_env::HostEnv::detect().runtime {
+            None => assert_eq!(state.host_runtime, "unknown"),
+            Some(runtime) => assert_eq!(state.host_runtime, runtime),
+        }
         assert!(state.delivery_contract.is_empty());
     }
 

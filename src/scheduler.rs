@@ -1907,6 +1907,29 @@ print(json.dumps(data))
         assert_eq!(result[0].exit_code, Some(124));
     }
 
+    /// A runner that answers prose but never ran the probe's file read reports
+    /// NOTOOLS. It is reachable, so nothing else marks it down, and dispatching
+    /// to it yields an empty audit that reads as "no findings".
+    #[tokio::test]
+    async fn notools_verdict_is_unhealthy() {
+        let harness = Harness::new();
+        harness.set_health(json!([
+            {"agent":"codex","verdict":"NOTOOLS"},
+            {"agent":"agy","verdict":"OK"}
+        ]));
+        harness.set_control(json!({"c6c_ok": {"exit_code": 0, "output": "ok"}}));
+        let results = harness
+            .scheduler()
+            .submit(vec![
+                make_job("c6c_notools", "codex"),
+                make_job("c6c_ok", "agy"),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(results[0].status, JobStatus::Skipped);
+        assert_eq!(results[1].status, JobStatus::Ok);
+    }
+
     #[tokio::test]
     async fn unhealthy_runner_is_skipped_and_reprobe_can_recover() {
         let harness = Harness::new();
