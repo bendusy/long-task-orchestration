@@ -49,8 +49,9 @@ impl std::str::FromStr for DispatchBackend {
 impl DispatchBackend {
     /// Default backend when `--backend` is not passed: pick the multiplexer
     /// actually managing the host agent, so dispatched windows land where the
-    /// user can see them. An explicit inner tmux ($TMUX) wins over any outer
-    /// GUI multiplexer, because the host's own pane lives in that tmux.
+    /// user can see them. A GUI multiplexer wins over an inner tmux: the
+    /// window the user actually looks at is the GUI tab, and a dispatch into
+    /// the inner tmux is only visible after attaching to that session.
     ///
     /// Paseo injects no marker of its own into terminals it spawns, so it is
     /// only ever reached through an explicit `--backend paseo`; the env probe
@@ -68,9 +69,7 @@ impl DispatchBackend {
     }
 
     fn detect_from(env: DetectEnv) -> Self {
-        if env.tmux {
-            Self::Tmux
-        } else if env.orca {
+        if env.orca {
             Self::Orca
         } else if env.herdr {
             Self::Herdr
@@ -1585,15 +1584,27 @@ fn now_millis() -> u128 {
 mod tests {
     use super::*;
 
+    /// A GUI multiplexer wins over an inner tmux: its tab is the window the
+    /// user is watching, while a dispatch into the inner tmux session is only
+    /// visible after attaching to it.
     #[test]
-    fn backend_detection_prefers_inner_tmux_over_gui_multiplexers() {
+    fn backend_detection_prefers_gui_multiplexers_over_inner_tmux() {
         let all = DetectEnv {
             tmux: true,
             orca: true,
             herdr: true,
             paseo: true,
         };
-        assert_eq!(DispatchBackend::detect_from(all), DispatchBackend::Tmux);
+        assert_eq!(DispatchBackend::detect_from(all), DispatchBackend::Orca);
+        assert_eq!(
+            DispatchBackend::detect_from(DetectEnv {
+                tmux: true,
+                herdr: true,
+                ..DetectEnv::default()
+            }),
+            DispatchBackend::Herdr
+        );
+        // Plain tmux with no GUI around it still takes the dispatch.
         assert_eq!(
             DispatchBackend::detect_from(DetectEnv {
                 tmux: true,

@@ -103,6 +103,12 @@ fn read_args(config: &TmuxRunnerConfig, target: &str) -> Vec<String> {
     ]
 }
 
+/// Orca drops the scrollback of a terminal whose process exited: `read`
+/// answers with an empty tail even though `show` still lists the handle
+/// (`orphaned: true`), leaving only a one-line `preview`. Runners that quit
+/// when done — codex does — therefore have to be read before they exit, and
+/// a goal whose result matters should write it to a file rather than rely on
+/// terminal output surviving.
 async fn read_terminal(config: &TmuxRunnerConfig, target: &str) -> anyhow::Result<String> {
     let value = output(&read_args(config, target)).await?;
     Ok(join_tail(&value))

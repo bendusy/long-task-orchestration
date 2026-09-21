@@ -90,7 +90,9 @@ artifact、audit、runner、sandbox、resume/recap、human gate，让你有证�
 
 **Ⅵ 学习与维护**——每个决定**当时就记**：人工裁决用 `lto decision record` 落锚点（记下当时 HEAD+phase，漂移时 resume/check 列出待 `reaffirm`，不自动失效不做 TTL）；ADR 文档层另有 `scripts/write_decision.py`（写 ADR + 登记 artifact），两层并存不合并；装 am 时 `memory publish` 走 am 原生 CLI（唯一 sink），没装 am 本地 `.lto/` 就是全部记忆。`lto prune` 手动清理 closed+超期 run 大件（默认 dry-run，`--yes` 才删，active run 永不动）。历史 telemetry 只作 advisory，不自动路由。
 
-`--backend` 未显式指定时自动检测宿主所在的 multiplexer：`$TMUX` 存在选 tmux，其次 `$ORCA_TERMINAL_HANDLE`/`$ORCA_WORKSPACE_ID` 存在选 orca，再次 `$HERDR_ENV`/`$HERDR_SOCKET_PATH` 存在选 herdr，都没有回落 tmux；显式传参覆盖检测。Paseo 不往它起的终端注入自己的标记，只能显式 `--backend paseo`。GUI backend（orca/herdr/paseo）派工前先探 runtime 可达，不可达即 fail-closed 并提示启动对应 app 或改用 tmux。
+`--backend` 未显式指定时自动检测宿主所在的 multiplexer：`$ORCA_TERMINAL_HANDLE`/`$ORCA_WORKSPACE_ID` 存在选 orca，其次 `$HERDR_ENV`/`$HERDR_SOCKET_PATH` 选 herdr，都没有才回落 tmux；显式传参覆盖检测。**GUI multiplexer 优先于内层 tmux**——你看的是 GUI 标签页，派进内层 tmux 要 attach 才看得见。Paseo 不往它起的终端注入自己的标记，只能显式 `--backend paseo`。GUI backend 派工前先探 runtime 可达，不可达即 fail-closed 并提示启动对应 app 或改用 tmux。
+
+**orca 派工的产出必须落文件**：runner 进程一退出，orca 就丢掉该终端的 scrollback——`terminal show` 还列着 handle（`orphaned: true`）但 `terminal read` 返回 0 行，只剩一行 `preview`（实测）。codex 这类跑完即退的 runner 因此事后什么都捞不回来；agy 停在 TUI 不退出才侥幸读得到。所以**派给 orca 的 goal 要硬性要求把结果写进文件，终端输出不算交付物**；要在退出前抢救就趁 runner 还活着时 `orca terminal read`。tmux backend 无此问题（窗口留着，`capture-pane` 照捞）。
 
 **外部 backend 的就绪/空闲判定一律不信**：实测 `orca terminal wait --for tui-idle` 对明确在忙的终端 4/4 返回 `satisfied: true`（0.33s 即返回，不等待也不区分忙闲）；herdr 的 `agent wait`/`agent prompt` idle、done 同样只作启动就绪与传输状态。C5 `goal-self-report` 才是唯一主完成信号；blocked 仍由 LTO 自己对各 backend 的屏幕读取套 `blocked_patterns` 判定——这道拦截外部黑盒给不了。
 

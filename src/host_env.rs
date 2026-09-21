@@ -59,10 +59,12 @@ impl HostEnv {
                 runtime = Some((*name).to_string());
             }
         }
-        // An inner tmux owns the pane even inside a GUI multiplexer, so it wins
-        // the runtime label while the outer markers stay recorded above.
-        if lookup("TMUX").is_some_and(|value| !value.trim().is_empty()) {
-            runtime = Some("tmux".to_string());
+        // tmux only labels the host when nothing else claims it. Inside a GUI
+        // multiplexer the tab is what the user watches, so the GUI keeps the
+        // label and the tmux marker is still recorded below.
+        if let Some(value) = lookup("TMUX").filter(|value| !value.trim().is_empty()) {
+            markers.push(("TMUX".to_string(), value));
+            runtime.get_or_insert_with(|| "tmux".to_string());
         }
         HostEnv { runtime, markers }
     }
@@ -119,19 +121,32 @@ mod tests {
         );
     }
 
+    /// A tmux session running inside an Orca tab: the tab is the window the
+    /// user is looking at, so it keeps the label and takes the dispatch.
     #[test]
-    fn inner_tmux_wins_the_label_but_outer_markers_persist() {
+    fn gui_multiplexer_wins_the_label_over_an_inner_tmux() {
         let env = HostEnv::from_lookup(&lookup(&[
             ("ORCA_TERMINAL_HANDLE", "term_abc"),
             ("TMUX", "/tmp/tmux-501/default,123,0"),
         ]));
-        assert_eq!(env.runtime.as_deref(), Some("tmux"));
-        // The orca pane still holds the tmux server; losing that id would make
-        // a dispatched window unattributable after the fact.
+        assert_eq!(env.runtime.as_deref(), Some("orca"));
+        let extra = env.to_extra();
         assert_eq!(
-            env.to_extra()["env_orca_terminal_handle"],
+            extra["env_orca_terminal_handle"],
             Value::String("term_abc".into())
         );
+        // Both ids are recorded: losing either makes a dispatched window
+        // unattributable after the fact.
+        assert_eq!(
+            extra["env_tmux"],
+            Value::String("/tmp/tmux-501/default,123,0".into())
+        );
+    }
+
+    #[test]
+    fn bare_tmux_still_labels_the_host() {
+        let env = HostEnv::from_lookup(&lookup(&[("TMUX", "/tmp/tmux-501/default,1,0")]));
+        assert_eq!(env.runtime.as_deref(), Some("tmux"));
     }
 
     #[test]
