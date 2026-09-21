@@ -11,6 +11,19 @@
 - **`lto start` 自动记录 host runtime**：此前 `--host` 缺省一律记 `unknown` 并告警，哪怕 `$ORCA_TERMINAL_HANDLE` 就在环境里。现在按宿主 multiplexer 标记自动填，并把这些 id 写进 `WorkspaceSnapshot.extra`，run 事后能说清自己的窗口去了哪；显式 `--host` 仍然优先，探不到才记 unknown。
 - **修复 agent-run 合并按序列化字节去重导致的重复记账**：`save_run` 写盘前会把磁盘状态 merge 回内存，而 `agent_runs` 用整条 JSON 的字符串做去重键。任何「保存→读回→再保存」的路径（autopilot 就是）只要 `elapsed_sec` 这类测量值 round-trip 差一个字节，同一次执行就会被记两遍，污染 token 统计与 attempts 计数。改用 `job_id` + `attempts` 作键，缺这两个字段的旧记录回落原键以免全塌成一条。该缺陷此前表现为 `cargo test --all-targets` 约三次一失败；修复后 `--lib` 15/15、`--all-targets` 8/8 连续通过。
 
+## 裁决 LTO 该如何复用 Orca/Paseo 的编排能力
+
+- **Run ID**: `20260921-orca-integration-review`
+- **Closed**: 2026-09-21T15:10:05+00:00
+- **Summary**: 异构合议裁决 LTO 复用 Orca/Paseo 编排能力，并实现全部采纳项，发版 v0.14.0。 【合议】agy 两轮（正方评议 + 对抗性自攻，自评可信度五折）；codex 因上游 custom provider 工具环未注册零产出、pi EMPTY、aix 未编译，异构厚度仅 1，所有被采纳结论均由 host 亲验复核。 【已实现】① healthcheck 探针改测真实工具调用，新增 NOTOOLS verdict（非 OK，scheduler 跳过）；② 派工窗口默认保留，新增 --close-window，--keep-window 降为兼容 no-op；③ 新增 src/host_env.rs，lto start 自动记录 host runtime 并把 multiplexer id 写入 WorkspaceSnapshot.extra；④ 新增 orca/paseo backend，检测顺序按用户裁决改为 GUI multiplexer 优先于内层 tmux；⑤ 修 agent-run 合并按序列化字节去重导致的重复记账（真 bug，此前表现为约 1/3 概率的测试失败）；⑥ agy 首次信任提示纳入 blocked_patterns。 【否决】方案 2a（tui-idle 实测 4/4 假阳性）、2b（Stop hook 本就生效，14 条事件为证）、3（双状态机违背原则 1/7）。 【已知边界】orca 终端在 runner 退出后丢弃 scrollback（orphaned=true、read 返回 0 行），派给 orca 的 goal 须把结果写入文件。
+
+### Tasks
+
+- **T1**: 异构合议：LTO 该如何复用 Orca/Paseo 编排能力 (done)
+  - NOTE [manual] collected agy dispatch
+  - NOTE [manual] agy 两轮评议已收；codex/pi/aix 三家不可用（见 artifacts/runner-availability.md）。裁决：P0 healthch
+
+
 ## v0.13.2 — 派工 pane 回到你所在的 space（2026-08-11）
 
 - **修复 herdr 派工 pane 落到别的 workspace**：`tab create` 此前不传 `--workspace`，herdr 自行选择落点，pane 可能开在用户看不到的 space（实测两次分别落 w8、w7）。现从 `HERDR_WORKSPACE_ID` 读 host 所在 workspace 传入，派工 pane 始终依附 host 的 space——对齐 tmux backend「派出窗口依附主 session」的约束。host 不在 herdr 内时该变量不存在，行为不变。
