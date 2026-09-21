@@ -589,25 +589,44 @@ pub fn retain_latest_dispatch_window(repo: &Path, run_id: &str, reason: &str) {
     }
 }
 
+/// Screen text that means the runner is waiting on a human, not working.
+/// Each CLI words its gates differently and they are not interchangeable, so
+/// they are listed per runner; without an entry a blocked runner reads as one
+/// that merely has not started yet, and the dispatch waits out its full ready
+/// timeout before reporting the wrong reason.
 fn blocked_patterns(runner: &str) -> Vec<String> {
     let mut patterns = vec!["Press enter to confirm".to_string()];
-    if runner == "codex" {
-        patterns.extend([
+    match runner {
+        "codex" => patterns.extend([
             "Hooks need review".to_string(),
             "hook needs review".to_string(),
             "Trust all and continue".to_string(),
             "Press t to trust all".to_string(),
-        ]);
+        ]),
+        // Antigravity asks this the first time it runs in a directory, and
+        // waits on the answer. Measured twice on 2026-09-21: the dispatch sat
+        // through its 60s ready timeout and reported a timeout instead of the
+        // prompt. No flag answers it; `--print` avoids the TUI entirely.
+        "agy" => patterns.extend([
+            "Do you trust the contents of this project".to_string(),
+            "Yes, I trust this folder".to_string(),
+        ]),
+        _ => {}
     }
     patterns
 }
 
 fn blocked_prompt_hint(runner: &str) -> String {
-    if runner == "codex" {
-        "runner codex is blocked on an interactive trust prompt; select \"Trust all and continue\", then exit codex back to the shell"
-            .to_string()
-    } else {
-        format!("runner {runner} is blocked on an interactive prompt")
+    match runner {
+        "codex" => {
+            "runner codex is blocked on an interactive trust prompt; select \"Trust all and continue\", then exit codex back to the shell"
+                .to_string()
+        }
+        "agy" => {
+            "runner agy is blocked on Antigravity's first-run trust prompt; answer \"Yes, I trust this folder\" in the window, or dispatch with a runner script that uses --print"
+                .to_string()
+        }
+        _ => format!("runner {runner} is blocked on an interactive prompt"),
     }
 }
 
@@ -1931,6 +1950,28 @@ mod tests {
         assert!(patterns.iter().any(|item| item == "Hooks need review"));
         assert!(patterns.iter().any(|item| item == "Trust all and continue"));
         assert!(patterns.iter().any(|item| item == "Press enter to confirm"));
+    }
+
+    /// Antigravity's first-run trust prompt has to be recognized too, or a
+    /// dispatch into a directory agy has not seen before waits out the ready
+    /// timeout and blames the timeout instead of the prompt.
+    #[test]
+    fn agy_first_run_trust_prompt_counts_as_blocked() {
+        let patterns = blocked_patterns("agy");
+        let screen = "  Do you trust the contents of this project?\n\
+                      > Yes, I trust this folder   No, exit";
+        assert!(crate::tmux_runner::first_matching_pattern(screen, &patterns).is_some());
+        assert!(blocked_prompt_hint("agy").contains("--print"));
+    }
+
+    /// A runner with no gate of its own keeps only the shared pattern, and its
+    /// hint must not claim another CLI's remedy.
+    #[test]
+    fn unlisted_runner_keeps_only_the_shared_pattern() {
+        assert_eq!(blocked_patterns("pi"), vec!["Press enter to confirm"]);
+        let hint = blocked_prompt_hint("pi");
+        assert!(hint.contains("pi"));
+        assert!(!hint.contains("Trust all and continue"));
     }
 
     #[test]
