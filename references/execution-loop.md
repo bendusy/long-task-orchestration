@@ -167,7 +167,7 @@ lto dispatch-and-wait --runner codex --goal goal.md --timeout 600
 （阻塞用 `--rc 1`）。这是 LTO 自包含信号，不依赖 codex `/goal` 或 goal-runtime skill。
 Codex Stop hook（若 transcript 有 `update_goal complete`）与 pi/agy process-exit
 wrapper 仅作可选旁路。成功按 run state 记录的 `@window_id` 清理窗口；失败、超时、
-交互阻塞和 `--keep-window` 保留现场。可选 `--notify-cmd` 只在 dispatch 真完成时执行。
+交互阻塞保留现场；成功后也默认保留，显式 `--close-window` 才清理（关窗会丢掉只存在于 scrollback 的 runner 正文）。可选 `--notify-cmd` 只在 dispatch 真完成时执行。
 自报只是信号：closeout/check 仍只看 evidence/ledger，不因 self-report 放行闸门。
 
 **运行中可见**：每个派工的输出边跑边写 `.lto/<run-id>/live/<job-id>.log`，卡住时
@@ -178,7 +178,7 @@ wrapper 仅作可选旁路。成功按 run state 记录的 `@window_id` 清理�
 shell 层（上面）编排 shell 命令；agent 层编排带独立 context 的隔离 agent。
 
 - **`src/agent_job.rs`** — `AgentJob`/`AgentResult` 数据合同（agent 世界，区别于 shell 的 command/rc）。字段含 runner/model/isolation/output_schema/parent_pattern/budget/retry_policy/verifier_of。
-- **`src/scheduler.rs`** — 并发调度 + 退出码三元判定（OK/FAILED/TIMEOUT/RATE_LIMITED，429 不当成功也不当 timeout）+ 指数退避重试（带总上限）+ healthcheck gate（派工前剔除挂的 runner）。
+- **`src/scheduler.rs`** — 并发调度 + 退出码三元判定（OK/FAILED/TIMEOUT/RATE_LIMITED，429 不当成功也不当 timeout）+ 指数退避重试（带总上限）+ healthcheck gate（派工前剔除挂的 runner；只有 verdict `OK` 算健康，`NOTOOLS`——能答话但工具环没注册——与挂掉同等对待，因为它会让对抗审计返回空 finding 而读起来像「无风险」）。
 - **`src/audit_dispatch.rs` + `src/cli.rs` audit path** — 组装 AgentJob → 调 scheduler → 落 `state.agent_runs` / `risk_points`。`audit --auto-dispatch`/`--discover-risks` 的底层。
 - **`src/commands/ops.rs` next path** — 事实简报器（零 LLM）：分析状态 → 无歧义给 argv 命令 / escalate 给宿主 LLM 富决策简报。它不选完整路径；host agent 读 brief 后决定下一段 pattern。
 - **`src/commands/ops.rs` progress helpers** — 推进检测 + stall 闸门：推进 = done↑/ledger↓/risk verified/blocked↓(带新成功证据)；同失败指纹 = 停滞。单向棘轮防伪推进博弈。

@@ -142,7 +142,7 @@ LTO 的公开语义只是 artifact memory projection：导出 redacted run snaps
 **后台派工原则**（纯方法论，两档通用）：
 - 派出去就不要轮询，设长兜底心跳，等通知。
 - 等 `agent.dispatch.completed`，不要用 per-turn 的 `agent.turn.completed` 代替整个 goal 完成。
-- LTO 新建窗口按 `lto:<runner>:<goal-slug>` 展示、按不可变 `@window_id` 寻址；成功自动清理，失败/超时/`--keep-window` 保留。
+- LTO 新建窗口按 `lto:<runner>:<goal-slug>` 展示、按不可变窗口/终端 id 寻址；默认一律保留，只有显式 `--close-window` 才在成功后清理——runner 的正文只在 scrollback 里，关窗即丢。
 - 等待期挖下一步的事实地基（真实代码 / 真实分布 / 真实配置），不靠记忆。
 - 多批并行分批起，每批都完整深做，不为省时间砍深度。
 

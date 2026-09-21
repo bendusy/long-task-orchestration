@@ -28,7 +28,7 @@
   rc 写入同一个 dispatch 完成事件。wait/cleanup 只认 dispatch 事件。
 - 自动窗口名是 `lto:<runner>:<goal-slug>`；显示名不参与程序寻址。
   LTO 自建窗口的不可变 `@window_id` 记录在 run state，成功后清理，失败、
-  timeout、交互阻塞或 `--keep-window` 时保留。显式用户 `--target` 不会被
+  timeout、交互阻塞时保留；成功后默认也保留，显式 `--close-window` 才清理。显式用户 `--target` 不会被
   纳入清理，除非它本来就是该 run 记录的 retained LTO 窗口。
 - worktree_exec 在 dispatch 阶段隔离写入（specify 全程 read-only，
   spec 收口后才开 worktree）。

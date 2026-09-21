@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.14.0 — 派工落到你所在的终端，产出不再随窗口消失（2026-09-21）
+
+- **新增 orca 与 paseo dispatch backend**：`--backend` 现有 tmux/herdr/orca/paseo 四档。自动检测顺序为 `$TMUX` → `$ORCA_TERMINAL_HANDLE`/`$ORCA_WORKSPACE_ID` → `$HERDR_ENV`/`$HERDR_SOCKET_PATH`，都没有回落 tmux；Paseo 不往它起的终端注入自己的标记，需显式 `--backend paseo`。检测逻辑集中到新的 `src/host_env.rs`，派工选的 backend 与 `lto start` 记录的 host 出自同一次探测。
+- **派工窗口默认保留（行为变更）**：runner 的正文只活在终端 scrollback 里——dispatch 记录的 `turns_jsonl` 为空、`capture_excerpt` 只有几百字节的启动画面，所以成功后关窗等于把产出丢掉（实测一次 agy 评议写了约 8000 字，`.lto/` 里一个字都没有）。现在默认保留窗口，要关须显式 `--close-window`；`--keep-window` 保留为兼容用的 no-op。
+- **healthcheck 改测工具调用，不再只测会不会答话**：原探针是 `1+1=`，只能证明模型回文字。实测 codex-cli 0.155.1 接自定义 provider 时出现「能答文字但工具环完全没注册」的故障态，healthcheck 仍判 OK——这种 runner 被 `audit --auto-dispatch` 派去做对抗审计会返回零 finding，读起来像「无风险」。有工具环的 runner（codex/claude）现在要读一个 nonce 文件证明工具可用，答不出判 `NOTOOLS`（非 OK，scheduler 跳过）；无工具环的（pi -p / agy --print / gemini -p）沿用文本探针，四家机制不通约不互相迁移。
+- **`lto start` 自动记录 host runtime**：此前 `--host` 缺省一律记 `unknown` 并告警，哪怕 `$ORCA_TERMINAL_HANDLE` 就在环境里。现在按宿主 multiplexer 标记自动填，并把这些 id 写进 `WorkspaceSnapshot.extra`，run 事后能说清自己的窗口去了哪；显式 `--host` 仍然优先，探不到才记 unknown。
+- **修复 agent-run 合并按序列化字节去重导致的重复记账**：`save_run` 写盘前会把磁盘状态 merge 回内存，而 `agent_runs` 用整条 JSON 的字符串做去重键。任何「保存→读回→再保存」的路径（autopilot 就是）只要 `elapsed_sec` 这类测量值 round-trip 差一个字节，同一次执行就会被记两遍，污染 token 统计与 attempts 计数。改用 `job_id` + `attempts` 作键，缺这两个字段的旧记录回落原键以免全塌成一条。该缺陷此前表现为 `cargo test --all-targets` 约三次一失败；修复后 `--lib` 15/15、`--all-targets` 8/8 连续通过。
+
 ## v0.13.2 — 派工 pane 回到你所在的 space（2026-08-11）
 
 - **修复 herdr 派工 pane 落到别的 workspace**：`tab create` 此前不传 `--workspace`，herdr 自行选择落点，pane 可能开在用户看不到的 space（实测两次分别落 w8、w7）。现从 `HERDR_WORKSPACE_ID` 读 host 所在 workspace 传入，派工 pane 始终依附 host 的 space——对齐 tmux backend「派出窗口依附主 session」的约束。host 不在 herdr 内时该变量不存在，行为不变。
